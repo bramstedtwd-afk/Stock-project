@@ -19,6 +19,7 @@ import sys
 from . import universe
 from .db import Database
 from .engine import Engine
+from .envfile import load_env
 from .robinhood import RobinhoodClient
 
 DISCLAIMER = (
@@ -206,6 +207,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_env()  # pick up .env automatically; real environment still wins
     args = build_parser().parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.WARNING,

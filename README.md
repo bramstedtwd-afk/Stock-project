@@ -12,32 +12,44 @@ linked read-only.
 
 ---
 
-## Quick start
+## Quick start — one command
+
+**Mac / Linux:**
 
 ```bash
-# 1. Install
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-
-# 2. (Optional) Link Robinhood — read-only
-cp .env.example .env        # fill in your credentials; .env is gitignored
-set -a; source .env; set +a
-
-# 3. Run the dashboard
-streamlit run app.py
+./start.sh
 ```
 
-Press **Run daily cycle** in the dashboard, or from the terminal:
+**Windows:**
+
+```bat
+start.bat
+```
+
+That's it. The first run sets up everything automatically (virtual
+environment, dependencies, settings file — allow a few minutes), then the
+dashboard opens in your browser. Press **Run daily cycle** to get your first
+suggestions, and link Robinhood right from the **Portfolio tab** — no file
+editing needed.
+
+The only prerequisite is [Python 3.10+](https://www.python.org/downloads/)
+(on Windows, tick *"Add python.exe to PATH"* during install).
+
+### Terminal mode
+
+Anything you pass to the launcher goes to the CLI instead of the dashboard:
 
 ```bash
-python -m stocksage daily          # the once-a-day heartbeat
-python -m stocksage suggest        # quick ranked scan (nothing recorded)
-python -m stocksage suggest NVDA   # look at specific tickers
-python -m stocksage sectors        # sector trend scoreboard
-python -m stocksage portfolio      # your holdings + live signals
-python -m stocksage moves          # "why it moved" memory
-python -m stocksage performance    # learning status & signal weights
+./start.sh daily          # the once-a-day heartbeat (learn -> scan -> suggest)
+./start.sh suggest        # quick ranked scan (nothing recorded)
+./start.sh suggest NVDA   # look at specific tickers
+./start.sh sectors        # sector trend scoreboard
+./start.sh portfolio      # your holdings + live signals
+./start.sh moves          # "why it moved" memory
+./start.sh performance    # learning status & signal weights
 ```
+
+(Windows: `start.bat daily`, etc.)
 
 ## How it works
 
@@ -103,13 +115,13 @@ Edit `stocksage/universe.py` to change it — nothing else hardcodes tickers.
 
 ```cron
 # weekdays at 5:30pm ET, after the close
-30 17 * * 1-5 cd /path/to/Stock-project && .venv/bin/python -m stocksage daily >> ~/.stocksage/daily.log 2>&1
+30 17 * * 1-5 /path/to/Stock-project/start.sh daily >> ~/.stocksage/daily.log 2>&1
 ```
 
 ## Testing
 
 ```bash
-pytest            # fully offline — synthetic data, in-memory DB
+.venv/bin/python -m pytest    # fully offline — synthetic data, in-memory DB
 ```
 
 ## Roadmap (evolves with use)

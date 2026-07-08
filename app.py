@@ -13,7 +13,10 @@ import streamlit as st
 
 from stocksage.db import Database
 from stocksage.engine import Engine
+from stocksage.envfile import load_env, save_env
 from stocksage.robinhood import RobinhoodClient
+
+load_env()  # pick up .env automatically; real environment still wins
 
 st.set_page_config(page_title="StockSage", page_icon="📈", layout="wide")
 
@@ -137,11 +140,36 @@ with tab_portfolio:
     elif RobinhoodClient.credentials_available():
         st.write("Run the daily cycle to pull your portfolio.")
     else:
-        st.warning(
-            "Robinhood is not linked. Copy `.env.example` to `.env`, fill in "
-            "ROBINHOOD_USERNAME / ROBINHOOD_PASSWORD (and ROBINHOOD_MFA_SECRET "
-            "for TOTP), then restart. Credentials stay on this machine."
+        st.info(
+            "Robinhood is not linked yet. Enter your login below — it is saved "
+            "only to a private `.env` file on this machine and used read-only "
+            "(StockSage never places orders)."
         )
+        with st.form("link_robinhood"):
+            username = st.text_input("Robinhood email")
+            password = st.text_input("Robinhood password", type="password")
+            mfa = st.text_input(
+                "Authenticator (TOTP) secret — optional",
+                type="password",
+                help=(
+                    "Only needed if you use app-based two-factor auth: paste the "
+                    "setup key Robinhood showed when you configured your "
+                    "authenticator app."
+                ),
+            )
+            if st.form_submit_button("🔗 Link Robinhood", type="primary"):
+                if not username or not password:
+                    st.error("Email and password are both required.")
+                else:
+                    save_env(
+                        {
+                            "ROBINHOOD_USERNAME": username,
+                            "ROBINHOOD_PASSWORD": password,
+                            "ROBINHOOD_MFA_SECRET": mfa or None,
+                        }
+                    )
+                    st.success("Saved. Run the daily cycle to pull your portfolio.")
+                    st.rerun()
 
 with tab_moves:
     db = Database()
