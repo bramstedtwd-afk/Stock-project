@@ -1,6 +1,8 @@
 @echo off
 rem StockSage one-command launcher (Windows).
-rem   start.bat            -> open the dashboard in your browser
+rem   start.bat            -> open StockSage in its own app window
+rem   start.bat install    -> put a StockSage shortcut on your Desktop
+rem   start.bat web        -> open in a normal browser tab instead
 rem   start.bat daily      -> run the daily learn+scan cycle in the terminal
 rem   start.bat <anything> -> passed through to the CLI (suggest, sectors, ...)
 
@@ -35,8 +37,13 @@ if not exist .env (
 )
 
 if "%~1"=="" (
-    echo [stocksage] Starting the dashboard - press Ctrl+C to stop...
-    %VENV_PY% -m streamlit run app.py --browser.gatherUsageStats false
+    %VENV_PY% -m stocksage.desktop app
+) else if "%~1"=="app" (
+    %VENV_PY% -m stocksage.desktop app
+) else if "%~1"=="web" (
+    %VENV_PY% -m stocksage.desktop web
+) else if "%~1"=="install" (
+    %VENV_PY% -m stocksage.desktop install
 ) else (
     %VENV_PY% -m stocksage %*
 )

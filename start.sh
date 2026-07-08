@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # StockSage one-command launcher (Mac / Linux).
 #
-#   ./start.sh              -> open the dashboard in your browser
+#   ./start.sh              -> open StockSage in its own app window
+#   ./start.sh install      -> put a StockSage icon on your desktop/dock
+#   ./start.sh web          -> open in a normal browser tab instead
 #   ./start.sh daily        -> run the daily learn+scan cycle in the terminal
 #   ./start.sh <anything>   -> passed through to the CLI (suggest, sectors, ...)
 #
@@ -44,9 +46,11 @@ if [ ! -f .env ]; then
 fi
 
 # --- 5. Run -------------------------------------------------------------------
-if [ $# -eq 0 ]; then
-  say "Starting the dashboard (Ctrl+C to stop)..."
-  exec "$VENV_PY" -m streamlit run app.py --browser.gatherUsageStats false
-else
-  exec "$VENV_PY" -m stocksage "$@"
-fi
+case "${1:-app}" in
+  app|web|install)
+    exec "$VENV_PY" -m stocksage.desktop "${1:-app}"
+    ;;
+  *)
+    exec "$VENV_PY" -m stocksage "$@"
+    ;;
+esac

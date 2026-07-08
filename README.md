@@ -27,13 +27,29 @@ start.bat
 ```
 
 That's it. The first run sets up everything automatically (virtual
-environment, dependencies, settings file — allow a few minutes), then the
-dashboard opens in your browser. Press **Run daily cycle** to get your first
-suggestions, and link Robinhood right from the **Portfolio tab** — no file
-editing needed.
+environment, dependencies, settings file — allow a few minutes), then
+**StockSage opens in its own app window** — no browser tabs, no terminal
+juggling. Close the window and everything shuts down cleanly. Press
+**Run daily cycle** to get your first suggestions, and link Robinhood right
+from the **Portfolio tab** — no file editing needed.
 
 The only prerequisite is [Python 3.10+](https://www.python.org/downloads/)
 (on Windows, tick *"Add python.exe to PATH"* during install).
+
+### Install it like a real app (recommended)
+
+```bash
+./start.sh install        # Windows: start.bat install
+```
+
+- **macOS** — creates **StockSage.app** in `~/Applications`: launch it from
+  Spotlight or drag it to your Dock.
+- **Windows** — puts a **StockSage** shortcut on your Desktop.
+- **Linux** — adds StockSage to your applications menu and Desktop.
+
+From then on it's double-click → app window. (The app window uses
+Chrome/Edge/Brave under the hood; if none is installed it opens in your
+default browser instead. `./start.sh web` forces browser mode.)
 
 ### Terminal mode
 
