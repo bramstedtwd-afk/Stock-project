@@ -51,6 +51,32 @@ From then on it's double-click → app window. (The app window uses
 Chrome/Edge/Brave under the hood; if none is installed it opens in your
 default browser instead. `./start.sh web` forces browser mode.)
 
+### Use it on your phone
+
+```bash
+./start.sh phone          # Windows: start.bat phone
+```
+
+This runs StockSage on your computer and shares it to your home Wi-Fi,
+printing a **QR code** — scan it with your phone's camera and the dashboard
+opens in your phone browser. Then use **Add to Home Screen** (Share menu on
+iPhone, ⋮ menu on Android) and StockSage gets its own icon on your phone,
+opening full-screen like a native app.
+
+How it works and what to know:
+
+- **Your credentials never leave your computer.** The engine (and your
+  Robinhood link) runs on the computer; the phone is just a screen for it.
+- The computer must be **on and running phone mode** while you use it, and
+  the phone must be on the **same Wi-Fi**.
+- While phone mode runs, anyone on your Wi-Fi network could open the
+  dashboard — fine at home, skip it on public networks.
+- Want it from anywhere (cellular, work, travel)? Install
+  [Tailscale](https://tailscale.com) (free for personal use) on both your
+  computer and phone, run phone mode, and use the computer's Tailscale
+  address instead — a private encrypted tunnel, no ports exposed to the
+  internet.
+
 ### Terminal mode
 
 Anything you pass to the launcher goes to the CLI instead of the dashboard:

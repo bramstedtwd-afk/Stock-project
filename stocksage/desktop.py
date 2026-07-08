@@ -2,6 +2,7 @@
 
     python -m stocksage.desktop app       open in a native-feeling app window
     python -m stocksage.desktop web       open as a normal browser tab
+    python -m stocksage.desktop phone     share to your phone over home Wi-Fi
     python -m stocksage.desktop install   put a StockSage icon on your desktop
 
 App mode starts the Streamlit server in the background, opens a dedicated
@@ -43,8 +44,13 @@ def port_open(port: int, host: str = "127.0.0.1") -> bool:
         return s.connect_ex((host, port)) == 0
 
 
-def start_server(port: int) -> subprocess.Popen | None:
-    """Start Streamlit headless. Returns None if one is already running."""
+def start_server(port: int, address: str = "localhost") -> subprocess.Popen | None:
+    """Start Streamlit headless. Returns None if one is already running.
+
+    `address` is the bind interface: localhost keeps StockSage private to
+    this computer (app/web modes); 0.0.0.0 exposes it to your local network
+    (phone mode).
+    """
     if port_open(port):
         say("StockSage is already running — opening a window to it.")
         return None
@@ -61,6 +67,8 @@ def start_server(port: int) -> subprocess.Popen | None:
             "true",
             "--server.port",
             str(port),
+            "--server.address",
+            address,
             "--browser.gatherUsageStats",
             "false",
         ],
@@ -201,6 +209,57 @@ def run_web(port: int = DEFAULT_PORT, server=_OWN_SERVER) -> int:
     return 0
 
 
+def lan_ip() -> str | None:
+    """This computer's address on the local network (no traffic is sent)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+        return None if ip.startswith("127.") else ip
+    except OSError:
+        return None
+
+
+def _print_qr(url: str) -> None:
+    try:
+        import qrcode
+
+        qr = qrcode.QRCode(border=1)
+        qr.add_data(url)
+        qr.print_ascii(invert=True)
+    except ImportError:
+        say("(install the 'qrcode' package to get a scannable code here)")
+
+
+def run_phone(port: int = DEFAULT_PORT) -> int:
+    ip = lan_ip()
+    if ip is None:
+        say("Could not find this computer's network address — are you connected to Wi-Fi?")
+        return 1
+    server = start_server(port, address="0.0.0.0")
+    url = f"http://{ip}:{port}"
+    print()
+    say(f"StockSage is live on your home network:  {url}")
+    say("On your phone (same Wi-Fi): scan this code, or type the address in your browser.")
+    print()
+    _print_qr(url)
+    print()
+    say("Tip: use your phone browser's 'Add to Home Screen' to make it a phone app.")
+    say("Note: while this runs, anyone on your Wi-Fi network can open the dashboard.")
+    say("Press Ctrl+C here to stop sharing.")
+    try:
+        if server is not None:
+            server.wait()
+        else:
+            while port_open(port):
+                time.sleep(2)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop_server(server)
+    return 0
+
+
 # --- desktop icon installation ---------------------------------------------------
 
 def install_icon() -> int:
@@ -293,6 +352,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_app()
     if mode == "web":
         return run_web()
+    if mode == "phone":
+        return run_phone()
     if mode == "install":
         return install_icon()
     print(__doc__)

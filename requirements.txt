@@ -6,6 +6,7 @@ yfinance>=0.2.50       # free market data + news (no API key)
 
 # Dashboard
 streamlit>=1.35
+qrcode>=7.4            # scannable code for phone mode
 
 # Robinhood (read-only portfolio link)
 robin_stocks>=3.0
