@@ -124,6 +124,12 @@ class Database:
         )
         self.conn.commit()
 
+    def evaluated_suggestions(self) -> list[sqlite3.Row]:
+        """The full graded record, chronological — feeds the profit ledger."""
+        return self.conn.execute(
+            "SELECT * FROM suggestions WHERE evaluated = 1 ORDER BY created_at, id"
+        ).fetchall()
+
     def recent_suggestions(self, limit: int = 50) -> list[sqlite3.Row]:
         return self.conn.execute(
             "SELECT * FROM suggestions ORDER BY id DESC LIMIT ?", (limit,)

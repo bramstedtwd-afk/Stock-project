@@ -55,6 +55,49 @@ st.caption(
     "Your personal learning market engine. Decision support only — every trade is your call."
 )
 
+# --- Sidebar: the brain, always visible ---------------------------------------
+with st.sidebar:
+    from stocksage.brain import brain_info, detect_cloud_folders, sync_to_folder
+
+    st.header("🧠 Brain")
+    binfo = brain_info()
+    if binfo["shared"]:
+        st.success("☁️ Shared across your devices")
+        st.caption(f"Lives in: `{binfo['path']}`")
+    else:
+        st.info("💻 On this device only")
+    st.caption(
+        f"{binfo['suggestions']} calls on record · {binfo['move_events']} moves "
+        f"remembered · {binfo['warmup_samples']} history samples"
+    )
+    if binfo["last_device"]:
+        st.caption(f"Last learned on **{binfo['last_device']}** ({binfo['last_device_at']})")
+
+    if not binfo["shared"]:
+        with st.expander("☁️ Share across your devices"):
+            st.caption(
+                "Puts the brain in a folder your cloud drive syncs. Run the same "
+                "thing on your other devices and they all share one mind. "
+                "Use one device at a time."
+            )
+            detected = detect_cloud_folders()
+            options = [f"{name}  ({path})" for name, path in detected] + ["Other folder…"]
+            choice = st.selectbox("Where?", options)
+            if choice == "Other folder…":
+                custom = st.text_input("Folder path (must exist)")
+                target_dir = Path(custom).expanduser() if custom else None
+            else:
+                target_dir = detected[options.index(choice)][1] / "StockSage"
+            if st.button("Share my brain", type="primary", use_container_width=True):
+                if target_dir is None or not target_dir.parent.exists():
+                    st.error("Pick or enter an existing folder first.")
+                else:
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    new_home = sync_to_folder(target_dir)
+                    st.cache_resource.clear()  # engine must reopen the moved brain
+                    st.success(f"Done — the brain now lives in {new_home}")
+                    st.rerun()
+
 # Continual learning: if today's cycle hasn't happened yet, run it on open.
 if "scan_result" not in st.session_state and not st.session_state.get("autorun_done"):
     st.session_state["autorun_done"] = True
@@ -88,8 +131,8 @@ with col_status:
             f"matured suggestions · Robinhood {linked}{bootstrap_note}"
         )
 
-tab_sugg, tab_sectors, tab_portfolio, tab_moves, tab_learning = st.tabs(
-    ["💡 Suggestions", "🏭 Sectors", "💼 Portfolio", "📰 Why it moved", "🧠 Learning"]
+tab_sugg, tab_profit, tab_sectors, tab_portfolio, tab_moves, tab_learning = st.tabs(
+    ["💡 Suggestions", "💰 Profit", "🏭 Sectors", "💼 Portfolio", "📰 Why it moved", "🧠 Learning"]
 )
 
 with tab_sugg:
@@ -126,6 +169,70 @@ with tab_sugg:
                             columns=["signal", "value"],
                         )
                         st.dataframe(sig_df, hide_index=True, use_container_width=True)
+
+with tab_profit:
+    from stocksage.profit import default_stake, paper_trades, profit_stats
+
+    db = Database()
+    buys, avoided = paper_trades(db.evaluated_suggestions())
+    stats = profit_stats(buys, avoided)
+    stake = default_stake()
+    st.caption(
+        f"The honest meter: every graded call scored as a ${stake:,.0f} paper trade. "
+        "This is what following StockSage would have earned — judge it here before "
+        "trusting it with real size."
+    )
+    if not buys and not avoided:
+        st.info(
+            "The ledger fills in as suggestions mature (5 trading days each). "
+            "Check back after the first week of daily cycles."
+        )
+    else:
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Paper P&L", f"${stats['total_pnl']:+,.2f}")
+        m2.metric(
+            "Win rate",
+            f"{stats['win_rate']:.0%}" if stats["win_rate"] is not None else "—",
+            help="Share of buy-side calls that made money over their 5-day horizon.",
+        )
+        m3.metric(
+            "Profit factor",
+            f"{stats['profit_factor']:.2f}" if stats["profit_factor"] is not None else "—",
+            help="Gross wins ÷ gross losses. Above 1.0 means the wins pay for the losses.",
+        )
+        m4.metric(
+            "Risk avoided",
+            f"${stats['risk_avoided']:+,.2f}",
+            help="What the sell/avoid calls saved you by being out of falling names.",
+        )
+        if buys:
+            curve = pd.DataFrame(
+                {"Date": [t.when for t in buys], "Cumulative P&L ($)": [t.cumulative for t in buys]}
+            ).groupby("Date").last()
+            st.line_chart(curve)
+            if stats["best"] and stats["worst"]:
+                c1, c2 = st.columns(2)
+                b, w = stats["best"], stats["worst"]
+                c1.caption(f"🏆 Best call: **{b.ticker}** {b.when} → ${b.pnl:+,.2f}")
+                c2.caption(f"💥 Worst call: **{w.ticker}** {w.when} → ${w.pnl:+,.2f}")
+            with st.expander("Every paper trade"):
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {
+                                "Date": t.when,
+                                "Ticker": t.ticker,
+                                "Action": t.action,
+                                "Return %": round(t.realized_return * 100, 2),
+                                "P&L $": round(t.pnl, 2),
+                                "Cumulative $": round(t.cumulative, 2),
+                            }
+                            for t in reversed(buys)
+                        ]
+                    ),
+                    hide_index=True,
+                    use_container_width=True,
+                )
 
 with tab_sectors:
     if result is None or not result.sector_trends:

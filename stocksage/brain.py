@@ -36,6 +36,35 @@ from .envfile import save_env
 
 BRAIN_FILENAME = "stocksage.db"
 
+# Cloud-synced folders we know how to find, per platform. Checked in order;
+# only existing folders are offered.
+_CLOUD_CANDIDATES: tuple[tuple[str, str], ...] = (
+    ("Dropbox", "~/Dropbox"),
+    ("iCloud Drive", "~/Library/Mobile Documents/com~apple~CloudDocs"),
+    ("OneDrive", "~/OneDrive"),
+    ("Google Drive", "~/Google Drive/My Drive"),
+    ("Google Drive", "~/Google Drive"),
+    ("Syncthing", "~/Sync"),
+)
+
+
+def detect_cloud_folders(home: Path | None = None) -> list[tuple[str, Path]]:
+    """Cloud-sync folders present on this machine: [(display name, path)]."""
+    home = home or Path.home()
+    found = []
+    for name, raw in _CLOUD_CANDIDATES:
+        candidate = home / Path(raw).expanduser().relative_to(Path.home()) \
+            if raw.startswith("~") else Path(raw)
+        if candidate.is_dir() and all(candidate != p for _, p in found):
+            found.append((name, candidate))
+    return found
+
+
+def is_shared(db_path: str | Path | None = None) -> bool:
+    """True when the brain lives outside the default local location."""
+    current = Path(db_path).expanduser() if db_path else default_db_path()
+    return current != Path("~/.stocksage/stocksage.db").expanduser()
+
 
 def export_brain(dest: str | Path | None = None, db_path: str | Path | None = None) -> Path:
     """Consistent snapshot of the brain to a single file."""
@@ -172,6 +201,9 @@ def brain_info(db_path: str | Path | None = None) -> dict:
             "signals_weighted": counts["weights"],
             "warmup_samples": db.get_meta("warmup_samples", "0"),
             "last_daily_run": db.get_meta("last_daily_run"),
+            "last_device": db.get_meta("last_device"),
+            "last_device_at": db.get_meta("last_device_at"),
+            "shared": is_shared(db.path),
         }
     finally:
         db.close()

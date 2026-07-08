@@ -122,6 +122,22 @@ def test_brain_info_counts(tmp_path):
     assert info["warmup_samples"] == "100"
 
 
+def test_detect_cloud_folders(tmp_path):
+    (tmp_path / "Dropbox").mkdir()
+    (tmp_path / "OneDrive").mkdir()
+    found = brain.detect_cloud_folders(home=tmp_path)
+    names = [name for name, _ in found]
+    assert names == ["Dropbox", "OneDrive"]
+    assert all(path.is_dir() for _, path in found)
+    assert brain.detect_cloud_folders(home=tmp_path / "empty-nowhere") == []
+
+
+def test_is_shared(tmp_path, monkeypatch):
+    monkeypatch.delenv("STOCKSAGE_DB", raising=False)
+    assert brain.is_shared() is False  # default local location
+    assert brain.is_shared(tmp_path / "Dropbox" / "stocksage.db") is True
+
+
 def test_db_path_honors_env_at_call_time(tmp_path, monkeypatch):
     """Regression: STOCKSAGE_DB from .env must apply even after module import."""
     monkeypatch.setenv("STOCKSAGE_DB", str(tmp_path / "custom.db"))

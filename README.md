@@ -57,15 +57,19 @@ Everything StockSage has learned — signal weights, graded track record, move
 memory — lives in **one file: the brain**. Three ways to move it, easiest
 first:
 
-**Shared brain across all your devices (set-and-forget):**
+**Shared brain across all your devices (set-and-forget):** open the
+dashboard sidebar → **🧠 Brain → Share across your devices**. StockSage
+detects your Dropbox / iCloud / OneDrive / Google Drive folder — pick it,
+press **Share my brain**, done. Repeat on each device and they all read and
+write the *same* brain — what one learns, all know. The sidebar always shows
+where the brain lives, what it knows, and which device learned last. (Use
+one device at a time; let the folder finish syncing before switching.)
+
+Terminal equivalent:
 
 ```bash
 ./start.sh brain sync ~/Dropbox/StockSage     # or iCloud Drive / OneDrive / ...
 ```
-
-Run that once per device with the same folder, and every device reads and
-writes the *same* brain — what one learns, all know. (Use one device at a
-time; let the folder finish syncing before switching.)
 
 **One-off transfer:** press **⬇️ Export brain** on the Learning tab (or
 `./start.sh brain export`), move the file however you like, then **Import →
@@ -212,6 +216,17 @@ this becomes your private research notebook of what actually drives each name.
   never written to disk by the app.
 - **Honest self-grading** — the hit rate on the Learning tab is computed from
   real recorded calls, not backtests.
+
+### The profit meter
+
+The **💰 Profit tab** (and `./start.sh profit`) scores every graded call as
+a fixed-stake paper trade ($1,000 per idea; set `STOCKSAGE_STAKE` in `.env`
+to change): cumulative P&L curve, win rate, profit factor (gross wins ÷
+gross losses), best and worst calls, and the risk its sell/avoid calls
+saved you. Fixed staking is deliberate — it measures the quality of the
+calls themselves, uncontaminated by sizing luck. **This is the number to
+watch before trusting the tool with real size**, and because it's derived
+from the graded record, it travels with the brain.
 
 ## The universe
 

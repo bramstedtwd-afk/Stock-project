@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -158,4 +159,9 @@ class Engine:
         result.weights = self.db.load_weights()
         result.bootstrap_stats = bootstrap_stats
         self.db.set_meta("last_daily_run", datetime.now(timezone.utc).date().isoformat())
+        # Device stamp: with a shared brain, every device can see who ran last.
+        self.db.set_meta("last_device", socket.gethostname())
+        self.db.set_meta(
+            "last_device_at", datetime.now(timezone.utc).isoformat(timespec="seconds")
+        )
         return result

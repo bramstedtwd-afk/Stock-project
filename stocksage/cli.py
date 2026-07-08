@@ -209,6 +209,34 @@ def cmd_brain(args) -> int:
     return 0
 
 
+def cmd_profit(args) -> int:
+    from .profit import default_stake, paper_trades, profit_stats
+
+    db = Database()
+    buys, avoided = paper_trades(db.evaluated_suggestions())
+    stats = profit_stats(buys, avoided)
+    stake = default_stake()
+    print(f"\nPaper ledger (${stake:,.0f} per idea) — what following StockSage would earn")
+    print("-" * 68)
+    if not buys and not avoided:
+        print("No graded calls yet — the ledger fills in as suggestions mature.")
+        return 0
+    print(f"Buy-side trades   : {stats['trades']}")
+    print(f"Paper P&L         : ${stats['total_pnl']:+,.2f}")
+    if stats["win_rate"] is not None:
+        print(f"Win rate          : {stats['win_rate']:.0%}")
+    if stats["profit_factor"] is not None:
+        print(f"Profit factor     : {stats['profit_factor']:.2f}  (>1 = wins pay for losses)")
+    if stats["avg_win"] is not None and stats["avg_loss"] is not None:
+        print(f"Avg win / loss    : ${stats['avg_win']:+,.2f} / ${stats['avg_loss']:+,.2f}")
+    print(f"Risk avoided      : ${stats['risk_avoided']:+,.2f} across {stats['avoid_calls']} avoid calls")
+    if stats["best"]:
+        b, w = stats["best"], stats["worst"]
+        print(f"Best / worst call : {b.ticker} ${b.pnl:+,.2f}  /  {w.ticker} ${w.pnl:+,.2f}")
+    print(DISCLAIMER)
+    return 0
+
+
 def cmd_performance(args) -> int:
     db = Database()
     summary = db.performance_summary()
@@ -282,6 +310,9 @@ def build_parser() -> argparse.ArgumentParser:
     b.set_defaults(func=cmd_brain)
     b = brain_sub.add_parser("info", help="where the brain lives and what it knows")
     b.set_defaults(func=cmd_brain)
+
+    p = sub.add_parser("profit", help="paper P&L ledger: what following the calls would earn")
+    p.set_defaults(func=cmd_profit)
 
     p = sub.add_parser("performance", help="learning status and signal weights")
     p.set_defaults(func=cmd_performance)
