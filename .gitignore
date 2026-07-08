@@ -1,0 +1,23 @@
+# Secrets — never commit credentials
+.env
+
+# Local state
+*.db
+*.sqlite3
+.stocksage/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Data caches
+*.parquet
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
