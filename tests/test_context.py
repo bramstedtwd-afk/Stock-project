@@ -36,6 +36,22 @@ def test_detect_ignores_normal_day():
     assert detect_significant_move(df) is None
 
 
+def test_detect_all_finds_injected_spikes():
+    from stocksage.context import detect_all_significant_moves
+
+    df = make_ohlcv(days=200, daily_vol=0.006, seed=9)
+    col = df.columns.get_loc("Close")
+    df.iloc[-50, col] = df["Close"].iloc[-51] * 0.94   # -6% crash day
+    df.iloc[-10, col] = df["Close"].iloc[-11] * 1.05   # +5% pop day
+    events = detect_all_significant_moves(df)
+    dates = {e[0] for e in events}
+    assert str(df.index[-50].date()) in dates
+    assert str(df.index[-10].date()) in dates
+    returns = {e[0]: e[1] for e in events}
+    assert returns[str(df.index[-50].date())] < -0.05
+    assert detect_all_significant_moves(None) == []
+
+
 def test_detect_requires_history():
     assert detect_significant_move(make_ohlcv(days=5)) is None
     assert detect_significant_move(None) is None

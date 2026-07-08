@@ -4,6 +4,7 @@ rem   start.bat            -> open StockSage in its own app window
 rem   start.bat install    -> put a StockSage shortcut on your Desktop
 rem   start.bat phone      -> share to your phone over home Wi-Fi (QR code)
 rem   start.bat web        -> open in a normal browser tab instead
+rem   start.bat autopilot  -> learn automatically every weekday (off|status)
 rem   start.bat daily      -> run the daily learn+scan cycle in the terminal
 rem   start.bat <anything> -> passed through to the CLI (suggest, sectors, ...)
 
@@ -47,6 +48,12 @@ if "%~1"=="" (
     %VENV_PY% -m stocksage.desktop phone
 ) else if "%~1"=="install" (
     %VENV_PY% -m stocksage.desktop install
+) else if "%~1"=="autopilot" (
+    if "%~2"=="" (
+        %VENV_PY% -m stocksage.autopilot on
+    ) else (
+        %VENV_PY% -m stocksage.autopilot %2
+    )
 ) else (
     %VENV_PY% -m stocksage %*
 )

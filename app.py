@@ -35,8 +35,16 @@ def get_engine() -> Engine:
 
 
 def run_daily_cycle():
-    with st.spinner("Evaluating matured calls, learning, scanning the universe..."):
-        result = get_engine().daily_run()
+    engine = get_engine()
+    first_run = engine.db.get_meta("bootstrap_done") is None
+    label = (
+        "First run: learning from two years of history, then scanning the universe "
+        "(a few minutes)..."
+        if first_run
+        else "Evaluating matured calls, learning, scanning the universe..."
+    )
+    with st.spinner(label):
+        result = engine.daily_run()
     st.session_state["scan_result"] = result
 
 
@@ -44,6 +52,14 @@ st.title("📈 StockSage")
 st.caption(
     "Your personal learning market engine. Decision support only — every trade is your call."
 )
+
+# Continual learning: if today's cycle hasn't happened yet, run it on open.
+if "scan_result" not in st.session_state and not st.session_state.get("autorun_done"):
+    st.session_state["autorun_done"] = True
+    from datetime import date as _date
+
+    if get_engine().db.get_meta("last_daily_run") != _date.today().isoformat():
+        run_daily_cycle()
 
 col_btn, col_status = st.columns([1, 4])
 with col_btn:
@@ -53,12 +69,21 @@ with col_btn:
 result = st.session_state.get("scan_result")
 with col_status:
     if result is None:
-        st.info("Press **Run daily cycle** to learn from matured calls and scan the universe.")
+        st.info(
+            "Already learned today — press **Run daily cycle** for a fresh scan anyway."
+        )
     else:
         linked = "linked ✅" if result.portfolio else "not linked"
+        bootstrap_note = ""
+        if result.bootstrap_stats:
+            bs = result.bootstrap_stats
+            bootstrap_note = (
+                f" · bootstrapped from history: {bs['warmup_samples']} training samples, "
+                f"{bs['move_events_backfilled']} past moves remembered"
+            )
         st.success(
             f"Scanned {len(result.suggestions)} names · graded {result.evaluated_count} "
-            f"matured suggestions · Robinhood {linked}"
+            f"matured suggestions · Robinhood {linked}{bootstrap_note}"
         )
 
 tab_sugg, tab_sectors, tab_portfolio, tab_moves, tab_learning = st.tabs(
@@ -194,7 +219,8 @@ with tab_learning:
     db = Database()
     summary = db.performance_summary()
     weights = db.load_weights()
-    m1, m2, m3 = st.columns(3)
+    m0, m1, m2, m3 = st.columns(4)
+    m0.metric("Historical samples", db.get_meta("warmup_samples") or "0")
     m1.metric("Suggestions graded", summary["evaluated"])
     m2.metric(
         "Direction hit rate",

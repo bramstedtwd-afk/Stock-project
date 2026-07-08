@@ -112,6 +112,39 @@ Anything you pass to the launcher goes to the CLI instead of the dashboard:
                                  → weights updated → smarter tomorrow
 ```
 
+### It arrives already educated
+
+The very first daily cycle **bootstraps from two years of history** before
+doing anything else:
+
+- **Signal weights are pre-trained** on thousands of walk-forward samples:
+  at each historical point the engine computes the signals exactly as it
+  would have seen them live (no look-ahead), observes the 5-day return that
+  followed, and applies the same learning update it uses in production. Your
+  day-one suggestions already reflect which signals have actually worked.
+- **The move memory is backfilled**: every significant historical move for
+  all 100 stocks is recorded, so "why it moved" starts with each name's
+  event history instead of an empty page.
+
+Re-run it anytime with `./start.sh bootstrap` to train further on the
+freshest history.
+
+### It keeps learning by itself
+
+- **On open** — the dashboard automatically runs the learn+scan cycle the
+  first time you open it each day.
+- **On autopilot** — schedule it with your operating system so it learns
+  every weekday at 5:30pm even when nothing is open:
+
+  ```bash
+  ./start.sh autopilot            # on   (Windows: start.bat autopilot)
+  ./start.sh autopilot status     # check
+  ./start.sh autopilot off        # stop
+  ```
+
+  Uses launchd on macOS, cron on Linux, Task Scheduler on Windows; output
+  goes to `~/.stocksage/daily.log`. The computer must be awake at run time.
+
 ### The learning loop (the point of the whole tool)
 
 1. Every actionable suggestion is **recorded** with its full signal breakdown.
@@ -152,13 +185,6 @@ this becomes your private research notebook of what actually drives each name.
 Technology, Healthcare, Financials, Consumer Discretionary, Communication
 Services, Industrials, Consumer Staples, Energy, Utilities, Real Estate.
 Edit `stocksage/universe.py` to change it — nothing else hardcodes tickers.
-
-## Automate the daily run
-
-```cron
-# weekdays at 5:30pm ET, after the close
-30 17 * * 1-5 /path/to/Stock-project/start.sh daily >> ~/.stocksage/daily.log 2>&1
-```
 
 ## Testing
 

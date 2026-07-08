@@ -5,6 +5,7 @@
 #   ./start.sh install      -> put a StockSage icon on your desktop/dock
 #   ./start.sh phone        -> share to your phone over home Wi-Fi (QR code)
 #   ./start.sh web          -> open in a normal browser tab instead
+#   ./start.sh autopilot    -> learn automatically every weekday (off|status)
 #   ./start.sh daily        -> run the daily learn+scan cycle in the terminal
 #   ./start.sh <anything>   -> passed through to the CLI (suggest, sectors, ...)
 #
@@ -50,6 +51,9 @@ fi
 case "${1:-app}" in
   app|web|phone|install)
     exec "$VENV_PY" -m stocksage.desktop "${1:-app}"
+    ;;
+  autopilot)
+    exec "$VENV_PY" -m stocksage.autopilot "${2:-on}"
     ;;
   *)
     exec "$VENV_PY" -m stocksage "$@"

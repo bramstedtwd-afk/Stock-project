@@ -66,6 +66,28 @@ def detect_significant_move(df) -> tuple[str, float, float | None] | None:
     return date, ret, atr_mult
 
 
+def detect_all_significant_moves(df) -> list[tuple[str, float, float | None]]:
+    """Every significant move in the frame's history: [(date, return, atr_mult)].
+
+    Vectorized version of the same thresholds used for live detection —
+    powers the historical backfill that seeds the move memory before first use.
+    """
+    if df is None or len(df) < 30:
+        return []
+    close = df["Close"]
+    rets = close.pct_change()
+    atr_pct_prev = (atr(df) / close).shift(1)
+    mask = (rets.abs() >= ABS_RETURN_THRESHOLD) & (
+        rets.abs() >= ATR_MULTIPLE_THRESHOLD * atr_pct_prev
+    )
+    out = []
+    for ts in df.index[mask.fillna(False)]:
+        ret = float(rets.loc[ts])
+        ap = float(atr_pct_prev.loc[ts])
+        out.append((str(ts.date()), ret, abs(ret) / ap if ap > 0 else None))
+    return out
+
+
 def capture_move_context(ticker: str, df, market: MarketData, db: Database) -> dict | None:
     """Detect + explain + persist a significant move for one ticker."""
     detection = detect_significant_move(df)

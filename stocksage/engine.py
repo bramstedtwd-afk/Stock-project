@@ -39,6 +39,7 @@ class ScanResult:
     weights: dict[str, float] = field(default_factory=dict)
     portfolio: Portfolio | None = None
     errors: list[str] = field(default_factory=list)
+    bootstrap_stats: dict | None = None  # set when this run did first-run bootstrap
 
     @property
     def actionable(self) -> list[Suggestion]:
@@ -140,6 +141,12 @@ class Engine:
     # --- the daily heartbeat ---
 
     def daily_run(self, with_robinhood: bool = True) -> ScanResult:
+        bootstrap_stats = None
+        if self.db.get_meta("bootstrap_done") is None:
+            from .bootstrap import bootstrap
+
+            log.info("first run: bootstrapping from two years of history")
+            bootstrap_stats = bootstrap(self.market, self.db)
         evaluated = self.evaluate_pending()
         portfolio = None
         if with_robinhood:
@@ -149,4 +156,6 @@ class Engine:
         result.evaluated_count = evaluated
         result.sector_trends = self.sector_trends()
         result.weights = self.db.load_weights()
+        result.bootstrap_stats = bootstrap_stats
+        self.db.set_meta("last_daily_run", datetime.now(timezone.utc).date().isoformat())
         return result

@@ -48,8 +48,18 @@ def _print_suggestions(suggestions, limit: int) -> None:
 
 def cmd_daily(args) -> int:
     engine = Engine()
+    if engine.db.get_meta("bootstrap_done") is None:
+        print("First run detected — bootstrapping from two years of history first")
+        print("(pre-training signal weights + backfilling the move memory)...")
     print("Running daily cycle: evaluate -> learn -> scan -> suggest ...")
     result = engine.daily_run(with_robinhood=not args.no_robinhood)
+    if result.bootstrap_stats:
+        bs = result.bootstrap_stats
+        print(
+            f"\nBootstrapped: {bs['warmup_samples']} walk-forward training samples, "
+            f"{bs['move_events_backfilled']} historical moves remembered "
+            f"({bs['seconds']}s)."
+        )
     print(f"\nGraded {result.evaluated_count} matured suggestions (weights updated).")
     if result.portfolio:
         print(
@@ -150,12 +160,32 @@ def cmd_moves(args) -> int:
     return 0
 
 
+def cmd_bootstrap(args) -> int:
+    from .bootstrap import bootstrap
+    from .data import MarketData
+
+    print("Bootstrapping from two years of history (walk-forward, no look-ahead)...")
+    print("Re-running later trains further on the freshest data — safe to repeat.")
+    stats = bootstrap(MarketData(), Database())
+    print(f"\nTraining samples applied : {stats['warmup_samples']}")
+    print(f"Historical moves recorded: {stats['move_events_backfilled']}")
+    print(f"Elapsed                  : {stats['seconds']}s")
+    if stats["weights"]:
+        print("\nSignal weights after bootstrap:")
+        for name, w in sorted(stats["weights"].items(), key=lambda kv: -kv[1]):
+            print(f"  {name:<24}{w:.3f}")
+    return 0
+
+
 def cmd_performance(args) -> int:
     db = Database()
     summary = db.performance_summary()
     weights = db.load_weights()
     print("\nLearning status")
     print("-" * 40)
+    warmup = db.get_meta("warmup_samples")
+    if warmup:
+        print(f"Historical samples : {warmup} (bootstrap walk-forward)")
     print(f"Suggestions graded : {summary['evaluated']}")
     if summary["evaluated"]:
         print(f"Direction hit rate : {summary['hit_rate']:.0%}")
@@ -200,6 +230,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ticker")
     p.add_argument("--limit", type=int, default=20)
     p.set_defaults(func=cmd_moves)
+
+    p = sub.add_parser(
+        "bootstrap", help="(re)train weights and move memory from two years of history"
+    )
+    p.set_defaults(func=cmd_bootstrap)
 
     p = sub.add_parser("performance", help="learning status and signal weights")
     p.set_defaults(func=cmd_performance)

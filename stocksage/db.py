@@ -47,6 +47,11 @@ CREATE TABLE IF NOT EXISTS move_events (
     UNIQUE (ticker, event_date)
 );
 
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS learning_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at TEXT NOT NULL,
@@ -129,6 +134,20 @@ class Database:
             "hit_rate": row["hit_rate"],
             "avg_return": row["avg_ret"],
         }
+
+    # --- meta (small key/value state: bootstrap flag, last run, counters) ---
+
+    def get_meta(self, key: str, default: str | None = None) -> str | None:
+        row = self.conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        self.conn.commit()
 
     # --- learned weights ---
 
