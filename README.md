@@ -51,6 +51,40 @@ From then on it's double-click → app window. (The app window uses
 Chrome/Edge/Brave under the hood; if none is installed it opens in your
 default browser instead. `./start.sh web` forces browser mode.)
 
+### Take it to any device — the brain travels with you
+
+Everything StockSage has learned — signal weights, graded track record, move
+memory — lives in **one file: the brain**. Three ways to move it, easiest
+first:
+
+**Shared brain across all your devices (set-and-forget):**
+
+```bash
+./start.sh brain sync ~/Dropbox/StockSage     # or iCloud Drive / OneDrive / ...
+```
+
+Run that once per device with the same folder, and every device reads and
+writes the *same* brain — what one learns, all know. (Use one device at a
+time; let the folder finish syncing before switching.)
+
+**One-off transfer:** press **⬇️ Export brain** on the Learning tab (or
+`./start.sh brain export`), move the file however you like, then **Import →
+Merge** on the other device. Merging *compounds* knowledge — suggestions and
+move history are unioned, and the most recently trained weights win — so
+nothing is ever lost, no matter which direction you merge.
+
+**New computer from scratch:**
+
+```bash
+git clone <your-repo-url> && cd Stock-project
+./start.sh                        # sets itself up, opens the app
+./start.sh brain import <file>    # or brain sync <folder>
+```
+
+Robinhood credentials are deliberately **never** part of the brain — link
+Robinhood fresh on each device. `./start.sh brain info` shows where the
+brain lives and what it knows.
+
 ### Use it on your phone
 
 ```bash

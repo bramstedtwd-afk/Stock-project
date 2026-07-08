@@ -7,6 +7,8 @@ your Robinhood portfolio, the move-context memory, and the learning status.
 from __future__ import annotations
 
 import json
+import tempfile
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -246,6 +248,42 @@ with tab_learning:
             "Weights are at uniform defaults. Grading starts once the first suggestions "
             "mature (~1 week of daily runs)."
         )
+    st.divider()
+    st.subheader("🧳 Your brain travels with you")
+    st.caption(
+        "Everything StockSage has learned lives in one file. Take it to another "
+        "device, or merge two devices' knowledge together — merging only ever "
+        "adds. Robinhood credentials are never part of the brain."
+    )
+    b1, b2 = st.columns(2)
+    with b1:
+        from datetime import date as _bdate
+
+        from stocksage.brain import export_brain
+
+        export_path = Path(tempfile.gettempdir()) / "stocksage-brain-export.db"
+        export_brain(export_path)
+        st.download_button(
+            "⬇️ Export brain",
+            data=export_path.read_bytes(),
+            file_name=f"stocksage-brain-{_bdate.today().isoformat()}.db",
+            mime="application/x-sqlite3",
+            use_container_width=True,
+        )
+    with b2:
+        uploaded = st.file_uploader("Import a brain file", type=["db"])
+        if uploaded is not None and st.button("🧠 Merge into this device", type="primary"):
+            from stocksage.brain import import_brain
+
+            tmp = Path(tempfile.gettempdir()) / "stocksage-brain-import.db"
+            tmp.write_bytes(uploaded.getvalue())
+            stats = import_brain(tmp)
+            st.success(
+                f"Merged: +{stats['suggestions_added']} suggestions, "
+                f"+{stats['move_events_added']} move events, weights kept from "
+                f"the {stats['weights_taken_from']} brain."
+            )
+
     recent = db.recent_suggestions(30)
     if recent:
         st.subheader("Recent recorded suggestions")

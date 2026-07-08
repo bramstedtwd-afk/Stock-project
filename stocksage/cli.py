@@ -177,6 +177,38 @@ def cmd_bootstrap(args) -> int:
     return 0
 
 
+def cmd_brain(args) -> int:
+    from . import brain
+
+    if args.brain_action == "export":
+        path = brain.export_brain(args.path)
+        print(f"Brain exported to {path.resolve()}")
+        print("Move this file to any device and run:  ./start.sh brain import <file>")
+    elif args.brain_action == "import":
+        stats = brain.import_brain(args.path, replace=args.replace)
+        if stats.get("replaced"):
+            print("Brain replaced." + (f" Previous brain backed up to {stats['backup']}" if stats["backup"] else ""))
+        else:
+            print(
+                f"Brains merged: +{stats['suggestions_added']} suggestions, "
+                f"+{stats['move_events_added']} move events, "
+                f"weights kept from the {stats['weights_taken_from']} brain "
+                "(the one that learned most recently)."
+            )
+    elif args.brain_action == "sync":
+        target = brain.sync_to_folder(args.path)
+        print(f"Brain now lives at {target}")
+        print("Run the same command with the same folder on your other devices —")
+        print("they will all share this one brain.")
+    else:  # info
+        info = brain.brain_info()
+        print("\nBrain")
+        print("-" * 40)
+        for key, value in info.items():
+            print(f"  {key:<18}{value}")
+    return 0
+
+
 def cmd_performance(args) -> int:
     db = Database()
     summary = db.performance_summary()
@@ -235,6 +267,21 @@ def build_parser() -> argparse.ArgumentParser:
         "bootstrap", help="(re)train weights and move memory from two years of history"
     )
     p.set_defaults(func=cmd_bootstrap)
+
+    p = sub.add_parser("brain", help="export/import/sync everything StockSage has learned")
+    brain_sub = p.add_subparsers(dest="brain_action", required=True)
+    b = brain_sub.add_parser("export", help="snapshot the brain to a portable file")
+    b.add_argument("path", nargs="?", help="destination file (default: ./stocksage-brain-<date>.db)")
+    b.set_defaults(func=cmd_brain)
+    b = brain_sub.add_parser("import", help="merge (default) or replace with a brain file")
+    b.add_argument("path")
+    b.add_argument("--replace", action="store_true", help="swap wholesale instead of merging")
+    b.set_defaults(func=cmd_brain)
+    b = brain_sub.add_parser("sync", help="keep the brain in a cloud-synced folder")
+    b.add_argument("path", help="folder synced by Dropbox/iCloud/OneDrive/...")
+    b.set_defaults(func=cmd_brain)
+    b = brain_sub.add_parser("info", help="where the brain lives and what it knows")
+    b.set_defaults(func=cmd_brain)
 
     p = sub.add_parser("performance", help="learning status and signal weights")
     p.set_defaults(func=cmd_performance)

@@ -12,7 +12,12 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_DB_PATH = Path(os.environ.get("STOCKSAGE_DB", "~/.stocksage/stocksage.db"))
+FALLBACK_DB_PATH = "~/.stocksage/stocksage.db"
+
+
+def default_db_path() -> Path:
+    """Resolved at call time so a .env-provided STOCKSAGE_DB is honored."""
+    return Path(os.environ.get("STOCKSAGE_DB") or FALLBACK_DB_PATH).expanduser()
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS suggestions (
@@ -67,7 +72,7 @@ def _now() -> str:
 
 class Database:
     def __init__(self, path: str | Path | None = None):
-        self.path = Path(path).expanduser() if path else DEFAULT_DB_PATH.expanduser()
+        self.path = Path(path).expanduser() if path else default_db_path()
         if str(self.path) != ":memory:":
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.path))

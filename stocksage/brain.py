@@ -1,0 +1,177 @@
+"""The brain: everything StockSage has learned, as a portable object.
+
+The brain is one SQLite file (learned weights, graded track record, move
+memory). This module makes it travel:
+
+    export      snapshot the brain to a single file you can send anywhere
+    import      bring a brain file in — MERGE by default, so knowledge from
+                two devices compounds instead of one overwriting the other
+    sync        park the brain in a cloud-synced folder (Dropbox, iCloud,
+                OneDrive, ...) so every device shares one mind automatically
+    info        where the brain lives and what it knows
+
+Merge semantics (chosen so a merge can only add knowledge, never lose it):
+  - move events   union (unique per ticker+date)
+  - suggestions   union (deduped on created_at+ticker+action) — the graded
+                  track record from both devices is kept
+  - weights       the whole vector from whichever brain learned most
+                  recently (vectors are normalized together; mixing single
+                  weights from two vectors would corrupt both)
+  - meta          bootstrap flag kept if either side has it; counters take
+                  the larger value; timestamps take the later one
+
+Robinhood credentials are deliberately NOT part of the brain — they never
+leave the device they were entered on.
+"""
+
+from __future__ import annotations
+
+import shutil
+import sqlite3
+from datetime import date
+from pathlib import Path
+
+from .db import Database, default_db_path
+from .envfile import save_env
+
+BRAIN_FILENAME = "stocksage.db"
+
+
+def export_brain(dest: str | Path | None = None, db_path: str | Path | None = None) -> Path:
+    """Consistent snapshot of the brain to a single file."""
+    src = Database(db_path)  # ensures the file and schema exist
+    dest = Path(dest).expanduser() if dest else Path(
+        f"stocksage-brain-{date.today().isoformat()}.db"
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    out = sqlite3.connect(str(dest))
+    try:
+        src.conn.backup(out)  # atomic, safe while the source is in use
+        out.commit()
+    finally:
+        out.close()
+        src.close()
+    return dest
+
+
+def merge_brains(dest_path: str | Path, src_path: str | Path) -> dict:
+    """Merge the brain at src_path INTO dest_path. Returns what was added."""
+    dest = Database(dest_path)  # creates/migrates schema if needed
+    conn = dest.conn
+    conn.execute("ATTACH DATABASE ? AS src", (str(Path(src_path).expanduser()),))
+    stats = {}
+    try:
+        before = conn.total_changes
+        conn.execute(
+            "INSERT OR IGNORE INTO move_events"
+            " (created_at, ticker, event_date, return_pct, atr_multiple, reasons, headlines)"
+            " SELECT created_at, ticker, event_date, return_pct, atr_multiple,"
+            "        reasons, headlines FROM src.move_events"
+        )
+        stats["move_events_added"] = conn.total_changes - before
+
+        before = conn.total_changes
+        conn.execute(
+            "INSERT INTO suggestions"
+            " (created_at, ticker, action, score, price, signals, horizon_days,"
+            "  evaluated, realized_return, hit)"
+            " SELECT s.created_at, s.ticker, s.action, s.score, s.price, s.signals,"
+            "        s.horizon_days, s.evaluated, s.realized_return, s.hit"
+            " FROM src.suggestions s"
+            " WHERE NOT EXISTS (SELECT 1 FROM suggestions d"
+            "   WHERE d.created_at = s.created_at AND d.ticker = s.ticker"
+            "     AND d.action = s.action)"
+        )
+        stats["suggestions_added"] = conn.total_changes - before
+
+        # Weights travel as a whole vector: take whichever learned last.
+        src_ts = conn.execute("SELECT MAX(updated_at) FROM src.weights").fetchone()[0]
+        dest_ts = conn.execute("SELECT MAX(updated_at) FROM weights").fetchone()[0]
+        stats["weights_taken_from"] = "local"
+        if src_ts and (dest_ts is None or src_ts > dest_ts):
+            conn.execute("DELETE FROM weights")
+            conn.execute(
+                "INSERT INTO weights (signal, weight, updated_at)"
+                " SELECT signal, weight, updated_at FROM src.weights"
+            )
+            stats["weights_taken_from"] = "imported"
+
+        for row in conn.execute("SELECT key, value FROM src.meta").fetchall():
+            key, incoming = row["key"], row["value"]
+            current = dest.get_meta(key)
+            if current is None:
+                dest.set_meta(key, incoming)
+            elif key == "warmup_samples":
+                dest.set_meta(key, str(max(int(current), int(incoming))))
+            elif incoming > current:  # ISO dates compare correctly as strings
+                dest.set_meta(key, incoming)
+        conn.commit()
+    finally:
+        conn.execute("DETACH DATABASE src")
+        dest.close()
+    return stats
+
+
+def import_brain(
+    src: str | Path, db_path: str | Path | None = None, replace: bool = False
+) -> dict:
+    """Bring a brain file in. Merge by default; replace=True swaps it wholesale."""
+    src = Path(src).expanduser()
+    if not src.exists():
+        raise FileNotFoundError(f"no brain file at {src}")
+    sqlite3.connect(str(src)).execute("SELECT 1 FROM sqlite_master").fetchone()  # sanity
+    target = Path(db_path).expanduser() if db_path else default_db_path()
+    if replace:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        backup = None
+        if target.exists():
+            backup = target.with_suffix(".db.pre-import-backup")
+            shutil.copy2(target, backup)
+        shutil.copy2(src, target)
+        return {"replaced": True, "backup": str(backup) if backup else None}
+    return merge_brains(target, src)
+
+
+def sync_to_folder(folder: str | Path, db_path: str | Path | None = None) -> Path:
+    """Move the brain into a (cloud-synced) folder and point StockSage at it.
+
+    If a brain already lives in the folder (e.g. placed there by another
+    device), the local brain is merged into it — nothing is lost.
+    """
+    folder = Path(folder).expanduser()
+    if not folder.is_dir():
+        raise NotADirectoryError(f"{folder} is not an existing folder")
+    target = folder / BRAIN_FILENAME
+    local = Path(db_path).expanduser() if db_path else default_db_path()
+
+    if target.exists() and local.exists() and target != local:
+        merge_brains(target, local)
+    elif local.exists() and target != local:
+        shutil.copy2(local, target)
+    else:
+        Database(target).close()  # fresh brain directly in the folder
+
+    save_env({"STOCKSAGE_DB": str(target)})
+    if local.exists() and target != local:
+        local.rename(local.with_suffix(".db.moved-to-sync"))
+    return target
+
+
+def brain_info(db_path: str | Path | None = None) -> dict:
+    db = Database(db_path)
+    try:
+        counts = {
+            table: db.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("suggestions", "move_events", "weights")
+        }
+        return {
+            "path": str(db.path),
+            "size_kb": round(db.path.stat().st_size / 1024, 1) if db.path.exists() else 0,
+            "suggestions": counts["suggestions"],
+            "move_events": counts["move_events"],
+            "signals_weighted": counts["weights"],
+            "warmup_samples": db.get_meta("warmup_samples", "0"),
+            "last_daily_run": db.get_meta("last_daily_run"),
+        }
+    finally:
+        db.close()
