@@ -89,6 +89,21 @@ Robinhood credentials are deliberately **never** part of the brain — link
 Robinhood fresh on each device. `./start.sh brain info` shows where the
 brain lives and what it knows.
 
+**Code improvements travel too:**
+
+```bash
+./start.sh update                 # Windows: start.bat update
+```
+
+Pull the latest StockSage code from your repository on any device — so when
+we improve the tool on one machine (or merge a change on GitHub), every
+other device catches up with one command. It's deliberately safe: it only
+fast-forwards, refuses to touch uncommitted local edits, tells you exactly
+what came in, and refreshes dependencies automatically when they changed.
+Brain + code together mean a device is never more than two commands from
+fully current: `./start.sh update` for the code, the shared brain (or
+`brain import`) for the knowledge.
+
 ### Use it on your phone
 
 ```bash
