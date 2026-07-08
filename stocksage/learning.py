@@ -88,6 +88,37 @@ def _sign_strength(vote: float) -> float:
     return max(-1.0, min(1.0, vote))
 
 
+# A sector needs this many graded calls before its own weights get a vote.
+MIN_SECTOR_GRADES = 10
+
+
+def blended_weights(
+    global_w: dict[str, float],
+    sector_w: dict[str, float],
+    sector_grades: int,
+    min_grades: int = MIN_SECTOR_GRADES,
+    blend: float = 0.5,
+) -> dict[str, float]:
+    """Global weights blended with a sector's own learned weights.
+
+    Sectors reward different signals (mean reversion in Utilities is not
+    momentum in Tech). Each sector accumulates its own Hedge-learned vector;
+    once it has enough graded calls to be evidence rather than noise, it
+    gets an equal vote alongside the global vector.
+    """
+    if not sector_w or sector_grades < min_grades:
+        return dict(global_w)
+    names = set(global_w) | set(sector_w)
+    if not names:
+        return {}
+    uniform = 1.0 / len(names)
+    merged = {
+        n: (1.0 - blend) * global_w.get(n, uniform) + blend * sector_w.get(n, uniform)
+        for n in names
+    }
+    return normalize(merged)
+
+
 def weighted_score(signals: dict[str, float], weights: dict[str, float]) -> float:
     """Composite score in [-1, 1] from the current weight vector.
 

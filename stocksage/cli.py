@@ -91,6 +91,9 @@ def cmd_daily(args) -> int:
 
 def cmd_suggest(args) -> int:
     engine = Engine()
+    graded = engine.evaluate_pending()  # grade whenever touched, not just daily
+    if graded:
+        print(f"(Graded {graded} matured suggestions first — the model just got smarter.)")
     portfolio = None
     if not args.no_robinhood and RobinhoodClient.credentials_available():
         portfolio = RobinhoodClient().portfolio()
@@ -254,6 +257,15 @@ def cmd_performance(args) -> int:
         print("\nCurrent signal weights (learned):")
         for name, w in sorted(weights.items(), key=lambda kv: -kv[1]):
             print(f"  {name:<24}{w:.3f}  {'#' * int(w * 40)}")
+    sector_grades = db.sector_grade_counts()
+    if sector_grades:
+        from .learning import MIN_SECTOR_GRADES
+
+        print("\nPer-sector learning (sector weights vote after "
+              f"{MIN_SECTOR_GRADES} graded calls):")
+        for name, n in sorted(sector_grades.items(), key=lambda kv: -kv[1]):
+            status = "ACTIVE" if n >= MIN_SECTOR_GRADES else f"{n}/{MIN_SECTOR_GRADES}"
+            print(f"  {name:<26}{n:>4} graded  [{status}]")
     else:
         print("\nWeights still at uniform defaults — grading begins after the first")
         print("suggestions mature (~1 week of daily runs).")

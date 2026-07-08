@@ -52,6 +52,14 @@ CREATE TABLE IF NOT EXISTS move_events (
     UNIQUE (ticker, event_date)
 );
 
+CREATE TABLE IF NOT EXISTS sector_weights (
+    sector TEXT NOT NULL,
+    signal TEXT NOT NULL,
+    weight REAL NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (sector, signal)
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -177,6 +185,41 @@ class Database:
             [(s, w, now) for s, w in weights.items()],
         )
         self.conn.commit()
+
+    def load_sector_weights(self, sector: str) -> dict[str, float]:
+        return {
+            r["signal"]: r["weight"]
+            for r in self.conn.execute(
+                "SELECT signal, weight FROM sector_weights WHERE sector = ?", (sector,)
+            )
+        }
+
+    def save_sector_weights(self, sector: str, weights: dict[str, float]) -> None:
+        now = _now()
+        self.conn.executemany(
+            "INSERT INTO sector_weights (sector, signal, weight, updated_at)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(sector, signal) DO UPDATE SET weight = excluded.weight,"
+            " updated_at = excluded.updated_at",
+            [(sector, s, w, now) for s, w in weights.items()],
+        )
+        self.conn.commit()
+
+    def sector_grade_counts(self) -> dict[str, int]:
+        """Graded-call counters per sector (kept in meta as sector_grades:<name>)."""
+        rows = self.conn.execute(
+            "SELECT key, value FROM meta WHERE key LIKE 'sector_grades:%'"
+        ).fetchall()
+        return {r["key"].split(":", 1)[1]: int(r["value"]) for r in rows}
+
+    def ticker_track_record(self, ticker: str) -> tuple[int, float | None, float | None]:
+        """The model's own graded record on one name: (calls, hit_rate, avg_return)."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS n, AVG(hit) AS hit_rate, AVG(realized_return) AS avg_ret"
+            " FROM suggestions WHERE evaluated = 1 AND ticker = ?",
+            (ticker,),
+        ).fetchone()
+        return (row["n"] or 0, row["hit_rate"], row["avg_ret"])
 
     def log_learning(self, suggestion_id: int, detail: dict) -> None:
         self.conn.execute(

@@ -20,9 +20,9 @@ from .context import capture_move_context
 from .data import MarketData
 from .db import Database
 from .indicators import compute_features, risk_metrics
-from .learning import update_weights, weighted_score
+from .learning import blended_weights, update_weights, weighted_score
 from .robinhood import Portfolio, RobinhoodClient
-from .scoring import Suggestion, build_suggestion
+from .scoring import SHOCK_LOOKBACK_DAYS, PastContext, Suggestion, build_suggestion
 
 log = logging.getLogger(__name__)
 
@@ -55,9 +55,11 @@ class Engine:
     # --- learning loop ---
 
     def evaluate_pending(self, now: datetime | None = None) -> int:
-        """Grade matured suggestions and apply one weight update per grade."""
+        """Grade matured suggestions; update global AND sector weights per grade."""
         now = now or datetime.now(timezone.utc)
         weights = self.db.load_weights()
+        sector_state: dict[str, dict[str, float]] = {}
+        sector_grades: dict[str, int] = {}
         count = 0
         for row in self.db.pending_evaluations(now):
             price_now = self.market.latest_price(row["ticker"])
@@ -70,11 +72,61 @@ class Engine:
             signals = json.loads(row["signals"])
             weights, detail = update_weights(weights, signals, realized)
             self.db.log_learning(row["id"], detail)
+            sector = universe.sector_of(row["ticker"])
+            if sector:
+                sw = sector_state.setdefault(
+                    sector.name, self.db.load_sector_weights(sector.name)
+                )
+                sector_state[sector.name], _ = update_weights(sw, signals, realized)
+                sector_grades[sector.name] = sector_grades.get(sector.name, 0) + 1
             count += 1
         if count:
             self.db.save_weights(weights)
+            for name, sw in sector_state.items():
+                if sw:
+                    self.db.save_sector_weights(name, sw)
+            for name, n in sector_grades.items():
+                key = f"sector_grades:{name}"
+                self.db.set_meta(key, str(int(self.db.get_meta(key, "0")) + n))
             log.info("evaluated %d matured suggestions; weights updated", count)
         return count
+
+    def _past_context(self, ticker: str) -> PastContext:
+        """What the brain remembers about this name, for the scoring model."""
+        graded, hit_rate, _ = self.db.ticker_track_record(ticker)
+        today = datetime.now(timezone.utc).date()
+        recent = None
+        events_12mo = 0
+        for row in self.db.move_events(ticker, limit=100):
+            try:
+                event_date = datetime.strptime(row["event_date"], "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            age = (today - event_date).days
+            if age <= 365:
+                events_12mo += 1
+            if age <= SHOCK_LOOKBACK_DAYS and recent is None:
+                recent = {
+                    "date": row["event_date"],
+                    "return_pct": row["return_pct"],
+                    "reasons": json.loads(row["reasons"]),
+                }
+        return PastContext(
+            graded_calls=graded,
+            hit_rate=hit_rate,
+            recent_event=recent,
+            events_12mo=events_12mo,
+        )
+
+    def weights_for(self, ticker: str, global_weights: dict[str, float]) -> dict[str, float]:
+        """Effective weights for one name: global blended with its sector's."""
+        sector = universe.sector_of(ticker)
+        if sector is None:
+            return global_weights
+        grades = int(self.db.get_meta(f"sector_grades:{sector.name}", "0"))
+        return blended_weights(
+            global_weights, self.db.load_sector_weights(sector.name), grades
+        )
 
     # --- scanning ---
 
@@ -107,10 +159,17 @@ class Engine:
             if not feats:
                 result.errors.append(f"{ticker}: insufficient history")
                 continue
-            score = weighted_score(feats, weights)
+            score = weighted_score(feats, self.weights_for(ticker, weights))
             risk = risk_metrics(df)
             sector = universe.sector_of(ticker)
             owned = portfolio.shares_of(ticker) if portfolio else 0.0
+
+            # Capture today's move first so a fresh shock informs today's call.
+            if capture_context:
+                event = capture_move_context(ticker, df, self.market, self.db)
+                if event:
+                    result.move_events.append(event)
+
             suggestion = build_suggestion(
                 ticker,
                 feats,
@@ -118,13 +177,9 @@ class Engine:
                 risk,
                 sector=sector.name if sector else None,
                 owned_shares=owned,
+                past=self._past_context(ticker),
             )
             result.suggestions.append(suggestion)
-
-            if capture_context:
-                event = capture_move_context(ticker, df, self.market, self.db)
-                if event:
-                    result.move_events.append(event)
 
             if record and abs(suggestion.risk_adjusted_score) >= RECORD_THRESHOLD:
                 self.db.record_suggestion(

@@ -21,10 +21,43 @@ STRONG_SELL_THRESHOLD = -0.45
 HIGH_VOL = 0.60
 CALM_VOL = 0.15
 
+# --- past-context adjustments ---
+# The model consults its own graded record on a name before trusting itself.
+RELIABILITY_MIN_CALLS = 5          # need this many grades before self-adjusting
+RELIABILITY_FLOOR = 0.60           # worst-case confidence shrink
+RELIABILITY_CEIL = 1.25            # best-case confidence boost
+SHOCK_LOOKBACK_DAYS = 5            # a big move this recent tempers conviction
+SHOCK_DAMPING = 0.75
+EVENT_PRONE_THRESHOLD = 10         # outsized moves in 12mo that flag a name jumpy
+EVENT_PRONE_SIZING = 0.75
+
 # Risk budget per position: cap the suggested allocation of investable cash.
 MAX_POSITION_FRACTION = 0.10
 # ATR multiple used for the protective stop suggestion.
 STOP_ATR_MULTIPLE = 2.0
+
+
+@dataclass
+class PastContext:
+    """What the brain remembers about a name, fed into its next suggestion."""
+
+    graded_calls: int = 0
+    hit_rate: float | None = None      # model's own accuracy on this name
+    recent_event: dict | None = None   # {date, return_pct, reasons} within lookback
+    events_12mo: int = 0               # outsized moves in the past year
+
+
+def reliability_multiplier(graded_calls: int, hit_rate: float | None) -> float:
+    """Confidence scale from the model's own record on this name.
+
+    Neutral (1.0) at a 50% hit rate; a name it keeps reading correctly earns
+    up to +25% conviction, a name it keeps misreading loses up to 40%. Below
+    the minimum sample size it stays neutral — five calls is opinion, not
+    evidence, but it beats never checking.
+    """
+    if graded_calls < RELIABILITY_MIN_CALLS or hit_rate is None:
+        return 1.0
+    return min(RELIABILITY_CEIL, max(RELIABILITY_FLOOR, 0.6 + 0.8 * hit_rate))
 
 
 @dataclass
@@ -91,19 +124,47 @@ def build_suggestion(
     risk: dict[str, float],
     sector: str | None = None,
     owned_shares: float = 0.0,
+    past: PastContext | None = None,
 ) -> Suggestion:
     vol = risk.get("annualized_vol")
-    mult = risk_multiplier(vol)
-    ras = score * mult
-    action = classify(ras)
+    vol_mult = risk_multiplier(vol)
+    mult = vol_mult
     price = risk.get("price", float("nan"))
     atr_pct = risk.get("atr_pct")
 
     notes: list[str] = []
-    if mult < 0.6:
+    if vol_mult < 0.6:
         notes.append(
             f"High volatility ({vol:.0%} annualized) — conviction reduced accordingly."
         )
+    sizing_mult = 1.0
+    if past is not None:
+        rel = reliability_multiplier(past.graded_calls, past.hit_rate)
+        if rel != 1.0:
+            mult *= rel
+            hits = round(past.hit_rate * past.graded_calls)
+            verdict = "boosted" if rel > 1.0 else "reduced"
+            notes.append(
+                f"Model's own record on {ticker}: {hits}/{past.graded_calls} calls "
+                f"right — confidence {verdict} x{rel:.2f}."
+            )
+        if past.recent_event:
+            mult *= SHOCK_DAMPING
+            ev = past.recent_event
+            reasons = ", ".join(ev.get("reasons") or ["unexplained"])
+            notes.append(
+                f"Recent shock {ev['date']}: {ev['return_pct']:+.1%} [{reasons}] — "
+                "conviction tempered while it settles."
+            )
+        if past.events_12mo >= EVENT_PRONE_THRESHOLD:
+            sizing_mult = EVENT_PRONE_SIZING
+            notes.append(
+                f"Event-prone name ({past.events_12mo} outsized moves in 12mo) — "
+                "suggested size reduced."
+            )
+
+    ras = score * mult
+    action = classify(ras)
     drawdown = risk.get("drawdown_52w")
     if drawdown is not None and drawdown < -0.30:
         notes.append(f"Trading {abs(drawdown):.0%} below its 52-week high.")
@@ -115,7 +176,7 @@ def build_suggestion(
     stop = None
     fraction = 0.0
     if action in ("BUY", "STRONG BUY"):
-        fraction = position_size(ras, atr_pct)
+        fraction = round(position_size(ras, atr_pct) * sizing_mult, 4)
         if atr_pct is not None and math.isfinite(atr_pct) and math.isfinite(price):
             stop = round(price * (1.0 - STOP_ATR_MULTIPLE * atr_pct), 2)
             notes.append(f"Suggested protective stop near ${stop:,.2f} (2x ATR).")

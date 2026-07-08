@@ -350,6 +350,27 @@ with tab_learning:
             "Signals that keep calling direction correctly earn weight; ones that miss lose it. "
             "A floor keeps every signal alive so the model can re-adapt when regimes change."
         )
+        sector_grades = db.sector_grade_counts()
+        if sector_grades:
+            from stocksage.learning import MIN_SECTOR_GRADES
+
+            st.subheader("Per-sector learning")
+            st.caption(
+                "Each sector also learns its own weights (what works in Energy isn't "
+                f"what works in Tech). A sector's weights start voting after "
+                f"{MIN_SECTOR_GRADES} graded calls."
+            )
+            sector_df = pd.DataFrame(
+                [
+                    {
+                        "Sector": name,
+                        "Graded calls": n,
+                        "Status": "✅ voting" if n >= MIN_SECTOR_GRADES else "🌱 learning",
+                    }
+                    for name, n in sorted(sector_grades.items(), key=lambda kv: -kv[1])
+                ]
+            )
+            st.dataframe(sector_df, hide_index=True, use_container_width=True)
     else:
         st.write(
             "Weights are at uniform defaults. Grading starts once the first suggestions "

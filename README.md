@@ -202,14 +202,32 @@ freshest history.
 
 1. Every actionable suggestion is **recorded** with its full signal breakdown.
 2. Five trading days later, the outcome is **graded**: did price move the way
-   the score predicted?
-3. Signal weights update via the **multiplicative-weights (Hedge)** algorithm:
-   signals that keep calling direction correctly earn influence; ones that
-   miss lose it. A weight floor keeps every signal alive so the model can
-   re-adapt when market regimes change.
+   the score predicted? Grading runs on every touchpoint — daily cycle,
+   dashboard open, even a quick `suggest` — so no matured call waits.
+3. Weights update via the **multiplicative-weights (Hedge)** algorithm, at
+   two levels: the **global** vector, and a **per-sector** vector (what works
+   in Energy isn't what works in Tech). A sector's own weights start voting —
+   blended 50/50 with the global view — once it has 10 graded calls of its
+   own. A weight floor keeps every signal alive so the model can re-adapt
+   when regimes change.
 4. The weights are fully **inspectable** (`performance` command / Learning
    tab) — you can always see what the tool currently believes works. No black
    box.
+
+### The brain talks back: past context shapes every suggestion
+
+Before scoring a name, the model consults what the brain remembers about it,
+and each adjustment is spelled out in the suggestion's notes:
+
+- **Its own record on that name** — after 5+ graded calls, a name the model
+  keeps reading correctly earns up to +25% conviction; one it keeps
+  misreading loses up to 40%. The model literally knows which stocks it
+  understands.
+- **Recent shocks** — a significant move within the last 5 days (with its
+  tagged reason from the move memory) tempers conviction by 25% while the
+  dust settles.
+- **Event-proneness** — names with 10+ outsized moves in the past year get
+  smaller suggested positions; jumpy names deserve smaller bets.
 
 ### Why-it-moved memory
 
