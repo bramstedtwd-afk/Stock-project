@@ -22,6 +22,44 @@ CACHE_TTL_SECONDS = 4 * 3600  # refresh price history at most every 4 hours
 HISTORY_PERIOD = "1y"
 
 
+def parse_news_items(raw: list, limit: int) -> list[dict]:
+    """Normalize yfinance news entries across its schema generations.
+
+    Old schema: flat {title, publisher, link, providerPublishTime}.
+    New schema (>=0.2.50): nested {content: {title, provider: {displayName},
+    canonicalUrl: {url}, pubDate}}. Anything unrecognizable is skipped —
+    a schema surprise must never kill a scan.
+    """
+    items = []
+    for entry in raw[:limit]:
+        if not isinstance(entry, dict):
+            continue
+        content = entry.get("content", entry)
+        if not isinstance(content, dict):
+            continue
+        provider = content.get("provider")
+        publisher = (
+            provider.get("displayName", "")
+            if isinstance(provider, dict)
+            else content.get("publisher", "")
+        )
+        canonical = content.get("canonicalUrl")
+        link = (
+            canonical.get("url", "")
+            if isinstance(canonical, dict)
+            else content.get("link", "")
+        )
+        items.append(
+            {
+                "title": content.get("title") or "",
+                "publisher": publisher or "",
+                "link": link or "",
+                "published": content.get("pubDate", content.get("providerPublishTime", "")),
+            }
+        )
+    return [i for i in items if i["title"]]
+
+
 class MarketData:
     def __init__(self, cache_dir: str | Path | None = None, ttl: int = CACHE_TTL_SECONDS):
         self.cache_dir = Path(cache_dir or DEFAULT_CACHE_DIR).expanduser()
@@ -71,22 +109,7 @@ class MarketData:
         except Exception as exc:  # network or schema failures must not kill a scan
             log.warning("news fetch failed for %s: %s", ticker, exc)
             return []
-        items = []
-        for entry in raw[:limit]:
-            content = entry.get("content", entry)  # yfinance >=0.2.50 nests content
-            items.append(
-                {
-                    "title": content.get("title", ""),
-                    "publisher": (content.get("provider") or {}).get("displayName", "")
-                    if isinstance(content.get("provider"), dict)
-                    else content.get("publisher", ""),
-                    "link": (content.get("canonicalUrl") or {}).get("url", "")
-                    if isinstance(content.get("canonicalUrl"), dict)
-                    else content.get("link", ""),
-                    "published": content.get("pubDate", content.get("providerPublishTime", "")),
-                }
-            )
-        return [i for i in items if i["title"]]
+        return parse_news_items(raw, limit)
 
     # --- internals ---
 

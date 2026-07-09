@@ -139,7 +139,14 @@ class Database:
         ).fetchall()
         due = []
         for row in rows:
-            created = datetime.fromisoformat(row["created_at"])
+            try:
+                created = datetime.fromisoformat(row["created_at"])
+            except (ValueError, TypeError):
+                # One malformed row (e.g. from a hand-edited or corrupted
+                # merge) must not block grading of everything else.
+                continue
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
             age_days = (as_of - created).days
             # Calendar-day cushion: horizon is in trading days.
             if age_days >= row["horizon_days"] * 1.5:

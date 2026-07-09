@@ -26,9 +26,11 @@ def load_env(path: Path | None = None) -> dict[str, str]:
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
+        if line.startswith("export "):  # shell-style .env files work too
+            line = line[len("export "):]
         key, _, value = line.partition("=")
         key, value = key.strip(), value.strip().strip("'\"")
-        if not key:
+        if not key or " " in key:
             continue
         loaded[key] = value
         os.environ.setdefault(key, value)

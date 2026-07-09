@@ -99,6 +99,54 @@ def merge_brains(dest_path: str | Path, src_path: str | Path) -> dict:
         )
         stats["move_events_added"] = conn.total_changes - before
 
+        # The Robinhood mirror is part of the brain too. Guard on table
+        # presence so brains exported by older versions still merge cleanly.
+        src_tables = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM src.sqlite_master WHERE type = 'table'"
+            )
+        }
+        if "rh_orders" in src_tables:
+            before = conn.total_changes
+            conn.execute(
+                "INSERT OR IGNORE INTO rh_orders"
+                " (order_id, ticker, side, quantity, price, executed_at)"
+                " SELECT order_id, ticker, side, quantity, price, executed_at"
+                " FROM src.rh_orders"
+            )
+            stats["rh_orders_added"] = conn.total_changes - before
+        if "rh_dividends" in src_tables:
+            before = conn.total_changes
+            conn.execute(
+                "INSERT OR IGNORE INTO rh_dividends (dividend_id, ticker, amount, paid_at)"
+                " SELECT dividend_id, ticker, amount, paid_at FROM src.rh_dividends"
+            )
+            stats["rh_dividends_added"] = conn.total_changes - before
+        if "sector_weights" in src_tables:
+            # Same recency rule as global weights: whole vectors, newest wins.
+            for (sector,) in conn.execute(
+                "SELECT DISTINCT sector FROM src.sector_weights"
+            ).fetchall():
+                src_ts = conn.execute(
+                    "SELECT MAX(updated_at) FROM src.sector_weights WHERE sector = ?",
+                    (sector,),
+                ).fetchone()[0]
+                dest_ts = conn.execute(
+                    "SELECT MAX(updated_at) FROM sector_weights WHERE sector = ?",
+                    (sector,),
+                ).fetchone()[0]
+                if src_ts and (dest_ts is None or src_ts > dest_ts):
+                    conn.execute(
+                        "DELETE FROM sector_weights WHERE sector = ?", (sector,)
+                    )
+                    conn.execute(
+                        "INSERT INTO sector_weights (sector, signal, weight, updated_at)"
+                        " SELECT sector, signal, weight, updated_at"
+                        " FROM src.sector_weights WHERE sector = ?",
+                        (sector,),
+                    )
+
         before = conn.total_changes
         conn.execute(
             "INSERT INTO suggestions"

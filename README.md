@@ -292,6 +292,17 @@ Technology, Healthcare, Financials, Consumer Discretionary, Communication
 Services, Industrials, Consumer Staples, Energy, Utilities, Real Estate.
 Edit `stocksage/universe.py` to change it — nothing else hardcodes tickers.
 
+## If anything seems off
+
+```bash
+./start.sh doctor             # Windows: start.bat doctor
+```
+
+Checks everything that can go wrong — Python, dependencies, settings,
+brain integrity, market-data access, Robinhood login, update channel,
+autopilot — and prints a plain-language fix for anything that isn't right.
+Safe to run anytime; changes nothing.
+
 ## Testing
 
 ```bash
