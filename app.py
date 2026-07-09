@@ -271,6 +271,69 @@ with tab_portfolio:
                 }
             )
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+        # --- background insight from your full trading history ---
+        from stocksage.insights import model_alignment, trading_insights
+
+        hist_db = Database()
+        orders = hist_db.rh_orders()
+        if result.rh_sync:
+            st.caption(
+                f"History synced: {result.rh_sync['orders_total']} orders mirrored "
+                f"({result.rh_sync['orders_added']} new this run)."
+            )
+        if orders:
+            st.divider()
+            st.subheader("📜 What your history says")
+            ti = trading_insights(orders, hist_db.rh_dividends())
+            i1, i2, i3, i4 = st.columns(4)
+            i1.metric("Realized P&L", f"${ti['realized_pnl']:+,.2f}",
+                      help="FIFO-matched, across your whole Robinhood history.")
+            i2.metric("Your win rate",
+                      f"{ti['win_rate']:.0%}" if ti["win_rate"] is not None else "—",
+                      help=f"Across {ti['round_trips']} completed round trips.")
+            i3.metric("Avg holding time",
+                      f"{ti['avg_held_days']:.0f} days" if ti["avg_held_days"] is not None else "—")
+            i4.metric("Dividends collected", f"${ti['dividends_total']:,.2f}")
+            if ti["best_name"] and ti["worst_name"]:
+                c1, c2 = st.columns(2)
+                c1.caption(f"🏆 Best name for you: **{ti['best_name'][0]}** "
+                           f"(${ti['best_name'][1]:+,.2f} realized)")
+                c2.caption(f"💥 Costliest: **{ti['worst_name'][0]}** "
+                           f"(${ti['worst_name'][1]:+,.2f} realized)")
+
+            align = model_alignment(orders, hist_db.recent_suggestions(1000))
+            if align["agreement_rate"] is not None:
+                st.caption(
+                    f"🤝 Your trades agreed with the model "
+                    f"{align['agreement_rate']:.0%} of the time "
+                    f"({align['agreed']} agreed, {align['disagreed']} disagreed, "
+                    f"{align['uncovered']} with no standing call)."
+                )
+                if align["disagreements"]:
+                    with st.expander("Where you and the model disagreed"):
+                        st.dataframe(
+                            pd.DataFrame(align["disagreements"]),
+                            hide_index=True, use_container_width=True,
+                        )
+            with st.expander("Completed round trips (FIFO)"):
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {"Ticker": t.ticker, "Qty": t.quantity,
+                             "Bought": t.buy_price, "Sold": t.sell_price,
+                             "P&L $": round(t.pnl, 2), "Held (days)": t.held_days,
+                             "Opened": t.opened, "Closed": t.closed}
+                            for t in reversed(ti["trips"])
+                        ]
+                    ),
+                    hide_index=True, use_container_width=True,
+                )
+        else:
+            st.caption(
+                "Trading-history insights appear after the first daily cycle "
+                "mirrors your Robinhood order history."
+            )
     elif RobinhoodClient.credentials_available():
         st.write("Run the daily cycle to pull your portfolio.")
     else:

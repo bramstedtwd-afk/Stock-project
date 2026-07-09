@@ -41,6 +41,7 @@ class ScanResult:
     portfolio: Portfolio | None = None
     errors: list[str] = field(default_factory=list)
     bootstrap_stats: dict | None = None  # set when this run did first-run bootstrap
+    rh_sync: dict | None = None          # set when Robinhood history was mirrored
 
     @property
     def actionable(self) -> list[Suggestion]:
@@ -205,10 +206,19 @@ class Engine:
             bootstrap_stats = bootstrap(self.market, self.db)
         evaluated = self.evaluate_pending()
         portfolio = None
+        rh_sync = None
         if with_robinhood:
             client = RobinhoodClient()
             portfolio = client.portfolio()  # None when creds absent/invalid
+            if portfolio is not None:
+                # Mirror the full account history; idempotent, only new
+                # activity lands. Failures must never block the scan.
+                try:
+                    rh_sync = client.sync_history(self.db)
+                except Exception as exc:
+                    log.warning("Robinhood history sync failed: %s", exc)
         result = self.scan(portfolio=portfolio)
+        result.rh_sync = rh_sync
         result.evaluated_count = evaluated
         result.sector_trends = self.sector_trends()
         result.weights = self.db.load_weights()

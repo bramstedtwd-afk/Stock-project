@@ -250,6 +250,30 @@ this becomes your private research notebook of what actually drives each name.
 - **Honest self-grading** — the hit rate on the Learning tab is computed from
   real recorded calls, not backtests.
 
+### Your Robinhood account, fully mirrored
+
+Link once (Portfolio tab form — with your TOTP secret saved, the session
+persists and every future connection is automatic). From then on, **every
+daily cycle silently mirrors your complete account history into the brain**:
+all filled orders and all dividends, incrementally and idempotently — only
+new activity is added, no matter how often it runs.
+
+The Portfolio tab then shows **what your history says**, computed locally:
+
+- **Realized P&L** per name and overall, FIFO lot-matched (the same
+  convention your broker and the IRS use)
+- **Your** win rate across completed round trips, and your real average
+  holding time
+- **Dividends collected**, your best and costliest names
+- **Model agreement** — how often your trades matched the model's standing
+  call at the time, with every disagreement listed. Over time this is the
+  most interesting number in the app: it tells you whose judgment to trust,
+  yours or the model's, situation by situation.
+
+Because the mirror lives in the brain, your trading history and its
+insights travel to all your devices with the shared brain — while the
+credentials themselves never do.
+
 ### The profit meter
 
 The **💰 Profit tab** (and `./start.sh profit`) scores every graded call as

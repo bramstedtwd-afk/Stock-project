@@ -60,6 +60,22 @@ CREATE TABLE IF NOT EXISTS sector_weights (
     PRIMARY KEY (sector, signal)
 );
 
+CREATE TABLE IF NOT EXISTS rh_orders (
+    order_id TEXT PRIMARY KEY,        -- Robinhood's own id: sync is idempotent
+    ticker TEXT NOT NULL,
+    side TEXT NOT NULL,               -- buy / sell
+    quantity REAL NOT NULL,
+    price REAL NOT NULL,              -- average execution price
+    executed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rh_dividends (
+    dividend_id TEXT PRIMARY KEY,
+    ticker TEXT NOT NULL,
+    amount REAL NOT NULL,
+    paid_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -227,6 +243,40 @@ class Database:
             (_now(), suggestion_id, json.dumps(detail)),
         )
         self.conn.commit()
+
+    # --- Robinhood history mirror ---
+
+    def upsert_rh_orders(self, orders: list[dict]) -> int:
+        """Idempotent insert of filled orders. Returns how many were new."""
+        before = self.conn.total_changes
+        self.conn.executemany(
+            "INSERT OR IGNORE INTO rh_orders"
+            " (order_id, ticker, side, quantity, price, executed_at)"
+            " VALUES (:order_id, :ticker, :side, :quantity, :price, :executed_at)",
+            orders,
+        )
+        self.conn.commit()
+        return self.conn.total_changes - before
+
+    def rh_orders(self) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM rh_orders ORDER BY executed_at, order_id"
+        ).fetchall()
+
+    def upsert_rh_dividends(self, dividends: list[dict]) -> int:
+        before = self.conn.total_changes
+        self.conn.executemany(
+            "INSERT OR IGNORE INTO rh_dividends (dividend_id, ticker, amount, paid_at)"
+            " VALUES (:dividend_id, :ticker, :amount, :paid_at)",
+            dividends,
+        )
+        self.conn.commit()
+        return self.conn.total_changes - before
+
+    def rh_dividends(self) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM rh_dividends ORDER BY paid_at"
+        ).fetchall()
 
     # --- move context ---
 

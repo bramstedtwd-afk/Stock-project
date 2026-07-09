@@ -66,6 +66,11 @@ def cmd_daily(args) -> int:
             f"Robinhood linked: {len(result.portfolio.holdings)} holdings, "
             f"${result.portfolio.buying_power:,.2f} buying power."
         )
+        if result.rh_sync:
+            print(
+                f"History mirror: {result.rh_sync['orders_total']} orders "
+                f"({result.rh_sync['orders_added']} new this run)."
+            )
     else:
         print("Robinhood not linked this run (set credentials in .env to enable).")
 
@@ -144,6 +149,34 @@ def cmd_portfolio(args) -> int:
             f"{h.ticker:<7}{h.shares:>9.2f}{h.avg_buy_price:>10,.2f}"
             f"{h.current_price:>10,.2f}{_fmt_pct(pl):>9}  {sig.action if sig else 'n/a'}"
         )
+
+    # Full-history insight (auto-synced during daily runs; sync here too).
+    from .insights import model_alignment, trading_insights
+
+    db = engine.db
+    sync = client.sync_history(db)
+    if sync:
+        print(
+            f"\nHistory mirror: {sync['orders_total']} orders "
+            f"({sync['orders_added']} new), {sync['dividends_added']} new dividends."
+        )
+    orders = db.rh_orders()
+    if orders:
+        ti = trading_insights(orders, db.rh_dividends())
+        print("\nWhat your history says")
+        print("-" * 40)
+        print(f"Realized P&L (FIFO): ${ti['realized_pnl']:+,.2f} over {ti['round_trips']} round trips")
+        if ti["win_rate"] is not None:
+            print(f"Your win rate      : {ti['win_rate']:.0%}")
+        if ti["avg_held_days"] is not None:
+            print(f"Avg holding time   : {ti['avg_held_days']:.0f} days")
+        print(f"Dividends collected: ${ti['dividends_total']:,.2f}")
+        if ti["best_name"]:
+            print(f"Best / costliest   : {ti['best_name'][0]} ${ti['best_name'][1]:+,.2f}"
+                  f"  /  {ti['worst_name'][0]} ${ti['worst_name'][1]:+,.2f}")
+        align = model_alignment(orders, db.recent_suggestions(1000))
+        if align["agreement_rate"] is not None:
+            print(f"Model agreement    : {align['agreement_rate']:.0%} of covered trades")
     print(DISCLAIMER)
     return 0
 
