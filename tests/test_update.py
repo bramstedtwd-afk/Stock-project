@@ -1,7 +1,6 @@
 """Self-update tests against real throwaway git repositories."""
 
 import subprocess
-from pathlib import Path
 
 import pytest
 

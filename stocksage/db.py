@@ -99,7 +99,13 @@ class Database:
         self.path = Path(path).expanduser() if path else default_db_path()
         if str(self.path) != ":memory:":
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.path))
+        # check_same_thread=False: the dashboard caches one Engine across
+        # Streamlit reruns, which land on different threads. This is a
+        # single-user app with serialized interactions, so cross-thread
+        # access is safe; without this flag the second browser session dies
+        # with "SQLite objects created in a thread can only be used in that
+        # thread".
+        self.conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
         self.conn.commit()

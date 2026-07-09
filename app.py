@@ -45,9 +45,27 @@ def run_daily_cycle():
         if first_run
         else "Evaluating matured calls, learning, scanning the universe..."
     )
-    with st.spinner(label):
-        result = engine.daily_run()
+    try:
+        with st.spinner(label):
+            result = engine.daily_run()
+    except Exception:
+        import traceback
+
+        st.error(
+            "The daily cycle hit a problem — usually a network hiccup fetching "
+            "market data. It's safe to press **Run daily cycle** to retry. "
+            "If it keeps happening, run `./start.sh doctor` in a terminal for "
+            "a full diagnosis."
+        )
+        with st.expander("Technical details"):
+            st.code(traceback.format_exc())
+        return
     st.session_state["scan_result"] = result
+    if result.errors and len(result.errors) > len(result.suggestions):
+        st.warning(
+            f"Market data was unavailable for {len(result.errors)} of the names "
+            "scanned — results may be thin. Usually temporary; retry in a minute."
+        )
 
 
 st.title("📈 StockSage")

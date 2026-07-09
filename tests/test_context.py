@@ -1,4 +1,3 @@
-import numpy as np
 
 from stocksage.context import detect_significant_move, tag_reasons
 from tests.conftest import make_ohlcv

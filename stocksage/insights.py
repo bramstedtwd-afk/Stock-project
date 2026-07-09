@@ -96,11 +96,11 @@ def fifo_round_trips(orders) -> tuple[list[RoundTrip], dict[str, dict]]:
 
     open_lots = {
         ticker: {
-            "quantity": sum(l["quantity"] for l in queue),
-            "cost": sum(l["quantity"] * l["price"] for l in queue),
+            "quantity": sum(lot["quantity"] for lot in queue),
+            "cost": sum(lot["quantity"] * lot["price"] for lot in queue),
         }
         for ticker, queue in lots.items()
-        if sum(l["quantity"] for l in queue) > 1e-9
+        if sum(lot["quantity"] for lot in queue) > 1e-9
     }
     return trips, open_lots
 

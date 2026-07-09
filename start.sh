@@ -6,6 +6,7 @@
 #   ./start.sh phone        -> share to your phone over home Wi-Fi (QR code)
 #   ./start.sh web          -> open in a normal browser tab instead
 #   ./start.sh update       -> pull the latest code improvements from your repo
+#   ./start.sh doctor       -> check everything that can go wrong, with fixes
 #   ./start.sh autopilot    -> learn automatically every weekday (off|status)
 #   ./start.sh daily        -> run the daily learn+scan cycle in the terminal
 #   ./start.sh <anything>   -> passed through to the CLI (suggest, sectors, ...)
@@ -58,6 +59,9 @@ case "${1:-app}" in
     ;;
   update)
     exec "$VENV_PY" -m stocksage.update
+    ;;
+  doctor)
+    exec "$VENV_PY" -m stocksage.doctor
     ;;
   *)
     exec "$VENV_PY" -m stocksage "$@"
