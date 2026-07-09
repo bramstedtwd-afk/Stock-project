@@ -22,6 +22,28 @@ load_env()  # pick up .env automatically; real environment still wins
 
 st.set_page_config(page_title="StockSage", page_icon="📈", layout="wide")
 
+# A damaged brain (e.g. a partial cloud-sync write) must degrade to
+# instructions, not a stack trace.
+import sqlite3  # noqa: E402
+
+try:
+    _probe = Database()
+    _probe.conn.execute("SELECT 1 FROM meta LIMIT 1")
+    _brain_path = _probe.path
+    _probe.close()
+except sqlite3.DatabaseError:
+    st.error(
+        "Your brain file appears damaged (this can happen if a cloud-sync "
+        "was interrupted mid-write). To recover:\n\n"
+        "1. If you use a shared brain, wait for your cloud folder to finish "
+        "syncing, then reload this page.\n"
+        "2. If you have a brain export, restore it: "
+        "`./start.sh brain import <file> --replace`\n"
+        "3. Otherwise, delete the brain file and StockSage will rebuild "
+        "from two years of history on the next run."
+    )
+    st.stop()
+
 ACTION_COLORS = {
     "STRONG BUY": "#0a7a3d",
     "BUY": "#3ba55d",
@@ -486,12 +508,20 @@ with tab_learning:
 
             tmp = Path(tempfile.gettempdir()) / "stocksage-brain-import.db"
             tmp.write_bytes(uploaded.getvalue())
-            stats = import_brain(tmp)
-            st.success(
-                f"Merged: +{stats['suggestions_added']} suggestions, "
-                f"+{stats['move_events_added']} move events, weights kept from "
-                f"the {stats['weights_taken_from']} brain."
-            )
+            try:
+                stats = import_brain(tmp)
+            except sqlite3.DatabaseError:
+                st.error(
+                    "That file isn't a StockSage brain (or it's damaged) — "
+                    "nothing was changed. Export a fresh one from your other "
+                    "device and try again."
+                )
+            else:
+                st.success(
+                    f"Merged: +{stats['suggestions_added']} suggestions, "
+                    f"+{stats['move_events_added']} move events, weights kept from "
+                    f"the {stats['weights_taken_from']} brain."
+                )
 
     recent = db.recent_suggestions(30)
     if recent:
