@@ -197,6 +197,32 @@ class Database:
         )
         self.conn.commit()
 
+    # --- watchlist (extra tickers the user follows, beyond the universe) ---
+
+    def watchlist(self) -> list[str]:
+        raw = self.get_meta("watchlist")
+        if not raw:
+            return []
+        try:
+            items = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        return [t for t in items if isinstance(t, str)]
+
+    def watchlist_add(self, ticker: str) -> list[str]:
+        ticker = ticker.strip().upper()
+        items = self.watchlist()
+        if ticker and ticker not in items:
+            items.append(ticker)
+            self.set_meta("watchlist", json.dumps(items))
+        return items
+
+    def watchlist_remove(self, ticker: str) -> list[str]:
+        ticker = ticker.strip().upper()
+        items = [t for t in self.watchlist() if t != ticker]
+        self.set_meta("watchlist", json.dumps(items))
+        return items
+
     # --- learned weights ---
 
     def load_weights(self) -> dict[str, float]:

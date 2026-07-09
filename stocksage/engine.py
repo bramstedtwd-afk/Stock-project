@@ -151,7 +151,17 @@ class Engine:
     ) -> ScanResult:
         result = ScanResult(weights=self.db.load_weights(), portfolio=portfolio)
         weights = result.weights
-        for ticker in tickers or universe.all_tickers():
+        if tickers is None:
+            # Full coverage: the universe, the user's watchlist, and every
+            # name they actually hold — a stock you own is never unwatched.
+            tickers = universe.all_tickers()
+            extras = self.db.watchlist()
+            if portfolio is not None:
+                extras = extras + [h.ticker for h in portfolio.holdings]
+            for t in extras:
+                if t not in tickers:
+                    tickers.append(t)
+        for ticker in tickers:
             df = self.market.history(ticker)
             if df is None or df.empty:
                 result.errors.append(f"{ticker}: no data")

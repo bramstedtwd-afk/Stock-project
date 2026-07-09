@@ -60,6 +60,12 @@ def cmd_daily(args) -> int:
             f"{bs['move_events_backfilled']} historical moves remembered "
             f"({bs['seconds']}s)."
         )
+    from .briefing import briefing_lines, build_briefing
+
+    print("\n--- Today's briefing " + "-" * 40)
+    for line in briefing_lines(build_briefing(result, engine.db)):
+        print(f"  {line}")
+    print("-" * 61)
     print(f"\nGraded {result.evaluated_count} matured suggestions (weights updated).")
     if result.portfolio:
         print(
@@ -245,6 +251,24 @@ def cmd_brain(args) -> int:
     return 0
 
 
+def cmd_watch(args) -> int:
+    db = Database()
+    if args.watch_action == "add":
+        for t in args.tickers:
+            db.watchlist_add(t)
+    elif args.watch_action == "remove":
+        for t in args.tickers:
+            db.watchlist_remove(t)
+    items = db.watchlist()
+    if items:
+        print("Watchlist (scanned daily, on top of the universe and your holdings):")
+        for t in items:
+            print(f"  ⭐ {t}")
+    else:
+        print("Watchlist is empty — `watch add TICKER` to follow extra names.")
+    return 0
+
+
 def cmd_profit(args) -> int:
     from .profit import default_stake, paper_trades, profit_stats
 
@@ -355,6 +379,11 @@ def build_parser() -> argparse.ArgumentParser:
     b.set_defaults(func=cmd_brain)
     b = brain_sub.add_parser("info", help="where the brain lives and what it knows")
     b.set_defaults(func=cmd_brain)
+
+    p = sub.add_parser("watch", help="manage the watchlist (extra tickers scanned daily)")
+    p.add_argument("watch_action", choices=["add", "remove", "list"])
+    p.add_argument("tickers", nargs="*")
+    p.set_defaults(func=cmd_watch)
 
     p = sub.add_parser("profit", help="paper P&L ledger: what following the calls would earn")
     p.set_defaults(func=cmd_profit)

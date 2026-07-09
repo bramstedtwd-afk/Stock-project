@@ -113,6 +113,23 @@ with st.sidebar:
     if binfo["last_device"]:
         st.caption(f"Last learned on **{binfo['last_device']}** ({binfo['last_device_at']})")
 
+    st.header("⭐ Watchlist")
+    st.caption("Names beyond the built-in universe you want scanned daily. "
+               "Anything you hold on Robinhood is always included automatically.")
+    watch_db = Database()
+    current_watch = watch_db.watchlist()
+    if current_watch:
+        for w in current_watch:
+            wc1, wc2 = st.columns([3, 1])
+            wc1.write(w)
+            if wc2.button("✕", key=f"unwatch-{w}", help=f"Stop watching {w}"):
+                watch_db.watchlist_remove(w)
+                st.rerun()
+    new_watch = st.text_input("Add ticker", placeholder="e.g. PLTR", key="watch_input")
+    if st.button("Add to watchlist", use_container_width=True) and new_watch.strip():
+        watch_db.watchlist_add(new_watch)
+        st.rerun()
+
     if not binfo["shared"]:
         with st.expander("☁️ Share across your devices"):
             st.caption(
@@ -152,6 +169,17 @@ with col_btn:
         run_daily_cycle()
 
 result = st.session_state.get("scan_result")
+
+if result is not None:
+    from stocksage.briefing import briefing_lines, build_briefing
+
+    briefing = build_briefing(result, get_engine().db)
+    mood_icon = {"bullish": "🟢", "bearish": "🔴", "mixed": "🟡"}[briefing["mood"]]
+    with st.container(border=True):
+        st.markdown(f"### ☀️ Today's briefing {mood_icon}")
+        for line in briefing_lines(briefing):
+            st.markdown(f"- {line}")
+
 with col_status:
     if result is None:
         st.info(

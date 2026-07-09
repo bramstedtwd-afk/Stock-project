@@ -146,6 +146,18 @@ Anything you pass to the launcher goes to the CLI instead of the dashboard:
 
 (Windows: `start.bat daily`, etc.)
 
+## Your day with StockSage
+
+Open the app. It learns by itself, then opens with **☀️ Today's briefing** —
+the whole situation in 15 seconds: market mood, the top ideas, alerts on
+names you own, what just got graded, your week's paper P&L, and any big
+moves with their reasons. Everything below it is detail.
+
+Beyond the built-in universe, add any name to your **⭐ Watchlist**
+(sidebar, or `./start.sh watch add PLTR`) — and anything you hold on
+Robinhood is **always** scanned automatically, whether or not it's in the
+universe. A stock you own is never unwatched.
+
 ## How it works
 
 ```
