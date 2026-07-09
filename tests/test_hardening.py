@@ -2,7 +2,6 @@
 
 from datetime import datetime, timezone
 
-import pytest
 
 from stocksage import brain
 from stocksage.data import MarketData, parse_news_items
