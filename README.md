@@ -213,16 +213,24 @@ freshest history.
 ### The learning loop (the point of the whole tool)
 
 1. Every actionable suggestion is **recorded** with its full signal breakdown.
-2. Five trading days later, the outcome is **graded**: did price move the way
-   the score predicted? Grading runs on every touchpoint — daily cycle,
-   dashboard open, even a quick `suggest` — so no matured call waits.
-3. Weights update via the **multiplicative-weights (Hedge)** algorithm, at
+2. Five trading days later, the outcome is **graded** at exactly that
+   horizon — the price five *trading* bars after the call, not whatever the
+   price happens to be when the app next runs. Grading runs on every
+   touchpoint — daily cycle, dashboard open, even a quick `suggest` — so no
+   matured call waits.
+3. The weights learn from the **market-relative** result: the call's return
+   minus SPY's return over the same window. A +2% week when the whole market
+   rose 3% is a losing call — grading raw returns would just teach the model
+   to always be bullish in bull markets (and the first-run bootstrap trains
+   the same way). The raw dollar result still goes to the profit ledger,
+   because that's real money.
+4. Weights update via the **multiplicative-weights (Hedge)** algorithm, at
    two levels: the **global** vector, and a **per-sector** vector (what works
    in Energy isn't what works in Tech). A sector's own weights start voting —
    blended 50/50 with the global view — once it has 10 graded calls of its
    own. A weight floor keeps every signal alive so the model can re-adapt
    when regimes change.
-4. The weights are fully **inspectable** (`performance` command / Learning
+5. The weights are fully **inspectable** (`performance` command / Learning
    tab) — you can always see what the tool currently believes works. No black
    box.
 
@@ -240,6 +248,15 @@ and each adjustment is spelled out in the suggestion's notes:
   dust settles.
 - **Event-proneness** — names with 10+ outsized moves in the past year get
   smaller suggested positions; jumpy names deserve smaller bets.
+- **Earnings blackout** — a buy signal within 5 days of a scheduled earnings
+  report keeps its read but gets **zero suggested size**: a new entry right
+  before a print is a bet on the report, not on the setup. The card says so
+  and the name can be re-judged after the report.
+
+Every card also opens with a **plain-English "why"** — the two or three
+signals pulling hardest ("a solid long-term uptrend, strong momentum this
+month and beating its own sector lately"), plus the strongest signal leaning
+the other way when there is one. The tension is part of the truth.
 
 ### Why-it-moved memory
 
@@ -254,7 +271,15 @@ this becomes your private research notebook of what actually drives each name.
 - **Risk-adjusted scoring** — high-volatility names need a much stronger raw
   signal to earn a BUY.
 - **Position sizing** — suggested size grows with conviction, shrinks with
-  volatility, and is hard-capped at 10% of investable cash per idea.
+  volatility, and is hard-capped at 10% of investable cash per idea. With
+  Robinhood linked, sizes are also shown in **real dollars** from your
+  actual buying power.
+- **Sector concentration guard** — past the second buy idea in the same
+  sector on the same day, suggested sizes are halved; five copies of the
+  same bet is one bet in disguise.
+- **Completed bars only** — a scan during market hours ignores the
+  in-progress session, so signals are never judged on half a day's price
+  and volume.
 - **Protective stops** — every buy suggestion includes a 2×ATR stop level.
 - **Read-only broker link** — architecture prevents auto-trading; your
   Robinhood credentials live only in your local `.env` (gitignored) and are
@@ -282,6 +307,10 @@ The Portfolio tab then shows **what your history says**, computed locally:
   most interesting number in the app: it tells you whose judgment to trust,
   yours or the model's, situation by situation.
 
+Your **Robinhood watchlists** are scanned too: any name you star in the
+Robinhood app is automatically part of the daily scan, alongside the
+built-in universe and StockSage's own watchlist — no retyping.
+
 Because the mirror lives in the brain, your trading history and its
 insights travel to all your devices with the shared brain — while the
 credentials themselves never do.
@@ -296,6 +325,11 @@ saved you. Fixed staking is deliberate — it measures the quality of the
 calls themselves, uncontaminated by sizing luck. **This is the number to
 watch before trusting the tool with real size**, and because it's derived
 from the graded record, it travels with the brain.
+
+It also answers the question every honest meter must face: **would the same
+money have done better just sitting in SPY?** Every graded call stores the
+market's return over the same window, and the Profit tab shows the model's
+edge (or deficit) against that do-nothing alternative.
 
 ## The universe
 
@@ -323,8 +357,11 @@ Safe to run anytime; changes nothing.
 
 ## Roadmap (evolves with use)
 
-- [ ] Earnings-calendar awareness (don't suggest entries into a print)
-- [ ] Correlation-aware portfolio sizing (avoid five copies of the same bet)
-- [ ] Per-sector learned weights (what works in Energy ≠ Tech)
+- [x] Earnings-calendar awareness (don't suggest entries into a print)
+- [x] Per-sector learned weights (what works in Energy ≠ Tech)
+- [x] Plain-English "why" sentence on every suggestion card
+- [x] Sector concentration guard (first cut of correlation-aware sizing)
+- [x] Paper ledger measured against SPY (the do-nothing alternative)
+- [ ] Full correlation-aware portfolio sizing (cross-sector correlations)
+- [ ] Notifications when the autopilot briefing is ready
 - [ ] Optional LLM summarization of move context into plain-English narratives
-- [ ] Paper-trading ledger to measure the strategy before any real automation

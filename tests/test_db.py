@@ -31,3 +31,31 @@ def test_empty_performance_summary():
     db = Database(":memory:")
     s = db.performance_summary()
     assert s["evaluated"] == 0 and s["hit_rate"] is None
+
+
+def test_old_brain_gains_benchmark_column_in_place(tmp_path):
+    import sqlite3
+
+    # A brain created before benchmark_return existed.
+    old = tmp_path / "old.db"
+    conn = sqlite3.connect(old)
+    conn.execute(
+        "CREATE TABLE suggestions (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " created_at TEXT NOT NULL, ticker TEXT NOT NULL, action TEXT NOT NULL,"
+        " score REAL NOT NULL, price REAL NOT NULL, signals TEXT NOT NULL,"
+        " horizon_days INTEGER NOT NULL, evaluated INTEGER NOT NULL DEFAULT 0,"
+        " realized_return REAL, hit INTEGER)"
+    )
+    conn.execute(
+        "INSERT INTO suggestions (created_at, ticker, action, score, price, signals,"
+        " horizon_days) VALUES ('2026-01-05T00:00:00', 'AAPL', 'BUY', 0.5, 100, '{}', 5)"
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(old)  # opening migrates additively
+    sid = db.conn.execute("SELECT id FROM suggestions").fetchone()["id"]
+    db.mark_evaluated(sid, 0.03, True, benchmark_return=0.01)
+    row = db.conn.execute("SELECT * FROM suggestions").fetchone()
+    assert row["benchmark_return"] == 0.01
+    db.close()

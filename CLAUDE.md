@@ -46,7 +46,7 @@ rather than giving them instructions.
 
 ## Development conventions
 
-- Tests: `python -m pytest` — 121 tests, **fully offline** (synthetic OHLCV via `tests/conftest.make_ohlcv`, in-memory DBs, `FakeMarket` injection, Streamlit AppTest for the dashboard). Keep it that way: no test may need network.
+- Tests: `python -m pytest` — 141 tests, **fully offline** (synthetic OHLCV via `tests/conftest.make_ohlcv`, in-memory DBs, `FakeMarket` injection, Streamlit AppTest for the dashboard). Keep it that way: no test may need network.
 - Lint: `ruff check stocksage/ app.py tests/` must stay clean.
 - Push to branch `claude/stock-trend-analyzer-robinhood-67iqou` (the repo's only/default branch).
 - Signal names are stable identifiers (learned weights key on them) — renaming one resets its learned weight.
@@ -65,9 +65,29 @@ So, in order:
 3. When the owner links Robinhood (they type credentials into the Portfolio tab themselves — never ask for them in chat), verify holdings, the history mirror, and the insights panel against what their Robinhood app shows.
 4. Offer: `start.bat install` (desktop icon) and `start.bat autopilot` (weekday auto-learning; requires machine awake at 17:30).
 
+## Recently built (2026-07-11 session)
+
+- Grading is now **market-relative at the true horizon**: outcomes read the
+  close exactly `horizon_days` trading bars after the call (latest-price
+  fallback only when history can't resolve it), and the Hedge update uses
+  the SPY-excess return (`suggestions.benchmark_return`, additive column;
+  bootstrap warmup trains the same way). The ledger keeps raw returns.
+- Scans use **completed bars only** (`data.drop_partial_bar`), batch-download
+  via `MarketData.prefetch`, and know the **earnings calendar**
+  (`next_earnings_date`, disk-cached): a buy within 5 days of a print keeps
+  its read but gets zero suggested size.
+- New signal `relative_strength_20d` (vs sector ETF benchmark, passed as
+  `compute_features(df, benchmark_df=...)`).
+- `scoring.why_sentence` puts a plain-English "why" on every card;
+  `apply_sector_caps` halves sizes past 2 buy ideas per sector.
+- Robinhood (still strictly read-only): app watchlists are scanned too
+  (`watchlist_tickers`), and suggestion sizes show real dollars from
+  buying power. Profit tab/briefing show the edge vs parking the same
+  stakes in SPY.
+
 ## Roadmap the owner has seen (build on request)
 
-Notifications for the briefing after autopilot runs → earnings-calendar
-awareness (no entries right before a print) → plain-English "why" sentence
-per suggestion card → correlation-aware sizing → paper-trading ledger
-before any talk of automation.
+Notifications for the briefing after autopilot runs → full
+correlation-aware sizing (cross-sector) → optional LLM summaries of move
+context. Auto-trading stays off the table; the broker link is read-only by
+design.

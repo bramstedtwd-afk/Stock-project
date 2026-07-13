@@ -15,6 +15,8 @@ import socket
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+import pandas as pd
+
 from . import universe
 from .context import capture_move_context
 from .data import MarketData
@@ -22,13 +24,22 @@ from .db import Database
 from .indicators import compute_features, risk_metrics
 from .learning import blended_weights, update_weights, weighted_score
 from .robinhood import Portfolio, RobinhoodClient
-from .scoring import SHOCK_LOOKBACK_DAYS, PastContext, Suggestion, build_suggestion
+from .scoring import (
+    SHOCK_LOOKBACK_DAYS,
+    PastContext,
+    Suggestion,
+    apply_sector_caps,
+    build_suggestion,
+)
 
 log = logging.getLogger(__name__)
 
 SUGGESTION_HORIZON_DAYS = 5  # trading days until a suggestion is graded
 # Only convictions worth acting on are recorded (and therefore learned from).
 RECORD_THRESHOLD = 0.20
+# If history still can't resolve the exact horizon after this many multiples
+# of it in calendar days (data outage, delisting), grade with what we have.
+STALE_GRADE_MULTIPLE = 3
 
 
 @dataclass
@@ -55,30 +66,100 @@ class Engine:
 
     # --- learning loop ---
 
+    def _resolve_outcome(
+        self, row, now: datetime
+    ) -> tuple[float, str | None] | None:
+        """The stock's return over the suggestion's TRUE trading-day horizon.
+
+        Returns (realized_return, exit_date) — exit_date is the bar the
+        window closed on, for benchmark alignment — or None to leave the row
+        pending. Grading at whatever bar happens to be latest would silently
+        stretch a 5-day call into a 2-week one whenever runs are skipped,
+        and the weights would learn from a horizon the signals were never
+        scored for.
+        """
+        if row["price"] <= 0:
+            return None
+        created_date = row["created_at"][:10]
+        df = self.market.history(row["ticker"])
+        horizon = int(row["horizon_days"])
+        if df is not None and not df.empty:
+            entry_pos = int(df.index.searchsorted(pd.Timestamp(created_date), side="right")) - 1
+            exit_pos = entry_pos + horizon
+            if entry_pos >= 0 and exit_pos < len(df):
+                exit_close = float(df["Close"].iloc[exit_pos])
+                if exit_close > 0:
+                    return exit_close / row["price"] - 1.0, str(df.index[exit_pos].date())
+            # Post-call bars exist but the horizon hasn't been reached: wait,
+            # unless the row is so old the data has clearly stopped coming.
+            has_post_call_bars = len(df) - 1 > max(entry_pos, -1)
+            created_dt = datetime.fromisoformat(row["created_at"])
+            if created_dt.tzinfo is None:
+                created_dt = created_dt.replace(tzinfo=timezone.utc)
+            age_days = (now - created_dt).days
+            if has_post_call_bars and age_days < horizon * STALE_GRADE_MULTIPLE:
+                return None
+        # Degraded path (no usable history): the old latest-price grading.
+        price_now = self.market.latest_price(row["ticker"])
+        if price_now is None:
+            return None
+        return price_now / row["price"] - 1.0, None
+
+    def _benchmark_return(
+        self, created_date: str, exit_date: str | None
+    ) -> float | None:
+        """SPY's return over the same window, so calls are judged on edge
+        over the market rather than on the tide that lifts every boat."""
+        bench = self.market.history(universe.MARKET_BENCHMARK)
+        if bench is None or bench.empty:
+            return None
+        entry_pos = int(bench.index.searchsorted(pd.Timestamp(created_date), side="right")) - 1
+        if entry_pos < 0:
+            return None
+        if exit_date is None:
+            exit_pos = len(bench) - 1
+        else:
+            exit_pos = int(bench.index.searchsorted(pd.Timestamp(exit_date), side="right")) - 1
+        if exit_pos <= entry_pos:
+            return None
+        entry, exit_ = float(bench["Close"].iloc[entry_pos]), float(bench["Close"].iloc[exit_pos])
+        if entry <= 0:
+            return None
+        return exit_ / entry - 1.0
+
     def evaluate_pending(self, now: datetime | None = None) -> int:
-        """Grade matured suggestions; update global AND sector weights per grade."""
+        """Grade matured suggestions; update global AND sector weights per grade.
+
+        The ledger keeps the raw return (that is real money), but the weights
+        learn from the SPY-excess return: a +2% week when the whole market
+        rose 3% is a losing call, and rewarding it teaches permanent bullishness.
+        """
         now = now or datetime.now(timezone.utc)
         weights = self.db.load_weights()
         sector_state: dict[str, dict[str, float]] = {}
         sector_grades: dict[str, int] = {}
         count = 0
         for row in self.db.pending_evaluations(now):
-            price_now = self.market.latest_price(row["ticker"])
-            if price_now is None or row["price"] <= 0:
+            outcome = self._resolve_outcome(row, now)
+            if outcome is None:
                 continue
-            realized = price_now / row["price"] - 1.0
+            realized, exit_date = outcome
+            benchmark = self._benchmark_return(row["created_at"][:10], exit_date)
+            excess = realized - benchmark if benchmark is not None else realized
             predicted_up = row["score"] > 0
             hit = (realized > 0) == predicted_up
-            self.db.mark_evaluated(row["id"], realized, hit)
+            self.db.mark_evaluated(row["id"], realized, hit, benchmark)
             signals = json.loads(row["signals"])
-            weights, detail = update_weights(weights, signals, realized)
+            weights, detail = update_weights(weights, signals, excess)
+            detail["raw_return"] = realized
+            detail["benchmark_return"] = benchmark
             self.db.log_learning(row["id"], detail)
             sector = universe.sector_of(row["ticker"])
             if sector:
                 sw = sector_state.setdefault(
                     sector.name, self.db.load_sector_weights(sector.name)
                 )
-                sector_state[sector.name], _ = update_weights(sw, signals, realized)
+                sector_state[sector.name], _ = update_weights(sw, signals, excess)
                 sector_grades[sector.name] = sector_grades.get(sector.name, 0) + 1
             count += 1
         if count:
@@ -92,7 +173,7 @@ class Engine:
             log.info("evaluated %d matured suggestions; weights updated", count)
         return count
 
-    def _past_context(self, ticker: str) -> PastContext:
+    def _past_context(self, ticker: str, days_to_earnings: int | None = None) -> PastContext:
         """What the brain remembers about this name, for the scoring model."""
         graded, hit_rate, _ = self.db.ticker_track_record(ticker)
         today = datetime.now(timezone.utc).date()
@@ -117,7 +198,31 @@ class Engine:
             hit_rate=hit_rate,
             recent_event=recent,
             events_12mo=events_12mo,
+            days_to_earnings=days_to_earnings,
         )
+
+    def _days_to_earnings(self, ticker: str) -> int | None:
+        """Calendar days until the next scheduled report; None when unknown.
+
+        Optional market capability (getattr): fakes and older data layers
+        simply don't gate on earnings.
+        """
+        fetch = getattr(self.market, "next_earnings_date", None)
+        if not callable(fetch):
+            return None
+        try:
+            when = fetch(ticker)
+        except Exception as exc:  # never let calendar trouble kill a scan
+            log.debug("earnings date lookup failed for %s: %s", ticker, exc)
+            return None
+        if not when:
+            return None
+        try:
+            report = datetime.strptime(when, "%Y-%m-%d").date()
+        except ValueError:
+            return None
+        delta = (report - datetime.now(timezone.utc).date()).days
+        return delta if delta >= 0 else None
 
     def weights_for(self, ticker: str, global_weights: dict[str, float]) -> dict[str, float]:
         """Effective weights for one name: global blended with its sector's."""
@@ -148,31 +253,47 @@ class Engine:
         portfolio: Portfolio | None = None,
         capture_context: bool = True,
         record: bool = True,
+        extra_tickers: list[str] | None = None,
     ) -> ScanResult:
         result = ScanResult(weights=self.db.load_weights(), portfolio=portfolio)
         weights = result.weights
         if tickers is None:
-            # Full coverage: the universe, the user's watchlist, and every
-            # name they actually hold — a stock you own is never unwatched.
+            # Full coverage: the universe, the user's watchlists (local and
+            # Robinhood), and every name they actually hold — a stock you
+            # own is never unwatched.
             tickers = universe.all_tickers()
-            extras = self.db.watchlist()
+            extras = self.db.watchlist() + list(extra_tickers or [])
             if portfolio is not None:
                 extras = extras + [h.ticker for h in portfolio.holdings]
             for t in extras:
                 if t not in tickers:
                     tickers.append(t)
+
+        # One batched request for everything the scan will touch (optional
+        # market capability — fakes without it just serve per-ticker).
+        prefetch = getattr(self.market, "prefetch", None)
+        if callable(prefetch):
+            etfs = [s.etf for s in universe.SECTORS]
+            prefetch(list(tickers) + etfs + [universe.MARKET_BENCHMARK])
+
+        etf_frames: dict[str, pd.DataFrame | None] = {}
         for ticker in tickers:
             df = self.market.history(ticker)
             if df is None or df.empty:
                 result.errors.append(f"{ticker}: no data")
                 continue
-            feats = compute_features(df)
+            sector = universe.sector_of(ticker)
+            benchmark_df = None
+            if sector is not None:
+                if sector.etf not in etf_frames:
+                    etf_frames[sector.etf] = self.market.history(sector.etf)
+                benchmark_df = etf_frames[sector.etf]
+            feats = compute_features(df, benchmark_df=benchmark_df)
             if not feats:
                 result.errors.append(f"{ticker}: insufficient history")
                 continue
             score = weighted_score(feats, self.weights_for(ticker, weights))
             risk = risk_metrics(df)
-            sector = universe.sector_of(ticker)
             owned = portfolio.shares_of(ticker) if portfolio else 0.0
 
             # Capture today's move first so a fresh shock informs today's call.
@@ -188,7 +309,7 @@ class Engine:
                 risk,
                 sector=sector.name if sector else None,
                 owned_shares=owned,
-                past=self._past_context(ticker),
+                past=self._past_context(ticker, self._days_to_earnings(ticker)),
             )
             result.suggestions.append(suggestion)
 
@@ -203,6 +324,7 @@ class Engine:
                 )
 
         result.suggestions.sort(key=lambda s: s.risk_adjusted_score, reverse=True)
+        apply_sector_caps(result.suggestions)
         return result
 
     # --- the daily heartbeat ---
@@ -217,6 +339,7 @@ class Engine:
         evaluated = self.evaluate_pending()
         portfolio = None
         rh_sync = None
+        rh_watch: list[str] | None = None
         if with_robinhood:
             client = RobinhoodClient()
             portfolio = client.portfolio()  # None when creds absent/invalid
@@ -227,7 +350,13 @@ class Engine:
                     rh_sync = client.sync_history(self.db)
                 except Exception as exc:
                     log.warning("Robinhood history sync failed: %s", exc)
-        result = self.scan(portfolio=portfolio)
+                # Names starred in the Robinhood app get scanned too — the
+                # watchlist there and the one here should feel like one list.
+                try:
+                    rh_watch = client.watchlist_tickers()
+                except Exception as exc:
+                    log.warning("Robinhood watchlist fetch failed: %s", exc)
+        result = self.scan(portfolio=portfolio, extra_tickers=rh_watch)
         result.rh_sync = rh_sync
         result.evaluated_count = evaluated
         result.sector_trends = self.sector_trends()

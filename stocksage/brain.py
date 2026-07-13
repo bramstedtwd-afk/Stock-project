@@ -148,12 +148,19 @@ def merge_brains(dest_path: str | Path, src_path: str | Path) -> dict:
                     )
 
         before = conn.total_changes
+        src_sugg_cols = {
+            r[1] for r in conn.execute("PRAGMA src.table_info(suggestions)")
+        }
+        # Older brains predate benchmark_return; merge them as NULL.
+        bench_expr = (
+            "s.benchmark_return" if "benchmark_return" in src_sugg_cols else "NULL"
+        )
         conn.execute(
             "INSERT INTO suggestions"
             " (created_at, ticker, action, score, price, signals, horizon_days,"
-            "  evaluated, realized_return, hit)"
+            "  evaluated, realized_return, hit, benchmark_return)"
             " SELECT s.created_at, s.ticker, s.action, s.score, s.price, s.signals,"
-            "        s.horizon_days, s.evaluated, s.realized_return, s.hit"
+            f"        s.horizon_days, s.evaluated, s.realized_return, s.hit, {bench_expr}"
             " FROM src.suggestions s"
             " WHERE NOT EXISTS (SELECT 1 FROM suggestions d"
             "   WHERE d.created_at = s.created_at AND d.ticker = s.ticker"

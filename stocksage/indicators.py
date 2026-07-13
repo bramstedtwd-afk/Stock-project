@@ -66,12 +66,18 @@ def _clip(x: float, lo: float = -1.0, hi: float = 1.0) -> float:
     return float(min(hi, max(lo, x)))
 
 
-def compute_features(df: pd.DataFrame) -> dict[str, float] | None:
+def compute_features(
+    df: pd.DataFrame, benchmark_df: pd.DataFrame | None = None
+) -> dict[str, float] | None:
     """Distill OHLCV history into normalized signals in [-1, 1].
 
     Returns None when there isn't enough history to be meaningful.
     Signal names are stable identifiers: the learning module keys its
     adaptive weights on them, so renaming one resets its learned weight.
+
+    `benchmark_df` (typically the name's sector ETF) enables the relative-
+    strength signal; without it the signal is simply absent and the weight
+    renormalization in scoring handles the gap.
     """
     if df is None or len(df) < MIN_HISTORY_ROWS:
         return None
@@ -124,6 +130,21 @@ def compute_features(df: pd.DataFrame) -> dict[str, float] | None:
         surge = float(volume.iloc[-1]) / vol20 - 1.0
         day_direction = np.sign(price - float(close.iloc[-2]))
         features["volume_confirmation"] = _clip(day_direction * min(surge, 2.0) / 2.0)
+
+    # --- Relative strength: 20-day return versus the sector benchmark ---
+    # Beating (or lagging) its own sector is information the absolute
+    # momentum signal cannot see: in a falling sector the strongest name
+    # still scores positive here, and a laggard in a hot sector gets flagged.
+    if benchmark_df is not None and len(benchmark_df) > 21 and len(close) > 21:
+        bench_close = benchmark_df["Close"].astype(float)
+        # Align on the stock's dates so mismatched calendars can't shift bars.
+        bench_aligned = bench_close.reindex(close.index, method="ffill")
+        b_now, b_then = float(bench_aligned.iloc[-1]), float(bench_aligned.iloc[-21])
+        if np.isfinite(b_now) and np.isfinite(b_then) and b_then > 0:
+            stock_roc = price / float(close.iloc[-21]) - 1.0
+            bench_roc = b_now / b_then - 1.0
+            # +/-8% over the sector in a month saturates the signal.
+            features["relative_strength_20d"] = _clip((stock_roc - bench_roc) / 0.08)
 
     # --- Position in the 52-week range ---
     window = min(len(close), 252)

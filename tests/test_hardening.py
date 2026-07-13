@@ -146,3 +146,13 @@ def test_features_all_nan_price_returns_none():
     df = make_ohlcv(days=120, seed=78)
     df.iloc[-1, df.columns.get_loc("Close")] = np.nan
     assert compute_features(df) is None
+
+
+def test_extract_watchlist_symbols_tolerates_all_shapes():
+    from stocksage.robinhood import extract_watchlist_symbols
+
+    assert extract_watchlist_symbols({"results": [{"symbol": "aapl"}, {"symbol": "MSFT"}]}) == ["AAPL", "MSFT"]
+    assert extract_watchlist_symbols([{"object_symbol": "nvda"}]) == ["NVDA"]
+    assert extract_watchlist_symbols({"results": [{"no": "symbol"}, "junk", None]}) == []
+    assert extract_watchlist_symbols(None) == []
+    assert extract_watchlist_symbols("garbage") == []

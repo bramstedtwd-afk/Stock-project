@@ -36,6 +36,13 @@ MAX_POSITION_FRACTION = 0.10
 # ATR multiple used for the protective stop suggestion.
 STOP_ATR_MULTIPLE = 2.0
 
+# New entries this close to a scheduled earnings report are coin flips on the
+# print, not signal — suggested size goes to zero until the report is out.
+EARNINGS_BLACKOUT_DAYS = 5
+
+# Concentration guard: buy ideas beyond this many per sector get half size.
+MAX_FULL_SIZE_PER_SECTOR = 2
+
 
 @dataclass
 class PastContext:
@@ -45,6 +52,7 @@ class PastContext:
     hit_rate: float | None = None      # model's own accuracy on this name
     recent_event: dict | None = None   # {date, return_pct, reasons} within lookback
     events_12mo: int = 0               # outsized moves in the past year
+    days_to_earnings: int | None = None  # calendar days until the next report
 
 
 def reliability_multiplier(graded_calls: int, hit_rate: float | None) -> float:
@@ -74,6 +82,88 @@ class Suggestion:
     stop_price: float | None = None
     owned_shares: float = 0.0
     notes: list[str] = field(default_factory=list)
+    why: str = ""  # one plain-English sentence: what is driving this call
+
+
+# Plain-English fragments per signal, [bullish phrasing, bearish phrasing].
+_SIGNAL_PHRASES: dict[str, tuple[str, str]] = {
+    "trend_long": ("a solid long-term uptrend", "a broken long-term trend"),
+    "trend_medium": ("price holding above its recent average", "price sagging below its recent average"),
+    "momentum_20d": ("strong momentum this month", "falling hard this month"),
+    "macd": ("momentum still building", "momentum rolling over"),
+    "rsi_reversion": ("an oversold dip that tends to snap back", "an overbought stretch due to cool off"),
+    "bollinger_reversion": ("price near the bottom of its usual range", "price stretched above its usual range"),
+    "volume_confirmation": ("unusually heavy buying volume", "unusually heavy selling volume"),
+    "range_position": ("trading near its 52-week high", "trading near its 52-week low"),
+    "relative_strength_20d": ("beating its own sector lately", "lagging its own sector lately"),
+}
+
+# A signal must vote at least this strongly to be worth mentioning.
+WHY_MIN_STRENGTH = 0.25
+
+
+def why_sentence(ticker: str, action: str, signals: dict[str, float]) -> str:
+    """One honest sentence a non-technical owner can act on.
+
+    Names the two or three signals pulling hardest in the call's direction,
+    and the strongest one leaning against it — the tension is part of the
+    truth, and hiding it would oversell the call.
+    """
+    direction = 1.0 if action in ("BUY", "STRONG BUY") else -1.0 if action in ("SELL", "STRONG SELL") else 0.0
+    if direction == 0.0:
+        strongest = max(signals.items(), key=lambda kv: abs(kv[1]), default=None)
+        if strongest is None or abs(strongest[1]) < WHY_MIN_STRENGTH:
+            return f"{ticker}: nothing pulling hard in either direction — no reason to act."
+        phrases = _SIGNAL_PHRASES.get(strongest[0])
+        lean = phrases[0 if strongest[1] > 0 else 1] if phrases else "one mixed signal"
+        return f"{ticker}: signals mostly cancel out ({lean}, but not enough else agrees)."
+
+    idx = 0 if direction > 0 else 1
+    supporting = sorted(
+        (kv for kv in signals.items() if kv[1] * direction >= WHY_MIN_STRENGTH and kv[0] in _SIGNAL_PHRASES),
+        key=lambda kv: -abs(kv[1]),
+    )[:3]
+    opposing = sorted(
+        (kv for kv in signals.items() if kv[1] * direction <= -WHY_MIN_STRENGTH and kv[0] in _SIGNAL_PHRASES),
+        key=lambda kv: -abs(kv[1]),
+    )[:1]
+    verb = "Buying case" if direction > 0 else "Selling case"
+    if not supporting:
+        return f"{ticker}: {verb.lower()} rests on the overall balance of signals rather than any single strong one."
+    parts = [_SIGNAL_PHRASES[name][idx] for name, _ in supporting]
+    if len(parts) == 1:
+        body = parts[0]
+    else:
+        body = ", ".join(parts[:-1]) + " and " + parts[-1]
+    sentence = f"{verb} for {ticker}: {body}"
+    if opposing:
+        counter_idx = 1 - idx
+        sentence += f" — though {_SIGNAL_PHRASES[opposing[0][0]][counter_idx]} argues for caution"
+    return sentence + "."
+
+
+def apply_sector_caps(
+    suggestions: list, max_full_size: int = MAX_FULL_SIZE_PER_SECTOR
+) -> None:
+    """Halve suggested sizes past the Nth buy idea per sector, in place.
+
+    The top ideas routinely cluster in whatever sector is hot; taking all of
+    them at full size quietly concentrates the portfolio in one bet. Callers
+    pass suggestions already sorted best-first, so the strongest ideas in
+    each sector keep full size.
+    """
+    seen: dict[str, int] = {}
+    for s in suggestions:
+        if s.action not in ("BUY", "STRONG BUY") or not s.position_fraction:
+            continue
+        sector = s.sector or "Unknown"
+        seen[sector] = seen.get(sector, 0) + 1
+        if seen[sector] > max_full_size:
+            s.position_fraction = round(s.position_fraction / 2.0, 4)
+            s.notes.append(
+                f"Already {max_full_size} stronger buy ideas in {sector} today — "
+                "size halved to avoid betting the day on one sector."
+            )
 
 
 def risk_multiplier(annualized_vol: float | None) -> float:
@@ -177,7 +267,20 @@ def build_suggestion(
     fraction = 0.0
     if action in ("BUY", "STRONG BUY"):
         fraction = round(position_size(ras, atr_pct) * sizing_mult, 4)
-        if atr_pct is not None and math.isfinite(atr_pct) and math.isfinite(price):
+        days_to_earnings = past.days_to_earnings if past else None
+        if (
+            days_to_earnings is not None
+            and 0 <= days_to_earnings <= EARNINGS_BLACKOUT_DAYS
+        ):
+            # The signal may be right, but the print decides the week — a new
+            # entry now is a bet on the report, not on the setup.
+            fraction = 0.0
+            when = "today" if days_to_earnings == 0 else f"in {days_to_earnings} day{'s' if days_to_earnings != 1 else ''}"
+            notes.append(
+                f"Earnings expected {when} — wait for the report before opening "
+                "a new position; the setup can be re-judged after the print."
+            )
+        if fraction and atr_pct is not None and math.isfinite(atr_pct) and math.isfinite(price):
             stop = round(price * (1.0 - STOP_ATR_MULTIPLE * atr_pct), 2)
             notes.append(f"Suggested protective stop near ${stop:,.2f} (2x ATR).")
 
@@ -194,4 +297,5 @@ def build_suggestion(
         stop_price=stop,
         owned_shares=owned_shares,
         notes=notes,
+        why=why_sentence(ticker, action, signals),
     )

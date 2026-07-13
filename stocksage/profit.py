@@ -37,6 +37,15 @@ class PaperTrade:
     realized_return: float
     pnl: float           # buys: stake * return; sells: stake * -return (avoided)
     cumulative: float    # running buy-side P&L (buys only)
+    benchmark_return: float | None = None  # SPY over the same window, if graded with one
+
+
+def _benchmark_of(row) -> float | None:
+    """benchmark_return if the row carries it (older brains don't)."""
+    try:
+        return row["benchmark_return"]
+    except (KeyError, IndexError):
+        return None
 
 
 def paper_trades(
@@ -62,7 +71,10 @@ def paper_trades(
             pnl = stake * ret
             cumulative += pnl
             buys.append(
-                PaperTrade(when, row["ticker"], action, stake, ret, pnl, cumulative)
+                PaperTrade(
+                    when, row["ticker"], action, stake, ret, pnl, cumulative,
+                    benchmark_return=_benchmark_of(row),
+                )
             )
         elif action in SELL_ACTIONS:
             avoided.append(
@@ -90,4 +102,13 @@ def profit_stats(buys: list[PaperTrade], avoided: list[PaperTrade]) -> dict:
     }
     if buys:
         stats["return_per_trade"] = total / (len(buys) * buys[0].stake)
+
+    # The opportunity-cost check: same stakes, same windows, parked in SPY.
+    # Only trades graded with a benchmark participate, so it stays honest.
+    covered = [t for t in buys if t.benchmark_return is not None]
+    if covered:
+        stats["benchmark_pnl"] = round(sum(t.stake * t.benchmark_return for t in covered), 2)
+        stats["covered_pnl"] = round(sum(t.pnl for t in covered), 2)
+        stats["covered_trades"] = len(covered)
+        stats["edge_vs_market"] = round(stats["covered_pnl"] - stats["benchmark_pnl"], 2)
     return stats

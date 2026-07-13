@@ -49,26 +49,48 @@ BACKFILL_SKIP_RECENT_DAYS = 7  # leave fresh moves to live capture (has news)
 def warmup_learning(
     market: MarketData, db: Database, tickers: list[str] | None = None
 ) -> dict:
-    """Walk-forward train the weights on history. Returns stats."""
+    """Walk-forward train the weights on history. Returns stats.
+
+    Trains on the SPY-excess return, exactly like live grading: history is
+    mostly a rising market, and raw returns would teach every bullish signal
+    to look brilliant. Excess returns teach which signals picked *winners*.
+    """
     weights = db.load_weights()
     samples = 0
     skipped = 0
     started = time.time()
+    spy = market.history(universe.MARKET_BENCHMARK, period=WARMUP_PERIOD)
     for ticker in tickers or universe.all_tickers():
         df = market.history(ticker, period=WARMUP_PERIOD)
         if df is None or len(df) < MIN_HISTORY_ROWS + WARMUP_HORIZON_DAYS:
             skipped += 1
             continue
         close = df["Close"]
+        spy_close = (
+            spy["Close"].reindex(df.index, method="ffill")
+            if spy is not None and not spy.empty
+            else None
+        )
+        sector = universe.sector_of(ticker)
+        etf_df = market.history(sector.etf, period=WARMUP_PERIOD) if sector else None
         for end in range(MIN_HISTORY_ROWS, len(df) - WARMUP_HORIZON_DAYS, WARMUP_STEP_DAYS):
-            feats = compute_features(df.iloc[:end])
+            # Features may only see data through the walk-forward point —
+            # the benchmark slice ends on the same bar for the same reason.
+            bench_slice = etf_df.loc[: df.index[end - 1]] if etf_df is not None else None
+            feats = compute_features(df.iloc[:end], benchmark_df=bench_slice)
             if not feats:
                 continue
             entry = float(close.iloc[end - 1])
             exit_ = float(close.iloc[end - 1 + WARMUP_HORIZON_DAYS])
             if entry <= 0:
                 continue
-            weights, _ = update_weights(weights, feats, exit_ / entry - 1.0, eta=WARMUP_ETA)
+            realized = exit_ / entry - 1.0
+            if spy_close is not None:
+                s_entry = float(spy_close.iloc[end - 1])
+                s_exit = float(spy_close.iloc[end - 1 + WARMUP_HORIZON_DAYS])
+                if s_entry > 0 and s_exit > 0:
+                    realized -= s_exit / s_entry - 1.0
+            weights, _ = update_weights(weights, feats, realized, eta=WARMUP_ETA)
             samples += 1
     if samples:
         db.save_weights(weights)

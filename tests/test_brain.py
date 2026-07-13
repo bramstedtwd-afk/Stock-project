@@ -143,3 +143,59 @@ def test_db_path_honors_env_at_call_time(tmp_path, monkeypatch):
     db = Database()
     assert db.path == tmp_path / "custom.db"
     db.close()
+
+
+def test_merge_from_old_schema_brain_without_benchmark(tmp_path):
+    import sqlite3
+
+    from stocksage.brain import merge_brains
+
+    # Source brain exported by an older StockSage: no benchmark_return column.
+    src = tmp_path / "old-export.db"
+    conn = sqlite3.connect(src)
+    conn.executescript(
+        "CREATE TABLE suggestions (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " created_at TEXT NOT NULL, ticker TEXT NOT NULL, action TEXT NOT NULL,"
+        " score REAL NOT NULL, price REAL NOT NULL, signals TEXT NOT NULL,"
+        " horizon_days INTEGER NOT NULL, evaluated INTEGER NOT NULL DEFAULT 0,"
+        " realized_return REAL, hit INTEGER);"
+        "CREATE TABLE move_events (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " created_at TEXT NOT NULL, ticker TEXT NOT NULL, event_date TEXT NOT NULL,"
+        " return_pct REAL NOT NULL, atr_multiple REAL, reasons TEXT NOT NULL,"
+        " headlines TEXT NOT NULL, UNIQUE (ticker, event_date));"
+        "CREATE TABLE weights (signal TEXT PRIMARY KEY, weight REAL NOT NULL,"
+        " updated_at TEXT NOT NULL);"
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+    )
+    conn.execute(
+        "INSERT INTO suggestions (created_at, ticker, action, score, price, signals,"
+        " horizon_days, evaluated, realized_return, hit)"
+        " VALUES ('2026-01-05T00:00:00', 'AAPL', 'BUY', 0.5, 100, '{}', 5, 1, 0.04, 1)"
+    )
+    conn.commit()
+    conn.close()
+
+    dest = tmp_path / "current.db"
+    Database(dest).close()
+    stats = merge_brains(dest, src)
+    assert stats["suggestions_added"] == 1
+    db = Database(dest)
+    row = db.conn.execute("SELECT * FROM suggestions").fetchone()
+    assert row["ticker"] == "AAPL" and row["benchmark_return"] is None
+    db.close()
+
+
+def test_merge_preserves_benchmark_between_current_brains(tmp_path):
+    from stocksage.brain import merge_brains
+
+    src_db = Database(tmp_path / "src.db")
+    sid = src_db.record_suggestion("NVDA", "BUY", 0.6, 500.0, {"x": 0.6}, 5)
+    src_db.mark_evaluated(sid, 0.08, True, benchmark_return=0.02)
+    src_db.close()
+    dest = tmp_path / "dest.db"
+    Database(dest).close()
+    merge_brains(dest, tmp_path / "src.db")
+    db = Database(dest)
+    row = db.conn.execute("SELECT * FROM suggestions").fetchone()
+    assert row["benchmark_return"] == 0.02
+    db.close()

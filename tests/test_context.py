@@ -54,3 +54,16 @@ def test_detect_all_finds_injected_spikes():
 def test_detect_requires_history():
     assert detect_significant_move(make_ohlcv(days=5)) is None
     assert detect_significant_move(None) is None
+
+
+def test_tag_reasons_does_not_straddle_headlines():
+    from stocksage.context import tag_reasons
+
+    # "price" ends one headline, "target" starts the next: concatenation
+    # would fabricate an analyst_rating tag no headline reported.
+    headlines = [
+        {"title": "Shares slump on weak product price"},
+        {"title": "Target date for factory opening slips"},
+    ]
+    assert "analyst_rating" not in tag_reasons(headlines)
+    assert "analyst_rating" in tag_reasons([{"title": "Analyst raises price target"}])

@@ -37,11 +37,16 @@ REASON_PATTERNS: dict[str, list[str]] = {
 
 
 def tag_reasons(headlines: list[dict]) -> list[str]:
-    """Map headlines onto the reason taxonomy; empty list = unexplained."""
-    text = " ".join(h.get("title", "") for h in headlines).lower()
+    """Map headlines onto the reason taxonomy; empty list = unexplained.
+
+    Each headline is matched on its own: concatenating them would let a
+    multi-word pattern straddle two unrelated titles ("...cuts price" +
+    "target date...") and tag a reason nobody reported.
+    """
     reasons = []
+    titles = [h.get("title", "").lower() for h in headlines]
     for tag, patterns in REASON_PATTERNS.items():
-        if any(re.search(p, text) for p in patterns):
+        if any(re.search(p, title) for p in patterns for title in titles):
             reasons.append(tag)
     return reasons
 

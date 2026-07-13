@@ -41,6 +41,8 @@ def _print_suggestions(suggestions, limit: int) -> None:
             f"{s.ticker:<7}{s.action:<13}{s.risk_adjusted_score:>7.2f}"
             f"{s.price:>10,.2f}{size:>7}  {s.sector or ''}"
         )
+        if s.why:
+            print(f"        {s.why}")
         for note in s.notes:
             print(f"        · {note}")
     print(DISCLAIMER)
@@ -290,6 +292,13 @@ def cmd_profit(args) -> int:
     if stats["avg_win"] is not None and stats["avg_loss"] is not None:
         print(f"Avg win / loss    : ${stats['avg_win']:+,.2f} / ${stats['avg_loss']:+,.2f}")
     print(f"Risk avoided      : ${stats['risk_avoided']:+,.2f} across {stats['avoid_calls']} avoid calls")
+    if stats.get("edge_vs_market") is not None:
+        verdict = "ahead of" if stats["edge_vs_market"] >= 0 else "behind"
+        n = stats["covered_trades"]
+        print(
+            f"Vs. SPY           : ${abs(stats['edge_vs_market']):,.2f} {verdict} parking "
+            f"the same stakes in SPY (across {n} trade{'s' if n != 1 else ''})"
+        )
     if stats["best"]:
         b, w = stats["best"], stats["worst"]
         print(f"Best / worst call : {b.ticker} ${b.pnl:+,.2f}  /  {w.ticker} ${w.pnl:+,.2f}")

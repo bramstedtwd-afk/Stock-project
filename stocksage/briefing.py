@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from .profit import paper_trades
+from .profit import paper_trades, profit_stats
 
 BUYISH = ("BUY", "STRONG BUY")
 SELLISH = ("SELL", "STRONG SELL")
@@ -37,9 +37,12 @@ def build_briefing(result, db) -> dict:
     ]
 
     week_ago = (date.today() - timedelta(days=7)).isoformat()
-    buys, _ = paper_trades(db.evaluated_suggestions())
+    buys, avoided = paper_trades(db.evaluated_suggestions())
     week_pnl = sum(t.pnl for t in buys if t.when >= week_ago)
     graded_week = sum(1 for t in buys if t.when >= week_ago)
+    edge = profit_stats(buys, avoided).get("edge_vs_market")
+
+    buying_power = getattr(result.portfolio, "buying_power", None)
 
     shocks = [
         {
@@ -60,9 +63,15 @@ def build_briefing(result, db) -> dict:
                 "action": s.action,
                 "score": s.risk_adjusted_score,
                 "size": s.position_fraction,
+                "dollars": round(s.position_fraction * buying_power, 2)
+                if buying_power and s.position_fraction
+                else None,
+                "why": s.why,
             }
             for s in top_ideas
         ],
+        "buying_power": buying_power,
+        "edge_vs_market": edge,
         "owned_alerts": [
             {"ticker": s.ticker, "action": s.action, "score": s.risk_adjusted_score}
             for s in owned_alerts
@@ -90,10 +99,13 @@ def briefing_lines(b: dict) -> list[str]:
         f"{b['sectors_falling']} falling; {b['scanned']} names scanned)."
     ]
     if b["top_ideas"]:
-        ideas = ", ".join(
-            f"{i['ticker']} ({i['action']}, {i['score']:+.2f})" for i in b["top_ideas"]
-        )
-        lines.append(f"Top ideas today: {ideas}.")
+        parts = []
+        for i in b["top_ideas"]:
+            tag = f"{i['ticker']} ({i['action']}, {i['score']:+.2f}"
+            if i.get("dollars"):
+                tag += f", ≈${i['dollars']:,.0f}"
+            parts.append(tag + ")")
+        lines.append(f"Top ideas today: {', '.join(parts)}.")
     else:
         lines.append("No buy-side ideas clear the bar today — cash is a position too.")
     if b["owned_alerts"]:
@@ -110,6 +122,12 @@ def briefing_lines(b: dict) -> list[str]:
         lines.append(
             f"Paper ledger this week: ${b['week_paper_pnl']:+,.2f} "
             f"across {b['week_graded']} graded trades."
+        )
+    if b.get("edge_vs_market") is not None:
+        verdict = "ahead of" if b["edge_vs_market"] >= 0 else "behind"
+        lines.append(
+            f"All-time, the model's calls are ${abs(b['edge_vs_market']):,.2f} "
+            f"{verdict} just parking the same money in SPY."
         )
     for shock in b["shocks"][:3]:
         reasons = ", ".join(shock["reasons"])

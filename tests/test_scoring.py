@@ -54,3 +54,62 @@ def test_high_volatility_downgrades_action():
     calm = build_suggestion("A", {"x": 0.5}, 0.5, calm_risk)
     wild = build_suggestion("B", {"x": 0.5}, 0.5, wild_risk)
     assert calm.risk_adjusted_score > wild.risk_adjusted_score
+
+
+def test_earnings_blackout_zeroes_size_but_keeps_call():
+    from stocksage.scoring import PastContext
+
+    risk = {"price": 100.0, "atr_pct": 0.015, "drawdown_52w": -0.05, "annualized_vol": 0.20}
+    past = PastContext(days_to_earnings=2)
+    s = build_suggestion("TEST", {"trend_long": 0.9}, score=0.8, risk=risk, past=past)
+    assert s.action in ("BUY", "STRONG BUY")  # the read is unchanged...
+    assert s.position_fraction == 0.0          # ...but no new entry into the print
+    assert s.stop_price is None
+    assert any("Earnings expected" in n for n in s.notes)
+
+
+def test_earnings_far_away_does_not_gate():
+    from stocksage.scoring import PastContext
+
+    risk = {"price": 100.0, "atr_pct": 0.015, "drawdown_52w": -0.05, "annualized_vol": 0.20}
+    s = build_suggestion(
+        "TEST", {"trend_long": 0.9}, score=0.8, risk=risk, past=PastContext(days_to_earnings=20)
+    )
+    assert s.position_fraction > 0
+
+
+def test_why_sentence_names_drivers_and_tension():
+    from stocksage.scoring import why_sentence
+
+    why = why_sentence(
+        "AAPL", "BUY", {"trend_long": 0.8, "momentum_20d": 0.6, "rsi_reversion": -0.5}
+    )
+    assert "AAPL" in why
+    assert "uptrend" in why
+    assert "caution" in why  # the opposing signal is disclosed, not hidden
+
+    hold = why_sentence("MSFT", "HOLD", {"trend_long": 0.1})
+    assert "MSFT" in hold and "no reason to act" in hold
+
+
+def test_every_suggestion_carries_a_why():
+    risk = {"price": 50.0, "atr_pct": 0.02, "drawdown_52w": -0.10, "annualized_vol": 0.30}
+    s = build_suggestion("XYZ", {"trend_long": -0.9, "momentum_20d": -0.7}, score=-0.7, risk=risk)
+    assert s.why and "XYZ" in s.why
+
+
+def test_sector_caps_halve_third_idea_per_sector():
+    from stocksage.scoring import apply_sector_caps
+
+    risk = {"price": 100.0, "atr_pct": 0.01, "drawdown_52w": 0.0, "annualized_vol": 0.20}
+    ideas = [
+        build_suggestion(t, {"trend_long": 0.9}, score=0.8, risk=risk, sector="Technology")
+        for t in ("AAA", "BBB", "CCC")
+    ]
+    full = ideas[0].position_fraction
+    assert full > 0
+    apply_sector_caps(ideas)  # already sorted best-first (equal here)
+    assert ideas[0].position_fraction == full
+    assert ideas[1].position_fraction == full
+    assert ideas[2].position_fraction == round(full / 2, 4)
+    assert any("size halved" in n for n in ideas[2].notes)

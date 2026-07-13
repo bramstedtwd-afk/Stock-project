@@ -46,6 +46,29 @@ class Portfolio:
         return sum(h.equity for h in self.holdings)
 
 
+def extract_watchlist_symbols(payload) -> list[str]:
+    """Pull ticker symbols out of a robin_stocks watchlist response.
+
+    The shape has changed across robin_stocks versions (list of entries,
+    or {"results": [...]}); anything without a recognizable symbol is
+    skipped — a schema surprise must never break the daily scan.
+    """
+    if isinstance(payload, dict):
+        entries = payload.get("results", [])
+    elif isinstance(payload, list):
+        entries = payload
+    else:
+        return []
+    symbols = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        symbol = entry.get("symbol") or entry.get("object_symbol")
+        if isinstance(symbol, str) and symbol.strip():
+            symbols.append(symbol.strip().upper())
+    return symbols
+
+
 class RobinhoodClient:
     """Thin, defensive wrapper around robin_stocks."""
 
@@ -120,6 +143,38 @@ class RobinhoodClient:
         except (TypeError, ValueError):
             buying_power = 0.0
         return Portfolio(holdings=holdings, buying_power=buying_power)
+
+    # --- watchlists (read-only) ---
+
+    def watchlist_tickers(self) -> list[str] | None:
+        """Every symbol across the account's Robinhood watchlists.
+
+        Read-only: names you star in the Robinhood app get scanned daily
+        without retyping them here. None when not linked or the fetch fails.
+        """
+        if not self.login():
+            return None
+        import robin_stocks.robinhood as rh
+
+        try:
+            raw = rh.account.get_all_watchlists() or {}
+        except Exception as exc:
+            log.warning("failed to fetch Robinhood watchlists: %s", exc)
+            return None
+        names = [
+            w.get("display_name") or w.get("name")
+            for w in (raw.get("results") if isinstance(raw, dict) else raw) or []
+            if isinstance(w, dict)
+        ]
+        symbols: list[str] = []
+        for name in filter(None, names):
+            try:
+                items = rh.account.get_watchlist_by_name(name) or {}
+            except Exception as exc:
+                log.warning("failed to fetch watchlist %r: %s", name, exc)
+                continue
+            symbols.extend(extract_watchlist_symbols(items))
+        return sorted(set(symbols))
 
     # --- full account history (orders + dividends) ---
 

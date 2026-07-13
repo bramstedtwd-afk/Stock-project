@@ -61,3 +61,16 @@ def test_risk_metrics_sane(uptrend_df):
     assert 0 < r["atr_pct"] < 0.2
     assert r["drawdown_52w"] <= 0
     assert r["annualized_vol"] > 0
+
+
+def test_relative_strength_signal_only_with_benchmark(uptrend_df, downtrend_df, flat_df):
+    from stocksage.indicators import compute_features
+
+    solo = compute_features(uptrend_df)
+    assert "relative_strength_20d" not in solo
+
+    beating = compute_features(uptrend_df, benchmark_df=flat_df)
+    lagging = compute_features(downtrend_df, benchmark_df=flat_df)
+    assert beating["relative_strength_20d"] > 0
+    assert lagging["relative_strength_20d"] < 0
+    assert beating["relative_strength_20d"] > lagging["relative_strength_20d"]

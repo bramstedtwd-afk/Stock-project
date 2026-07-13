@@ -211,6 +211,7 @@ with tab_sugg:
         pool = result.suggestions if show_holds else result.actionable
         if not pool:
             st.write("No actionable suggestions today — that is a valid answer too.")
+        buying_power = result.portfolio.buying_power if result.portfolio else None
         for s in pool:
             color = ACTION_COLORS.get(s.action, "#8a8f98")
             with st.container(border=True):
@@ -225,10 +226,15 @@ with tab_sugg:
                 c2.metric("Score", f"{s.risk_adjusted_score:+.2f}")
                 c3.metric("Price", f"${s.price:,.2f}")
                 if s.position_fraction:
-                    c3.caption(f"Suggested size: {s.position_fraction:.0%} of cash")
+                    size_line = f"Suggested size: {s.position_fraction:.0%} of cash"
+                    if buying_power:
+                        size_line += f" (≈ ${s.position_fraction * buying_power:,.0f})"
+                    c3.caption(size_line)
                 if s.owned_shares:
                     c3.caption(f"You hold {s.owned_shares:g} shares")
                 with c4:
+                    if s.why:
+                        st.markdown(f"**{s.why}**")
                     for note in s.notes:
                         st.caption(f"· {note}")
                     with st.expander("Signal breakdown"):
@@ -273,6 +279,16 @@ with tab_profit:
             f"${stats['risk_avoided']:+,.2f}",
             help="What the sell/avoid calls saved you by being out of falling names.",
         )
+        if stats.get("edge_vs_market") is not None:
+            verdict = "ahead of" if stats["edge_vs_market"] >= 0 else "behind"
+            n = stats["covered_trades"]
+            st.caption(
+                f"⚖️ Opportunity-cost check: across {n} trade{'s' if n != 1 else ''} "
+                f"graded against the market, these calls are "
+                f"**${abs(stats['edge_vs_market']):,.2f} {verdict}** what the same "
+                f"stakes would have earned just sitting in SPY "
+                f"(${stats['covered_pnl']:+,.2f} vs ${stats['benchmark_pnl']:+,.2f})."
+            )
         if buys:
             curve = pd.DataFrame(
                 {"Date": [t.when for t in buys], "Cumulative P&L ($)": [t.cumulative for t in buys]}

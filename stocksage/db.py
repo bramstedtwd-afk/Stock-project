@@ -108,7 +108,16 @@ class Database:
         self.conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Additive-only migrations so existing brains upgrade in place."""
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(suggestions)")}
+        if "benchmark_return" not in cols:
+            # Market (SPY) return over the same window as realized_return, so
+            # a call can be judged against "would cash-in-the-index have won".
+            self.conn.execute("ALTER TABLE suggestions ADD COLUMN benchmark_return REAL")
 
     def close(self) -> None:
         self.conn.close()
@@ -153,11 +162,17 @@ class Database:
                 due.append(row)
         return due
 
-    def mark_evaluated(self, suggestion_id: int, realized_return: float, hit: bool) -> None:
+    def mark_evaluated(
+        self,
+        suggestion_id: int,
+        realized_return: float,
+        hit: bool,
+        benchmark_return: float | None = None,
+    ) -> None:
         self.conn.execute(
-            "UPDATE suggestions SET evaluated = 1, realized_return = ?, hit = ?"
-            " WHERE id = ?",
-            (realized_return, int(hit), suggestion_id),
+            "UPDATE suggestions SET evaluated = 1, realized_return = ?, hit = ?,"
+            " benchmark_return = ? WHERE id = ?",
+            (realized_return, int(hit), benchmark_return, suggestion_id),
         )
         self.conn.commit()
 

@@ -54,3 +54,22 @@ def test_stake_env_override(monkeypatch):
     assert default_stake() == 2500.0
     monkeypatch.setenv("STOCKSAGE_STAKE", "not-a-number")
     assert default_stake() == 1000.0
+
+
+def test_benchmark_comparison_only_counts_covered_trades():
+    db = Database(":memory:")
+    # Two buys graded against SPY (one beat it, one lagged), one legacy buy without.
+    for ticker, realized, bench in (("AAA", 0.06, 0.02), ("BBB", 0.01, 0.03)):
+        sid = db.record_suggestion(ticker, "BUY", 0.5, 100.0, {"x": 0.5}, 5)
+        db.mark_evaluated(sid, realized, realized > 0, benchmark_return=bench)
+    sid = db.record_suggestion("OLD", "BUY", 0.5, 100.0, {"x": 0.5}, 5)
+    db.mark_evaluated(sid, 0.04, True)  # older brains carry no benchmark
+
+    buys, avoided = paper_trades(db.evaluated_suggestions(), stake=1000.0)
+    stats = profit_stats(buys, avoided)
+    assert stats["covered_trades"] == 2
+    assert stats["covered_pnl"] == pytest.approx(70.0)
+    assert stats["benchmark_pnl"] == pytest.approx(50.0)
+    assert stats["edge_vs_market"] == pytest.approx(20.0)
+    # The headline P&L still includes every trade, covered or not.
+    assert stats["total_pnl"] == pytest.approx(110.0)
