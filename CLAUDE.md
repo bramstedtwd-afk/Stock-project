@@ -44,6 +44,22 @@ rather than giving them instructions.
 `moves` · `performance` · `profit` · `watch add|remove|list` ·
 `bootstrap` · `brain export|import|sync|info`
 
+## Trading-routine integration (stocksage/advisor.py)
+
+The owner runs a separate scheduled Claude routine that day-trades a small
+agentic Robinhood account (human confirm on every order — that gate is
+sacred, never automate order placement). The routine uses two commands:
+
+- `python -m stocksage brief [TICKERS...] --max-price N --json` — research
+  packet per run: grades matured calls first, then market mood, verdicts +
+  ATR-based 2:1 stop/target on requested tickers, ranked buy candidates
+  under the price cap, avoid list, per-ticker model reliability, recent
+  shocks with reasons, and overall model stats. Degrades to brain-only
+  context when market data is unreachable.
+- `python -m stocksage log-call TICKER ACTION [--price P] [--note ...]` —
+  records the routine's decision so it's graded at the 5-day horizon and
+  feeds per-ticker reliability, weight learning, and the paper ledger.
+
 ## Development conventions
 
 - Tests: `python -m pytest` — 121 tests, **fully offline** (synthetic OHLCV via `tests/conftest.make_ohlcv`, in-memory DBs, `FakeMarket` injection, Streamlit AppTest for the dashboard). Keep it that way: no test may need network.

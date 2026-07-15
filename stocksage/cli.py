@@ -251,6 +251,67 @@ def cmd_brain(args) -> int:
     return 0
 
 
+def cmd_brief(args) -> int:
+    import json as _json
+
+    from .advisor import build_brief
+
+    engine = Engine()
+    brief = build_brief(
+        engine, tickers=args.tickers or None, max_price=args.max_price, top=args.top
+    )
+    if args.json:
+        print(_json.dumps(brief, indent=2))
+        return 0
+    print(f"\nResearch brief — {brief['as_of']} "
+          f"(graded {brief['graded_this_call']} matured calls first)")
+    stats = brief["model_stats"]
+    print(
+        f"Model record: {stats['graded_calls']} graded calls"
+        + (f", {stats['hit_rate']:.0%} hit rate" if stats["hit_rate"] is not None else "")
+        + (f", paper profit factor {stats['paper_profit_factor']}"
+           if stats["paper_profit_factor"] is not None else "")
+    )
+    for section, entries in (("FOCUS", brief["focus"]), ("CANDIDATES", brief["candidates"])):
+        if not entries:
+            continue
+        print(f"\n{section}:")
+        for e in entries:
+            if e.get("data") == "unavailable":
+                print(f"  {e['ticker']:<7} (no data — brain context only)")
+                continue
+            rec = e["model_record"]
+            rec_txt = (
+                f"record {rec['hit_rate']:.0%} over {rec['graded_calls']}"
+                if rec["hit_rate"] is not None else "no record yet"
+            )
+            print(
+                f"  {e['ticker']:<7}{e['verdict']:<12}score {e['score']:+.2f}  "
+                f"${e['price']:,.2f}  stop {e['stop']}  target {e['target']}  ({rec_txt})"
+            )
+            if e["recent_shock"]:
+                sh = e["recent_shock"]
+                print(f"          shock {sh['date']}: {sh['return_pct']:+.1%} "
+                      f"[{', '.join(sh['reasons'])}]")
+    if brief["avoid"]:
+        print("\nAVOID: " + ", ".join(f"{a['ticker']} ({a['verdict']})" for a in brief["avoid"]))
+    print(DISCLAIMER)
+    return 0
+
+
+def cmd_log_call(args) -> int:
+    from .advisor import log_call
+
+    engine = Engine()
+    sid = log_call(engine, args.ticker, args.action, price=args.price, note=args.note)
+    print(
+        f"Logged call #{sid}: {args.action.upper()} {args.ticker.upper()}"
+        + (f" @ ${args.price:,.2f}" if args.price else "")
+        + " — it will be graded automatically and feed the model's learning."
+    )
+    return 0
+
+
 def cmd_watch(args) -> int:
     db = Database()
     if args.watch_action == "add":
@@ -379,6 +440,24 @@ def build_parser() -> argparse.ArgumentParser:
     b.set_defaults(func=cmd_brain)
     b = brain_sub.add_parser("info", help="where the brain lives and what it knows")
     b.set_defaults(func=cmd_brain)
+
+    p = sub.add_parser(
+        "brief", help="research packet for an agent/routine (use --json for machines)"
+    )
+    p.add_argument("tickers", nargs="*", help="tickers the routine holds or is eyeing")
+    p.add_argument("--max-price", type=float, help="only suggest candidates at/under this price")
+    p.add_argument("--top", type=int, default=5)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_brief)
+
+    p = sub.add_parser(
+        "log-call", help="record a trading decision so the brain grades it later"
+    )
+    p.add_argument("ticker")
+    p.add_argument("action", help="BUY / SELL / STRONG BUY / STRONG SELL")
+    p.add_argument("--price", type=float, help="executed or quoted price (else latest close)")
+    p.add_argument("--note", help="one-line reasoning, kept in the learning log")
+    p.set_defaults(func=cmd_log_call)
 
     p = sub.add_parser("watch", help="manage the watchlist (extra tickers scanned daily)")
     p.add_argument("watch_action", choices=["add", "remove", "list"])
