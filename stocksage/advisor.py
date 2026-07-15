@@ -173,6 +173,52 @@ def build_brief(
     }
 
 
+def publish_brief(
+    engine: Engine,
+    folder: str,
+    tickers: list[str] | None = None,
+    max_price: float | None = None,
+    top: int = 8,
+    include_playbook: bool = True,
+    include_snapshot: bool = True,
+) -> dict:
+    """Write a fresh research packet into a folder for the routine to read.
+
+    Point `folder` at a directory that Google Drive for Desktop (or any
+    cloud client) syncs. The routine reads the freshest "StockSage Brief"
+    file from Drive — no Python needed on its side. Idempotent per day: the
+    dated filename means one file per day, overwritten on re-publish.
+    """
+    import json
+    import shutil
+    from datetime import date
+    from pathlib import Path as _Path
+
+    from .brain import ROUTINE_PATH, write_snapshot
+
+    out_dir = _Path(folder).expanduser()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    focus = tickers if tickers is not None else engine.db.watchlist()
+    packet = build_brief(engine, tickers=focus, max_price=max_price, top=top)
+
+    brief_path = out_dir / f"StockSage Brief - {date.today().isoformat()}.json"
+    brief_path.write_text(json.dumps(packet, indent=2))
+    written = [str(brief_path)]
+
+    if include_playbook and ROUTINE_PATH.exists():
+        dest = out_dir / "StockSage Routine Playbook.md"
+        shutil.copyfile(ROUTINE_PATH, dest)
+        written.append(str(dest))
+    if include_snapshot:
+        snap = write_snapshot(db_path=engine.db.path)
+        dest = out_dir / "brain-snapshot.db"
+        shutil.copyfile(snap, dest)
+        written.append(str(dest))
+
+    return {"folder": str(out_dir), "written": written, "candidates": len(packet["candidates"])}
+
+
 def log_call(
     engine: Engine,
     ticker: str,

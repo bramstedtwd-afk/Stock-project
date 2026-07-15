@@ -237,6 +237,7 @@ def sync_to_folder(folder: str | Path, db_path: str | Path | None = None) -> Pat
 # --- repo-carried snapshot: knowledge travels the same channel as code ------
 
 SNAPSHOT_PATH = Path(__file__).resolve().parent.parent / "brain" / "brain-snapshot.db"
+ROUTINE_PATH = Path(__file__).resolve().parent.parent / "ROUTINE.md"
 
 
 def write_snapshot(db_path: str | Path | None = None) -> Path:

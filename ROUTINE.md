@@ -44,30 +44,44 @@ not on thinking.
 
 ## Research engine (StockSage) — consult every run
 
-This repo IS the research engine. It grades every past call, remembers why
-stocks moved, and knows its own per-ticker reliability.
+StockSage is the research engine: it grades every past call, remembers why
+stocks moved, and knows its own per-ticker reliability. It runs on the
+owner's desktop and delivers its research two ways depending on where THIS
+routine is running. Detect which environment you're in and use the matching
+path — never fail the run because one path is unavailable.
 
-- **Start of run** (from the repo root):
-  `python -m stocksage brief <holdings + watchlist tickers> --max-price <per-share cap> --json`
-  Returns: market mood by sector; verdict + ATR-based 2:1 stop/target per
-  requested ticker; ranked buy candidates under the cap; avoid list;
-  per-ticker model reliability; recent shocks with tagged reasons; overall
-  model stats (hit rate, paper profit factor). It absorbs the repo's brain
-  snapshot and grades matured calls before answering.
-- **Use as evidence, not oracle.** Claude's live technical read stays
-  primary; the brief supplies memory. Agreement → higher conviction, say so.
-  Disagreement → must appear on the order card in plain English.
-- **End of run** — log every decision, acted AND passed:
-  `python -m stocksage log-call TICKER ACTION --price P --note "reason"`
-  (BUY/SELL/STRONG BUY/STRONG SELL; for passes on serious candidates, log
-  the considered direction with note "passed: <reason>".) No decision goes
-  ungraded — this is what makes next week's runs smarter than this week's.
-- **Share knowledge back** (if the environment can push):
-  `python -m stocksage brain snapshot`, then commit+push
-  `brain/brain-snapshot.db`. Other environments absorb it automatically.
-- **Fallback:** if StockSage errors after one retry, note "research engine
-  offline this run" and proceed on live analysis alone. Its absence is a
-  degraded run, never a halt.
+**Path A — connector environment (this is the normal scheduled run: you
+have Google Drive + Robinhood, but no terminal/repo).**
+- At run start, read the freshest Drive file titled **"StockSage Brief"**
+  (most recent by date). It is a JSON research packet: market mood by
+  sector; per requested ticker a verdict + ATR-based 2:1 stop/target;
+  ranked buy candidates under the price cap; an avoid list; per-ticker
+  model reliability; recent shocks with tagged reasons; overall model
+  stats (hit rate, paper profit factor).
+- If the brief is missing or its date is older than the last trading day,
+  treat research as **stale/offline** — say so in the report and proceed on
+  your own live technical analysis. Its absence is a degraded run, never a
+  halt.
+- You cannot run the Python engine or log calls to the brain directly from
+  here. Instead, **log every decision (acted AND passed) into the Drive
+  trading log** (see Logging) with enough structure that the desktop app
+  can grade it later: ticker, action, price, date, one-line reason.
+
+**Path B — full environment (a run that DOES have the repo + a terminal,
+e.g. launched on the desktop).**
+- `python -m stocksage brief <holdings + watchlist> --max-price <cap> --json`
+  for the same packet, freshly computed (absorbs the brain snapshot and
+  grades matured calls first).
+- `python -m stocksage log-call TICKER ACTION --price P --note "reason"`
+  for every decision, so it is graded at the horizon.
+- `python -m stocksage publish --drive-folder <path>` writes a fresh
+  "StockSage Brief" file (and this playbook) into the Drive-synced folder
+  that Path A reads — this is how the desktop keeps the routine supplied.
+
+**Both paths:** use the research as evidence, not oracle. The live technical
+read stays primary; the brief supplies memory the routine can't compute
+itself. Agreement → higher conviction, say so. Disagreement → must appear on
+the order card in plain English.
 
 ## Capital
 

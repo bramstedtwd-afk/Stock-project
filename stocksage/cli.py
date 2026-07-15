@@ -313,6 +313,24 @@ def cmd_brief(args) -> int:
     return 0
 
 
+def cmd_publish(args) -> int:
+    from .advisor import publish_brief
+
+    engine = Engine()
+    result = publish_brief(
+        engine, args.drive_folder, tickers=args.tickers or None, max_price=args.max_price
+    )
+    print(f"Published research to {result['folder']}:")
+    for path in result["written"]:
+        print(f"  · {path}")
+    print(
+        f"({result['candidates']} candidates in the brief.) "
+        "If this folder is synced by Google Drive for Desktop, your routine "
+        "can now read it. Schedule this alongside autopilot for fresh research each day."
+    )
+    return 0
+
+
 def cmd_log_call(args) -> int:
     from .advisor import log_call
 
@@ -471,6 +489,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--top", type=int, default=5)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_brief)
+
+    p = sub.add_parser(
+        "publish", help="write a research packet + playbook into a Drive-synced folder"
+    )
+    p.add_argument("drive_folder", help="folder synced by Google Drive for Desktop")
+    p.add_argument("tickers", nargs="*", help="focus tickers (default: your watchlist)")
+    p.add_argument("--max-price", type=float)
+    p.set_defaults(func=cmd_publish)
 
     p = sub.add_parser(
         "log-call", help="record a trading decision so the brain grades it later"
