@@ -48,17 +48,31 @@ rather than giving them instructions.
 
 The owner runs a separate scheduled Claude routine that day-trades a small
 agentic Robinhood account (human confirm on every order — that gate is
-sacred, never automate order placement). The routine uses two commands:
+sacred, never automate order placement). **That routine runs in a
+connector-only environment (Robinhood + Google Drive, no terminal/repo)**,
+so it cannot run Python or read the private repo. The bridge is Google
+Drive: the desktop publishes research there, the routine reads it there.
+`ROUTINE.md` is the full playbook (canonical here; a synced copy lives in
+the owner's Drive as the doc "StockSage Routine Playbook").
 
+Desktop-side commands (Path B, full environment):
 - `python -m stocksage brief [TICKERS...] --max-price N --json` — research
-  packet per run: grades matured calls first, then market mood, verdicts +
-  ATR-based 2:1 stop/target on requested tickers, ranked buy candidates
-  under the price cap, avoid list, per-ticker model reliability, recent
-  shocks with reasons, and overall model stats. Degrades to brain-only
-  context when market data is unreachable.
+  packet: grades matured calls first, then market mood, verdicts + ATR-based
+  2:1 stop/target, ranked candidates under the cap, avoid list, per-ticker
+  reliability, recent shocks, model stats. Degrades to brain-only context
+  when market data is unreachable.
 - `python -m stocksage log-call TICKER ACTION [--price P] [--note ...]` —
-  records the routine's decision so it's graded at the 5-day horizon and
-  feeds per-ticker reliability, weight learning, and the paper ledger.
+  records a decision so it's graded at the 5-day horizon.
+- `python -m stocksage publish <drive-folder> [TICKERS...] [--max-price N]`
+  — writes a dated "StockSage Brief" JSON, the playbook, and the brain
+  snapshot into a Google-Drive-synced folder for the routine to read. Run
+  it daily (e.g. after autopilot). No Google API creds needed — it uses the
+  Drive-for-Desktop synced-folder mechanism, same as `brain sync`.
+
+The routine (Path A) reads the freshest "StockSage Brief" from Drive and
+logs decisions to the Drive trading log; the desktop reconciles/grades those
+later. If Drive research is stale/absent, the routine proceeds on its own
+live technical analysis (degraded run, never a halt).
 
 ## Development conventions
 
