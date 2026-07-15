@@ -237,6 +237,20 @@ def cmd_brain(args) -> int:
                 f"weights kept from the {stats['weights_taken_from']} brain "
                 "(the one that learned most recently)."
             )
+    elif args.brain_action == "snapshot":
+        path = brain.write_snapshot()
+        print(f"Brain snapshot written to {path}")
+        print("Commit and push it — every environment that pulls the repo gets the knowledge:")
+        print('  git add brain/brain-snapshot.db && git commit -m "brain snapshot" && git push')
+    elif args.brain_action == "absorb":
+        stats = brain.absorb_snapshot()
+        if stats is None:
+            print("No snapshot in the repo (brain/brain-snapshot.db) — nothing to absorb.")
+        else:
+            print(
+                f"Snapshot absorbed: +{stats['suggestions_added']} suggestions, "
+                f"+{stats['move_events_added']} move events (merges only ever add)."
+            )
     elif args.brain_action == "sync":
         target = brain.sync_to_folder(args.path)
         print(f"Brain now lives at {target}")
@@ -434,6 +448,14 @@ def build_parser() -> argparse.ArgumentParser:
     b = brain_sub.add_parser("import", help="merge (default) or replace with a brain file")
     b.add_argument("path")
     b.add_argument("--replace", action="store_true", help="swap wholesale instead of merging")
+    b.set_defaults(func=cmd_brain)
+    b = brain_sub.add_parser(
+        "snapshot", help="export the brain into the repo so git carries the knowledge"
+    )
+    b.set_defaults(func=cmd_brain)
+    b = brain_sub.add_parser(
+        "absorb", help="merge the repo's brain snapshot into this machine's brain"
+    )
     b.set_defaults(func=cmd_brain)
     b = brain_sub.add_parser("sync", help="keep the brain in a cloud-synced folder")
     b.add_argument("path", help="folder synced by Dropbox/iCloud/OneDrive/...")

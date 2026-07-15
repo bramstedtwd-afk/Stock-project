@@ -109,6 +109,17 @@ def build_brief(
     top: int = 5,
 ) -> dict:
     """One research packet: verdicts on `tickers`, plus ranked candidates."""
+    # Absorb any repo-carried brain snapshot first (idempotent; merges only
+    # add), so a routine running in a fresh environment starts with the
+    # accumulated knowledge before grading and scanning.
+    from .brain import absorb_snapshot
+
+    snapshot = None
+    if str(engine.db.path) != ":memory:":
+        try:
+            snapshot = absorb_snapshot(db_path=engine.db.path)
+        except Exception:  # a bad snapshot file must never block a trading run
+            snapshot = {"error": "snapshot unreadable — continuing on local brain"}
     graded_now = engine.evaluate_pending()  # constant grading, every touchpoint
 
     result = engine.scan(capture_context=False, record=False)
@@ -139,6 +150,7 @@ def build_brief(
 
     return {
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "snapshot_absorbed": snapshot,
         "graded_this_call": graded_now,
         "market_mood": engine.sector_trends(),
         "focus": focus,
