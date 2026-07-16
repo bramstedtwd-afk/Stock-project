@@ -6,13 +6,20 @@
     python -m stocksage.autopilot status        what's scheduled?
 
 Registers jobs with the operating system's own scheduler — launchd on macOS,
-cron on Linux, Task Scheduler on Windows — Monday-Friday at local times.
+cron on Linux, Task Scheduler on Windows — Monday-Friday, at whatever local
+time your computer's own clock reads. There is no timezone conversion
+anywhere in this module: if your machine's clock says 08:30, the job fires
+at 08:30 in whatever zone that clock is set to. Set RUN_HOUR/RUN_MINUTE and
+PUBLISH_TIMES to the local times you actually want.
 
-- The **daily** job (17:30) runs the learn+scan cycle. Adjust RUN_HOUR/MINUTE.
-- The **publish** job (08:30 and 12:30) runs the full capture->grade->supply
+- The **daily** job (17:30 local) runs the learn+scan cycle.
+- The **publish** job (default 08:30, 09:45, 11:15, 12:45, 14:30 local — set
+  STOCKSAGE_PUBLISH_TIMES to override) runs the full capture->grade->supply
   cycle: it mirrors your Robinhood fills into graded calls, grades matured
   ones, and writes a fresh research brief into your Google-Drive-synced
   folder so the trading routine reads freshly-graded research every run.
+  Defaults are timed to land shortly before a routine firing every ~90min
+  starting mid-morning; adjust to match your actual routine schedule.
 
 Output lands in ~/.stocksage/daily.log and ~/.stocksage/publish.log.
 """
