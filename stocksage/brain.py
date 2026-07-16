@@ -238,6 +238,10 @@ def sync_to_folder(folder: str | Path, db_path: str | Path | None = None) -> Pat
 
 SNAPSHOT_PATH = Path(__file__).resolve().parent.parent / "brain" / "brain-snapshot.db"
 ROUTINE_PATH = Path(__file__).resolve().parent.parent / "ROUTINE.md"
+# Outside the repo tree on purpose: automated exports (publish/publish-drive)
+# must never write here — only SNAPSHOT_PATH (inside the repo) is meant to
+# be git-committed, and only via the deliberate `brain snapshot` command.
+STATE_DIR = Path("~/.stocksage").expanduser()
 
 
 def write_snapshot(db_path: str | Path | None = None) -> Path:

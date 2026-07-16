@@ -55,12 +55,44 @@ def test_publish_explicit_tickers(tmp_path, monkeypatch):
     assert not (folder / "brain-snapshot.db").exists()
 
 
+def test_publish_never_dirties_the_repo_tracked_snapshot(tmp_path, monkeypatch):
+    """Regression: an automated publish run must not write to the
+    repo-tracked brain/brain-snapshot.db — only the deliberate `brain
+    snapshot` command may touch that file. Writing there on every
+    scheduled run would permanently block `start.sh update` (git sees
+    the repo as dirty and refuses to pull)."""
+    from stocksage import brain
+
+    fake_snapshot_path = tmp_path / "repo-would-be-here" / "brain-snapshot.db"
+    monkeypatch.setattr(brain, "SNAPSHOT_PATH", fake_snapshot_path)
+
+    engine = _engine(tmp_path, monkeypatch)
+    folder = tmp_path / "GoogleDrive" / "StockSage"
+    publish_brief(engine, str(folder), max_price=30.0)
+    assert not fake_snapshot_path.exists()  # never created, never touched
+
+
+def test_publish_via_api_never_dirties_the_repo_tracked_snapshot(tmp_path, monkeypatch):
+    from stocksage import brain, drive_api
+    from tests.test_drive_api import FakeDriveService
+
+    fake_snapshot_path = tmp_path / "repo-would-be-here" / "brain-snapshot.db"
+    monkeypatch.setattr(brain, "SNAPSHOT_PATH", fake_snapshot_path)
+    monkeypatch.setattr(brain, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(drive_api, "get_service", lambda: FakeDriveService())
+
+    engine = _engine(tmp_path, monkeypatch)
+    publish_brief_via_api(engine, max_price=30.0)
+    assert not fake_snapshot_path.exists()
+
+
 def test_publish_via_api_end_to_end(tmp_path, monkeypatch):
     """The no-install path produces the same brief content as the
     folder-based path, delivered via the API instead of a synced folder."""
-    from stocksage import drive_api
+    from stocksage import brain, drive_api
     from tests.test_drive_api import FakeDriveService
 
+    monkeypatch.setattr(brain, "STATE_DIR", tmp_path / "state")
     engine = _engine(tmp_path, monkeypatch)
     svc = FakeDriveService()
     monkeypatch.setattr(drive_api, "get_service", lambda: svc)

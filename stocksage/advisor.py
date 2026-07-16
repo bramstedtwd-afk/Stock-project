@@ -352,7 +352,7 @@ def publish_brief(
     from datetime import date
     from pathlib import Path as _Path
 
-    from .brain import ROUTINE_PATH, write_snapshot
+    from .brain import ROUTINE_PATH, export_brain
 
     out_dir = _Path(folder).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -371,9 +371,13 @@ def publish_brief(
         shutil.copyfile(ROUTINE_PATH, dest)
         written.append(str(dest))
     if include_snapshot:
-        snap = write_snapshot(db_path=engine.db.path)
+        # Export straight to the Drive folder — NOT via write_snapshot(),
+        # which targets the repo-tracked brain/brain-snapshot.db. That path
+        # is for the deliberate, user-invoked `brain snapshot` git-sharing
+        # command; writing there on every automated publish run would dirty
+        # the repo constantly and permanently block `update`.
         dest = out_dir / "brain-snapshot.db"
-        shutil.copyfile(snap, dest)
+        export_brain(dest, db_path=engine.db.path)
         written.append(str(dest))
 
     return {"folder": str(out_dir), "written": written, "candidates": len(packet["candidates"])}
@@ -395,8 +399,9 @@ def publish_brief_via_api(
     never has to guess which of several dated files is current.
     """
     import json
+    from pathlib import Path as _Path
 
-    from .brain import ROUTINE_PATH, write_snapshot
+    from .brain import ROUTINE_PATH, STATE_DIR, export_brain
     from .drive_api import publish_via_api
 
     focus = tickers if tickers is not None else engine.db.watchlist()
@@ -404,7 +409,11 @@ def publish_brief_via_api(
         engine, tickers=focus, max_price=max_price, top=top, holdings=holdings
     )
     playbook_text = ROUTINE_PATH.read_text() if ROUTINE_PATH.exists() else ""
-    snap = write_snapshot(db_path=engine.db.path)
+    # Same reasoning as publish_brief: export outside the repo tree so an
+    # automated run never leaves the git working directory dirty.
+    snap = export_brain(
+        _Path(STATE_DIR) / "publish-snapshot.db", db_path=engine.db.path
+    )
     result = publish_via_api(json.dumps(packet, indent=2), playbook_text, snap)
     result["candidates"] = len(packet["candidates"])
     return result
