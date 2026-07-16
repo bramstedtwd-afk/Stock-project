@@ -202,13 +202,23 @@ freshest history.
   every weekday at 5:30pm even when nothing is open:
 
   ```bash
-  ./start.sh autopilot            # on   (Windows: start.bat autopilot)
-  ./start.sh autopilot status     # check
-  ./start.sh autopilot off        # stop
+  ./start.sh autopilot                       # learn every weekday 17:30
+  ./start.sh autopilot publish "<folder>"    # + supply the trading routine
+  ./start.sh autopilot status                # check both
+  ./start.sh autopilot off                   # stop everything
   ```
 
   Uses launchd on macOS, cron on Linux, Task Scheduler on Windows; output
-  goes to `~/.stocksage/daily.log`. The computer must be awake at run time.
+  goes to `~/.stocksage/daily.log` and `~/.stocksage/publish.log`. The
+  computer must be awake at run time.
+
+  **`autopilot publish "<folder>"`** is the hands-off trading bridge: every
+  weekday at 08:30 and 12:30 it mirrors your Robinhood fills into graded
+  calls, grades matured ones, and writes a fresh research brief into a
+  Google-Drive-synced folder — so your trading routine reads freshly-graded
+  research on every run with zero manual steps. Point `<folder>` at a
+  directory synced by Google Drive for Desktop (e.g.
+  `"G:\My Drive\StockSage"`).
 
 ### The learning loop (the point of the whole tool)
 

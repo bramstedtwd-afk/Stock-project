@@ -55,7 +55,8 @@ case "${1:-app}" in
     exec "$VENV_PY" -m stocksage.desktop "${1:-app}"
     ;;
   autopilot)
-    exec "$VENV_PY" -m stocksage.autopilot "${2:-on}"
+    shift
+    exec "$VENV_PY" -m stocksage.autopilot "${@:-on}"
     ;;
   update)
     exec "$VENV_PY" -m stocksage.update
