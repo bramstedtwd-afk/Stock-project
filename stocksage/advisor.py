@@ -48,7 +48,34 @@ SIGNAL_GLOSS = {
 }
 
 
-def _entry_from_suggestion(s, engine: Engine) -> dict:
+def _congress_watch(summary: dict, top: int = 8) -> list[dict]:
+    """Top tickers Congress is buying lately — brief-level context."""
+    from .congress import notable_buys
+
+    return [
+        {
+            "ticker": tk,
+            "members": summary[tk]["members"],
+            "net_buys": summary[tk]["net_buys"],
+            "last_date": summary[tk]["last_date"],
+        }
+        for tk in notable_buys(summary, top=top)
+    ]
+
+
+def _congress_note(summary: dict, ticker: str) -> dict | None:
+    info = summary.get(ticker)
+    if not info or info.get("net_buys", 0) <= 0:
+        return None
+    return {
+        "members": info["members"],
+        "net_buys": info["net_buys"],
+        "last_date": info["last_date"],
+        "est_amount": info["est_amount"],
+    }
+
+
+def _entry_from_suggestion(s, engine: Engine, congress: dict | None = None) -> dict:
     price = s.price
     atr_pct = s.risk.get("atr_pct")
     stop = target = None
@@ -81,6 +108,7 @@ def _entry_from_suggestion(s, engine: Engine) -> dict:
         "earnings_blackout": (
             s.earnings_days is not None and 0 <= s.earnings_days <= 3
         ),
+        "congress_buying": _congress_note(congress or {}, s.ticker),
         "size_hint_pct": round(s.position_fraction * 100, 1),
         "top_signals": [
             {"name": n, "value": round(v, 3), "meaning": SIGNAL_GLOSS.get(n, n)}
@@ -111,6 +139,7 @@ def build_brief(
     tickers: list[str] | None = None,
     max_price: float | None = None,
     top: int = 5,
+    congress_summary: dict | None = None,
 ) -> dict:
     """One research packet: verdicts on `tickers`, plus ranked candidates."""
     # Absorb any repo-carried brain snapshot first (idempotent; merges only
@@ -126,6 +155,15 @@ def build_brief(
             snapshot = {"error": "snapshot unreadable — continuing on local brain"}
     graded_now = engine.evaluate_pending()  # constant grading, every touchpoint
 
+    # Congressional-buying context (light tilt, never a mechanical signal).
+    if congress_summary is None:
+        try:
+            from .congress import CongressData
+
+            congress_summary = CongressData().summary()
+        except Exception:
+            congress_summary = {}
+
     result = engine.scan(capture_context=False, record=False)
     by_ticker = {s.ticker: s for s in result.suggestions}
 
@@ -138,7 +176,11 @@ def build_brief(
     focus = []
     for t in requested:
         s = by_ticker.get(t)
-        focus.append(_entry_from_suggestion(s, engine) if s else _degraded_entry(t, engine))
+        focus.append(
+            _entry_from_suggestion(s, engine, congress_summary)
+            if s
+            else _degraded_entry(t, engine)
+        )
 
     candidates = [
         s
@@ -158,8 +200,12 @@ def build_brief(
         "snapshot_absorbed": snapshot,
         "graded_this_call": graded_now,
         "market_mood": engine.sector_trends(),
+        "congress_watch": _congress_watch(congress_summary),
         "focus": focus,
-        "candidates": [_entry_from_suggestion(s, engine) for s in candidates[:top]],
+        "candidates": [
+            _entry_from_suggestion(s, engine, congress_summary)
+            for s in candidates[:top]
+        ],
         "avoid": [
             {"ticker": s.ticker, "verdict": s.action, "score": s.risk_adjusted_score}
             for s in avoid
@@ -239,13 +285,16 @@ def desktop_sync_cycle(engine: Engine, client=None) -> dict:
     from .robinhood import RobinhoodClient
 
     client = client or RobinhoodClient()
-    stats = {"synced": None, "fills_ingested": 0, "graded": 0}
+    stats = {"synced": None, "fills_ingested": 0, "graded": 0, "holdings": []}
     try:
         sync = client.sync_history(engine.db)
         if sync is not None:
             stats["synced"] = sync
             orders = [dict(r) for r in engine.db.rh_orders()]
             stats["fills_ingested"] = ingest_fills(engine, orders)["fills_ingested"]
+        portfolio = client.portfolio()
+        if portfolio is not None:
+            stats["holdings"] = [h.ticker for h in portfolio.holdings]
     except Exception as exc:  # never let a broker hiccup block grading/publish
         stats["sync_error"] = str(exc)
     stats["graded"] = engine.evaluate_pending()

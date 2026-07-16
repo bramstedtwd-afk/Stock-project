@@ -19,6 +19,7 @@ Output lands in ~/.stocksage/daily.log and ~/.stocksage/publish.log.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -28,8 +29,32 @@ LOG_FILE = Path("~/.stocksage/daily.log").expanduser()
 PUBLISH_LOG = Path("~/.stocksage/publish.log").expanduser()
 RUN_HOUR = 17
 RUN_MINUTE = 30
-# Local weekday times to publish fresh research (before open, midday).
-PUBLISH_TIMES = ((8, 30), (12, 30))
+
+
+def _parse_times(value: str | None, default: tuple[tuple[int, int], ...]):
+    """Parse 'HH:MM,HH:MM' into ((h,m),...); fall back to default on junk."""
+    if not value:
+        return default
+    out = []
+    for tok in value.split(","):
+        tok = tok.strip()
+        if ":" not in tok:
+            continue
+        h, _, m = tok.partition(":")
+        try:
+            out.append((int(h), int(m)))
+        except ValueError:
+            continue
+    return tuple(out) or default
+
+
+# Publish just BEFORE each routine run so every run reads fresh, freshly-graded
+# research. Defaults cover routine runs at 08:45, 10:00, 11:30, 13:00, 14:45.
+# Override with STOCKSAGE_PUBLISH_TIMES="08:30,09:45,11:15,12:45,14:30".
+PUBLISH_TIMES = _parse_times(
+    os.environ.get("STOCKSAGE_PUBLISH_TIMES"),
+    ((8, 30), (9, 45), (11, 15), (12, 45), (14, 30)),
+)
 
 LAUNCHD_LABEL = "local.stocksage.daily"
 LAUNCHD_PLIST = Path(f"~/Library/LaunchAgents/{LAUNCHD_LABEL}.plist").expanduser()

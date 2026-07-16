@@ -312,6 +312,11 @@ def cmd_brief(args) -> int:
                       "new entry on hold until after the print")
     if brief["avoid"]:
         print("\nAVOID: " + ", ".join(f"{a['ticker']} ({a['verdict']})" for a in brief["avoid"]))
+    if brief.get("congress_watch"):
+        cw = ", ".join(
+            f"{c['ticker']} ({c['members']} members)" for c in brief["congress_watch"][:6]
+        )
+        print(f"\nCONGRESS BUYING: {cw}")
     print(DISCLAIMER)
     return 0
 
@@ -348,8 +353,14 @@ def cmd_publish(args) -> int:
             f"(Captured {sync['fills_ingested']} new trades, "
             f"graded {sync['graded']} matured calls first.)"
         )
+    # The routine cares most about what it holds — always research those,
+    # merged with the watchlist and any tickers named explicitly.
+    focus = list(args.tickers or [])
+    for t in engine.db.watchlist() + sync.get("holdings", []):
+        if t not in focus:
+            focus.append(t)
     result = publish_brief(
-        engine, args.drive_folder, tickers=args.tickers or None, max_price=args.max_price
+        engine, args.drive_folder, tickers=focus or None, max_price=args.max_price
     )
     print(f"Published research to {result['folder']}:")
     for path in result["written"]:
@@ -372,6 +383,28 @@ def cmd_log_call(args) -> int:
         + (f" @ ${args.price:,.2f}" if args.price else "")
         + " — it will be graded automatically and feed the model's learning."
     )
+    return 0
+
+
+def cmd_congress(args) -> int:
+    from .congress import CongressData, notable_buys
+
+    summary = CongressData().summary()
+    if not summary:
+        print("No congressional-trade data available right now (source unreachable).")
+        return 0
+    tickers = notable_buys(summary, top=args.limit)
+    if not tickers:
+        print("No notable congressional buying in the recent window.")
+        return 0
+    print("\nWhere Congress is putting money (recent disclosed buys):")
+    print(f"{'TICKER':<8}{'MEMBERS':>8}{'NET BUYS':>10}{'~$ EST':>12}  LAST")
+    print("-" * 52)
+    for tk in tickers:
+        s = summary[tk]
+        print(f"{tk:<8}{s['members']:>8}{s['net_buys']:>10}{s['est_amount']:>12,}  "
+              f"{s['last_date']}")
+    print("\n(Context only — a tilt to weigh, not a mechanical signal.)\n")
     return 0
 
 
@@ -542,6 +575,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--price", type=float, help="executed or quoted price (else latest close)")
     p.add_argument("--note", help="one-line reasoning, kept in the learning log")
     p.set_defaults(func=cmd_log_call)
+
+    p = sub.add_parser("congress", help="where Congress is putting money lately")
+    p.add_argument("--limit", type=int, default=15)
+    p.set_defaults(func=cmd_congress)
 
     p = sub.add_parser("watch", help="manage the watchlist (extra tickers scanned daily)")
     p.add_argument("watch_action", choices=["add", "remove", "list"])

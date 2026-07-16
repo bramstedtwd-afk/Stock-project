@@ -42,7 +42,7 @@ rather than giving them instructions.
 `(none)`=app window · `web` · `phone` · `install` · `autopilot [off|status]` ·
 `update` · `doctor` · `daily` · `suggest [TICKERS]` · `sectors` · `portfolio` ·
 `moves` · `performance` · `profit` · `watch add|remove|list` ·
-`bootstrap` · `brain export|import|sync|info`
+`congress` · `bootstrap` · `brain export|import|sync|info`
 
 ## Trading-routine integration (stocksage/advisor.py)
 
