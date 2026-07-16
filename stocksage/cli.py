@@ -433,7 +433,8 @@ def cmd_congress(args) -> int:
 
     summary = CongressData().summary()
     if not summary:
-        print("No congressional-trade data available right now (source unreachable).")
+        print("Congress-buying tracking is currently disabled — no reliable free data "
+              "source is available (see stocksage/congress.py for details).")
         return 0
     tickers = notable_buys(summary, top=args.limit)
     if not tickers:

@@ -58,33 +58,14 @@ def test_summarize_and_notable():
     assert congress.notable_buys(summary) == ["NVDA"]
 
 
-def test_summary_defensive_on_bad_data(monkeypatch, tmp_path):
-    cd = congress.CongressData(cache_dir=tmp_path)
-    monkeypatch.setattr(cd, "_fetch", lambda url: (_ for _ in ()).throw(RuntimeError("boom")))
-    # _fetch raising is caught inside; transactions returns [] -> summary {}
-    monkeypatch.setattr(cd, "transactions", lambda: [])
+def test_congress_data_disabled_no_network():
+    """Regression: no maintained free source exists for this data anymore
+    (Stock Watcher dead since 2021, Finnhub/Quiver gate it behind a paid
+    plan), so CongressData must always report "no data" with zero network
+    calls — never hit a dead/paywalled endpoint on every scan."""
+    cd = congress.CongressData()
+    assert cd.transactions() == []
     assert cd.summary() == {}
-
-
-def test_dead_source_retried_once_per_ttl_not_every_call(tmp_path):
-    """Regression: a permanently unreachable feed (e.g. a dead S3 bucket)
-    must be retried at most once per TTL window, not on every single call —
-    the old behavior only cached successes, so a persistently dead source
-    hit the network (and logged a warning) on every scan, forever."""
-    cd = congress.CongressData(cache_dir=tmp_path)
-    calls = []
-
-    def failing_fetch(url):
-        calls.append(url)
-        return []  # simulates every real 403/network failure path
-
-    cd._fetch = failing_fetch
-    cd.transactions()
-    cd.transactions()
-    cd.transactions()
-    # Two URLs (house + senate) hit once, then served from the empty-result
-    # cache for every subsequent call within the TTL window.
-    assert len(calls) == 2
 
 
 def test_brief_includes_congress_context(monkeypatch):

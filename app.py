@@ -147,7 +147,7 @@ with st.sidebar:
     for tk, members in _congress_top():
         st.caption(f"· **{tk}** — {members} member(s) buying")
     if not _congress_top():
-        st.caption("_No recent data (or source unreachable)._")
+        st.caption("_Currently disabled — no reliable free data source is available._")
 
     if not binfo["shared"]:
         with st.expander("☁️ Share across your devices"):

@@ -109,12 +109,16 @@ read stays primary; the brief supplies memory the routine can't compute
 itself. Agreement → higher conviction, say so. Disagreement → must appear on
 the order card in plain English.
 
-**Congress tilt.** The brief includes `congress_watch` (tickers lawmakers
-have been buying lately) and per-name `congress_buying`. Treat it as a mild
+**Congress tilt (currently dormant).** The brief still includes
+`congress_watch` and per-name `congress_buying` fields, but as of 2026-07
+they'll always be empty/`null` — the free source that fed this went
+permanently dead and no free replacement exists yet. If they're ever
+non-empty again (a data source got wired back in), treat it as a mild
 positive tilt — congressional buying has historically preceded strong
 returns — but never as a standalone reason: it only reinforces a setup the
 technicals and the brain already like. Mention it on the card when it
-supports a name ("Congress has been buying this — N members in 90d").
+supports a name ("Congress has been buying this — N members in 90d"). Don't
+flag its current absence as an error each run; it's expected.
 
 **Grading is automatic — you don't manage it.** Every order the owner
 confirms becomes a real Robinhood fill; the desktop mirrors those fills and

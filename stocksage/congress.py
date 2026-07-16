@@ -2,39 +2,25 @@
 
 Members of Congress disclose their stock trades (STOCK Act), and their
 aggregate returns have historically outpaced the market, so recent
-congressional *buying* is a useful contextual tilt — not a mechanical
-signal. This module keeps it deliberately light: pull recent disclosures
-from a free public source, aggregate net buying per ticker over a lookback
-window, and surface the notable names as context in the research brief. It
-never overrides the technical/graded model; it's one more lens the routine
-can weigh.
+congressional *buying* would be a useful contextual tilt — not a mechanical
+signal, never something that overrides the technical/graded model.
 
-Data: the public House/Senate Stock Watcher JSON dumps (no key required).
-Everything is cached and fully defensive — an unreachable or reshaped feed
-degrades to "no congress data", never an error.
+Disabled as of 2026-07: the free source this used to read (the House/Senate
+Stock Watcher JSON mirrors, including its GitHub-hosted copy) has been dead
+since March 2021, and the alternatives checked since — Finnhub, Quiver
+Quantitative — gate this specific dataset behind a paid plan. Rather than
+hit a dead endpoint on every scan, `CongressData` now always reports "no
+data" with zero network calls. The aggregation helpers below (`normalize`,
+`summarize`, `notable_buys`) are kept because they're source-agnostic —
+wiring in a real feed later is just implementing `CongressData.transactions`
+again.
 """
 
 from __future__ import annotations
 
-import json
-import logging
 import re
-import time
-import urllib.request
 from datetime import date, datetime, timedelta
-from pathlib import Path
 
-log = logging.getLogger(__name__)
-
-HOUSE_URL = (
-    "https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json"
-)
-SENATE_URL = (
-    "https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregate/"
-    "all_transactions.json"
-)
-DEFAULT_CACHE_DIR = Path("~/.stocksage/cache")
-CACHE_TTL_SECONDS = 24 * 3600  # disclosures move slowly; refresh daily
 LOOKBACK_DAYS = 90
 
 
@@ -148,43 +134,15 @@ def notable_buys(summary: dict[str, dict], min_buys: int = 2, top: int = 10) -> 
 
 
 class CongressData:
-    """Cached, defensive access to the congressional-trade summary."""
+    """No live source currently available (see module docstring).
 
-    def __init__(self, cache_dir: str | Path | None = None, ttl: int = CACHE_TTL_SECONDS):
-        self.cache_dir = Path(cache_dir or DEFAULT_CACHE_DIR).expanduser()
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.ttl = ttl
-
-    def _fetch(self, url: str) -> list[dict]:
-        try:
-            with urllib.request.urlopen(url, timeout=20) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            return data if isinstance(data, list) else []
-        except Exception as exc:
-            log.warning("congress fetch failed (%s): %s", url, exc)
-            return []
+    Kept as the stable entry point every call site already uses, so wiring
+    in a real feed later is a one-method change here — nothing upstream
+    needs to move.
+    """
 
     def transactions(self) -> list[dict]:
-        cache = self.cache_dir / "congress_transactions.json"
-        if cache.exists() and time.time() - cache.stat().st_mtime < self.ttl:
-            try:
-                return json.loads(cache.read_text())
-            except Exception:
-                cache.unlink(missing_ok=True)
-        rows = normalize(self._fetch(HOUSE_URL)) + normalize(self._fetch(SENATE_URL))
-        # Cache the result even when empty (source unreachable or dead) so a
-        # persistent failure is retried once per TTL window, not on every
-        # single scan — without this, a permanently dead feed gets hit (and
-        # logs a warning) on every scheduled publish run, all day, forever.
-        try:
-            cache.write_text(json.dumps(rows))
-        except OSError:
-            pass
-        return rows
+        return []
 
     def summary(self, today: date | None = None) -> dict[str, dict]:
-        try:
-            return summarize(self.transactions(), today=today)
-        except Exception as exc:  # never let this break a scan or a brief
-            log.warning("congress summary failed: %s", exc)
-            return {}
+        return {}
