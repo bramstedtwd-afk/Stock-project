@@ -172,11 +172,14 @@ class CongressData:
             except Exception:
                 cache.unlink(missing_ok=True)
         rows = normalize(self._fetch(HOUSE_URL)) + normalize(self._fetch(SENATE_URL))
-        if rows:
-            try:
-                cache.write_text(json.dumps(rows))
-            except OSError:
-                pass
+        # Cache the result even when empty (source unreachable or dead) so a
+        # persistent failure is retried once per TTL window, not on every
+        # single scan — without this, a permanently dead feed gets hit (and
+        # logs a warning) on every scheduled publish run, all day, forever.
+        try:
+            cache.write_text(json.dumps(rows))
+        except OSError:
+            pass
         return rows
 
     def summary(self, today: date | None = None) -> dict[str, dict]:

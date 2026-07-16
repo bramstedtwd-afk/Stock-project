@@ -66,6 +66,27 @@ def test_summary_defensive_on_bad_data(monkeypatch, tmp_path):
     assert cd.summary() == {}
 
 
+def test_dead_source_retried_once_per_ttl_not_every_call(tmp_path):
+    """Regression: a permanently unreachable feed (e.g. a dead S3 bucket)
+    must be retried at most once per TTL window, not on every single call —
+    the old behavior only cached successes, so a persistently dead source
+    hit the network (and logged a warning) on every scan, forever."""
+    cd = congress.CongressData(cache_dir=tmp_path)
+    calls = []
+
+    def failing_fetch(url):
+        calls.append(url)
+        return []  # simulates every real 403/network failure path
+
+    cd._fetch = failing_fetch
+    cd.transactions()
+    cd.transactions()
+    cd.transactions()
+    # Two URLs (house + senate) hit once, then served from the empty-result
+    # cache for every subsequent call within the TTL window.
+    assert len(calls) == 2
+
+
 def test_brief_includes_congress_context(monkeypatch):
     from stocksage import universe
 
