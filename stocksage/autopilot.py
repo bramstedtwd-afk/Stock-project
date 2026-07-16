@@ -1,9 +1,12 @@
 """Autopilot: learn and publish research on a schedule, hands-off.
 
-    python -m stocksage.autopilot on            schedule the daily learn cycle
-    python -m stocksage.autopilot publish DIR   also publish research to DIR
-    python -m stocksage.autopilot off           remove all schedules
-    python -m stocksage.autopilot status        what's scheduled?
+    python -m stocksage.autopilot on              schedule the daily learn cycle
+    python -m stocksage.autopilot publish DIR     publish to a Drive-synced folder
+    python -m stocksage.autopilot publish-drive   publish via Drive's API directly
+                                                   (no desktop app, no admin rights —
+                                                   for locked-down/managed machines)
+    python -m stocksage.autopilot off             remove all schedules
+    python -m stocksage.autopilot status          what's scheduled?
 
 Registers jobs with the operating system's own scheduler — launchd on macOS,
 cron on Linux, Task Scheduler on Windows — Monday-Friday, at whatever local
@@ -138,15 +141,22 @@ def schtasks_create_cmd() -> list[str]:
 
 # --- publish job content builders (unit-tested) ---------------------------------
 
-def publish_cron_lines(folder: str) -> list[str]:
+def _publish_subcommand(folder: str | None) -> str:
+    """'publish "<folder>"' for the synced-folder path, or 'publish-drive'
+    for the no-install, direct-API path when folder is None."""
+    return f'publish "{folder}"' if folder else "publish-drive"
+
+
+def publish_cron_lines(folder: str | None = None) -> list[str]:
+    sub = _publish_subcommand(folder)
     return [
-        f'{m} {h} * * 1-5 "{PROJECT_ROOT}/start.sh" publish "{folder}"'
+        f'{m} {h} * * 1-5 "{PROJECT_ROOT}/start.sh" {sub}'
         f' >> "{PUBLISH_LOG}" 2>&1 {PUBLISH_CRON_TAG}'
         for h, m in PUBLISH_TIMES
     ]
 
 
-def publish_launchd_plist(folder: str) -> str:
+def publish_launchd_plist(folder: str | None = None) -> str:
     intervals = "\n".join(
         "    <dict>"
         f"<key>Weekday</key><integer>{d}</integer>"
@@ -156,6 +166,11 @@ def publish_launchd_plist(folder: str) -> str:
         for h, m in PUBLISH_TIMES
         for d in range(1, 6)
     )
+    args = (
+        f"    <string>publish</string>\n    <string>{folder}</string>"
+        if folder
+        else "    <string>publish-drive</string>"
+    )
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -164,8 +179,7 @@ def publish_launchd_plist(folder: str) -> str:
   <array>
     <string>/bin/bash</string>
     <string>{PROJECT_ROOT}/start.sh</string>
-    <string>publish</string>
-    <string>{folder}</string>
+{args}
   </array>
   <key>StartCalendarInterval</key>
   <array>
@@ -177,12 +191,13 @@ def publish_launchd_plist(folder: str) -> str:
 """
 
 
-def publish_schtasks_cmds(folder: str) -> list[list[str]]:
+def publish_schtasks_cmds(folder: str | None = None) -> list[list[str]]:
+    sub = _publish_subcommand(folder)
     return [
         [
             "schtasks", "/Create", "/F",
             "/TN", f"{PUBLISH_SCHTASK_NAME} {h:02d}{m:02d}",
-            "/TR", f'"{PROJECT_ROOT / "start.bat"}" publish "{folder}"',
+            "/TR", f'"{PROJECT_ROOT / "start.bat"}" {sub}',
             "/SC", "WEEKLY", "/D", "MON,TUE,WED,THU,FRI",
             "/ST", f"{h:02d}:{m:02d}",
         ]
@@ -252,14 +267,27 @@ def turn_on() -> int:
     return 0
 
 
-def turn_on_publish(folder: str) -> int:
-    folder_path = Path(folder).expanduser()
-    if not folder_path.parent.exists():
-        say(f"Parent of {folder_path} doesn't exist — create the folder first.")
-        return 1
-    folder_path.mkdir(parents=True, exist_ok=True)
+def turn_on_publish(folder: str | None) -> int:
+    """Schedule the publish job. `folder` is a Drive-synced directory for
+    the local-folder path; pass None for the direct-API path (no desktop
+    app, no folder needed — see stocksage/drive_api.py)."""
+    if folder:
+        folder_path = Path(folder).expanduser()
+        if not folder_path.parent.exists():
+            say(f"Parent of {folder_path} doesn't exist — create the folder first.")
+            return 1
+        folder_path.mkdir(parents=True, exist_ok=True)
+        folder = str(folder_path)
+    else:
+        from .drive_api import credentials_available
+
+        if not credentials_available():
+            say(
+                "Google Drive API isn't set up yet — see the README for the "
+                "one-time, no-install browser sign-in steps, then retry."
+            )
+            return 1
     PUBLISH_LOG.parent.mkdir(parents=True, exist_ok=True)
-    folder = str(folder_path)
     if sys.platform == "darwin":
         PUBLISH_LAUNCHD_PLIST.parent.mkdir(parents=True, exist_ok=True)
         PUBLISH_LAUNCHD_PLIST.write_text(publish_launchd_plist(folder))
@@ -290,8 +318,12 @@ def turn_on_publish(folder: str) -> int:
         ):
             return 1
     times = ", ".join(f"{h:02d}:{m:02d}" for h, m in PUBLISH_TIMES)
-    say(f"Publish autopilot ON — research goes to {folder} every weekday at {times}.")
-    say("Make sure that folder is synced by Google Drive for Desktop so the routine sees it.")
+    if folder:
+        say(f"Publish autopilot ON — research goes to {folder} every weekday at {times}.")
+        say("Make sure that folder is synced by Google Drive for Desktop so the routine sees it.")
+    else:
+        say(f"Publish autopilot ON — research goes straight to Google Drive's API "
+            f"every weekday at {times}. No desktop app, no folder syncing.")
     return 0
 
 
@@ -369,8 +401,11 @@ def main(argv: list[str] | None = None) -> int:
     if mode == "publish":
         if len(args) < 2:
             say("Usage: autopilot publish <drive-synced-folder>")
+            say("(No folder to sync? Use: autopilot publish-drive — no install needed)")
             return 2
         return turn_on_publish(args[1])
+    if mode == "publish-drive":
+        return turn_on_publish(None)
     if mode in ("off", "uninstall"):
         return turn_off()
     if mode == "status":

@@ -213,12 +213,39 @@ freshest history.
   computer must be awake at run time.
 
   **`autopilot publish "<folder>"`** is the hands-off trading bridge: every
-  weekday at 08:30 and 12:30 it mirrors your Robinhood fills into graded
-  calls, grades matured ones, and writes a fresh research brief into a
-  Google-Drive-synced folder — so your trading routine reads freshly-graded
-  research on every run with zero manual steps. Point `<folder>` at a
-  directory synced by Google Drive for Desktop (e.g.
-  `"G:\My Drive\StockSage"`).
+  weekday (5 times, timed just ahead of a typical trading routine's runs)
+  it mirrors your Robinhood fills into graded calls, grades matured ones,
+  and writes a fresh research brief into a Google-Drive-synced folder — so
+  your trading routine reads freshly-graded research on every run with
+  zero manual steps. Point `<folder>` at a directory synced by Google
+  Drive for Desktop (e.g. `"G:\My Drive\StockSage"`).
+
+  **No admin rights / can't install Google Drive for Desktop?** Use
+  `./start.sh autopilot publish-drive` instead — it talks to Google
+  Drive's API directly from Python, with nothing installed beyond two
+  packages already in StockSage's own virtual environment. One-time
+  setup (all in a browser, no downloads):
+
+  1. Go to [console.cloud.google.com](https://console.cloud.google.com/),
+     create a project (free), then **APIs & Services → Library** →
+     enable the **Google Drive API**.
+  2. **APIs & Services → OAuth consent screen** → External → fill in an
+     app name and your email → save (you can leave it in "Testing" mode).
+  3. **APIs & Services → Credentials → Create Credentials → OAuth client
+     ID** → Application type: **Desktop app** → Create.
+  4. Click the download icon next to the new client → save the file as
+     `drive_credentials.json` in your `~/.stocksage/` folder (Windows:
+     `C:\Users\<you>\.stocksage\drive_credentials.json` — create the
+     folder if it doesn't exist).
+  5. Run `./start.sh publish-drive` once by hand — it opens your browser
+     for a one-time "Sign in with Google" consent, then never asks again.
+
+  From then on `./start.sh autopilot publish-drive` schedules the exact
+  same capture → grade → publish cycle, just delivered straight to Drive's
+  API instead of a synced folder. Everything lands in one "StockSage"
+  folder in your Drive, in three files that get updated in place each
+  run (no dated duplicates to clean up, no ambiguity about which is
+  current).
 
 ### The learning loop (the point of the whole tool)
 

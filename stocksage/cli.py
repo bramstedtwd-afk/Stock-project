@@ -342,25 +342,32 @@ def cmd_sync(args) -> int:
     return 0
 
 
-def cmd_publish(args) -> int:
-    from .advisor import desktop_sync_cycle, publish_brief
+def _sync_and_focus(engine, explicit_tickers):
+    """Capture+grade real trades, then build the ticker list the routine
+    cares about most: what it holds, plus the watchlist, plus anything
+    named explicitly. Shared by both publish paths."""
+    from .advisor import desktop_sync_cycle
 
-    engine = Engine()
-    # Capture every real trade + grade before publishing fresh research.
     sync = desktop_sync_cycle(engine)
     if sync["fills_ingested"] or sync["graded"]:
         print(
             f"(Captured {sync['fills_ingested']} new trades, "
             f"graded {sync['graded']} matured calls first.)"
         )
-    # The routine cares most about what it holds — always research those,
-    # merged with the watchlist and any tickers named explicitly.
-    focus = list(args.tickers or [])
+    focus = list(explicit_tickers or [])
     for t in engine.db.watchlist() + sync.get("holdings", []):
         if t not in focus:
             focus.append(t)
+    return sync, focus or None
+
+
+def cmd_publish(args) -> int:
+    from .advisor import publish_brief
+
+    engine = Engine()
+    sync, focus = _sync_and_focus(engine, args.tickers)
     result = publish_brief(
-        engine, args.drive_folder, tickers=focus or None, max_price=args.max_price,
+        engine, args.drive_folder, tickers=focus, max_price=args.max_price,
         holdings=sync.get("holdings"),
     )
     print(f"Published research to {result['folder']}:")
@@ -371,6 +378,27 @@ def cmd_publish(args) -> int:
         "If this folder is synced by Google Drive for Desktop, your routine "
         "can now read it. Schedule this alongside autopilot for fresh research each day."
     )
+    return 0
+
+
+def cmd_publish_drive(args) -> int:
+    from .advisor import publish_brief_via_api
+    from .drive_api import DriveNotConfigured
+
+    engine = Engine()
+    sync, focus = _sync_and_focus(engine, args.tickers)
+    try:
+        result = publish_brief_via_api(
+            engine, tickers=focus, max_price=args.max_price,
+            holdings=sync.get("holdings"),
+        )
+    except DriveNotConfigured as exc:
+        print(f"Not set up yet: {exc}")
+        return 1
+    print(f"Published directly to Google Drive ({result['candidates']} candidates):")
+    for name in result["files"]:
+        print(f"  · {name}  (in your Drive's StockSage folder)")
+    print("No desktop app or sync client involved — this went straight to Drive's API.")
     return 0
 
 
@@ -562,6 +590,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("tickers", nargs="*", help="focus tickers (default: your watchlist)")
     p.add_argument("--max-price", type=float)
     p.set_defaults(func=cmd_publish)
+
+    p = sub.add_parser(
+        "publish-drive",
+        help="push research straight to Google Drive's API — no desktop app, "
+        "no admin rights needed (one-time browser sign-in instead)",
+    )
+    p.add_argument("tickers", nargs="*", help="focus tickers (default: your watchlist)")
+    p.add_argument("--max-price", type=float)
+    p.set_defaults(func=cmd_publish_drive)
 
     p = sub.add_parser(
         "sync", help="capture real trades as graded calls + grade matured ones"

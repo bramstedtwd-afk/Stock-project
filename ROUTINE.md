@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v3, 2026-07-16)
+# Agentic Trading Routine — Playbook (v4, 2026-07-16)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from Google Drive (the most recently modified file titled "StockSage
@@ -52,8 +52,18 @@ path — never fail the run because one path is unavailable.
 
 **Path A — connector environment (this is the normal scheduled run: you
 have Google Drive + Robinhood, but no terminal/repo).**
-- At run start, read the freshest Drive file titled **"StockSage Brief"**
-  (most recent by date). It is a JSON research packet: `market_mood` by
+- At run start, find the research. Look for a Drive folder named
+  **"StockSage"**; inside it (or by title search if there's no folder):
+  - If a file named exactly **"StockSage Brief.json"** exists (no date in
+    the name), read that one — it's updated in place every publish, so it
+    is *always* current by construction.
+  - Otherwise, look for files whose names start with **"StockSage
+    Brief"** (older delivery style, one dated file per day) and use the
+    most recent by date/modified-time.
+  - Same rule for the playbook: prefer a file/doc named exactly
+    "StockSage Routine Playbook" (or ending .md) if present; it's kept
+    current automatically. Note in your report which one you found.
+- Either way it's a JSON research packet: `market_mood` by
   sector (may be empty if breadth data was unavailable — then just say so);
   a `focus` list and a ranked `candidates` list, each entry carrying
   `verdict`, an **`actionable`** boolean (the real go/no-go — see run
@@ -80,11 +90,15 @@ e.g. launched on the desktop).**
   grades matured calls first).
 - `python -m stocksage log-call TICKER ACTION --price P --note "reason"`
   for every decision, so it is graded at the horizon.
-- `python -m stocksage publish <drive-folder>` first captures every new
-  agentic fill as a graded call and grades matured ones, then writes a
-  fresh "StockSage Brief" (and this playbook + brain snapshot) into the
-  Drive-synced folder that Path A reads. Run it on a schedule (e.g. before
-  the open and midday) so every routine run reads freshly-graded research.
+- `python -m stocksage publish <drive-folder>` (needs Google Drive for
+  Desktop installed) or `python -m stocksage publish-drive` (no install —
+  talks to Drive's API directly, one-time browser sign-in only) first
+  captures every new agentic fill as a graded call and grades matured
+  ones, then writes a fresh brief + this playbook + a brain snapshot for
+  Path A to read. `publish-drive` updates one fixed-name file per item in
+  place; `publish` writes a dated file each day. Run either on a schedule
+  (`autopilot publish` / `autopilot publish-drive`) so every routine run
+  reads freshly-graded research.
 - `python -m stocksage sync` runs just the capture+grade step without
   publishing.
 

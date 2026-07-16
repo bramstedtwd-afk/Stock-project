@@ -1,6 +1,6 @@
 import json
 
-from stocksage.advisor import publish_brief
+from stocksage.advisor import publish_brief, publish_brief_via_api
 from stocksage.db import Database
 from stocksage.engine import Engine
 from tests.conftest import make_ohlcv
@@ -53,3 +53,23 @@ def test_publish_explicit_tickers(tmp_path, monkeypatch):
     packet = json.loads(brief_file.read_text())
     assert packet["focus"][0]["ticker"] == "WEAK"
     assert not (folder / "brain-snapshot.db").exists()
+
+
+def test_publish_via_api_end_to_end(tmp_path, monkeypatch):
+    """The no-install path produces the same brief content as the
+    folder-based path, delivered via the API instead of a synced folder."""
+    from stocksage import drive_api
+    from tests.test_drive_api import FakeDriveService
+
+    engine = _engine(tmp_path, monkeypatch)
+    svc = FakeDriveService()
+    monkeypatch.setattr(drive_api, "get_service", lambda: svc)
+
+    result = publish_brief_via_api(engine, max_price=30.0)
+    assert set(result["files"]) == {
+        "StockSage Brief.json", "StockSage Routine Playbook.md", "brain-snapshot.db"
+    }
+    brief_id = result["files"]["StockSage Brief.json"]
+    packet = json.loads(svc.db[brief_id]["content"])
+    assert packet["focus"][0]["ticker"] == "CHEAP"  # watchlist default, same as folder path
+    assert result["candidates"] >= 1

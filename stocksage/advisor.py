@@ -379,6 +379,37 @@ def publish_brief(
     return {"folder": str(out_dir), "written": written, "candidates": len(packet["candidates"])}
 
 
+def publish_brief_via_api(
+    engine: Engine,
+    tickers: list[str] | None = None,
+    max_price: float | None = None,
+    top: int = 8,
+    holdings: list[str] | None = None,
+) -> dict:
+    """Push research straight to Google Drive via the API — no desktop
+    sync client, no admin rights, nothing installed on the machine beyond
+    two Python packages already inside the virtual environment. Use this
+    when Google Drive for Desktop can't be installed (locked-down/managed
+    machine, no admin rights). See stocksage/drive_api.py for one-time
+    setup. Files are updated in place under fixed names, so the routine
+    never has to guess which of several dated files is current.
+    """
+    import json
+
+    from .brain import ROUTINE_PATH, write_snapshot
+    from .drive_api import publish_via_api
+
+    focus = tickers if tickers is not None else engine.db.watchlist()
+    packet = build_brief(
+        engine, tickers=focus, max_price=max_price, top=top, holdings=holdings
+    )
+    playbook_text = ROUTINE_PATH.read_text() if ROUTINE_PATH.exists() else ""
+    snap = write_snapshot(db_path=engine.db.path)
+    result = publish_via_api(json.dumps(packet, indent=2), playbook_text, snap)
+    result["candidates"] = len(packet["candidates"])
+    return result
+
+
 def log_call(
     engine: Engine,
     ticker: str,
