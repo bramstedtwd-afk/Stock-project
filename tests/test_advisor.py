@@ -40,6 +40,49 @@ def test_brief_structure_and_price_filter(engine):
     assert brief["model_stats"]["graded_calls"] == 0
 
 
+def test_dollar_sizing_makes_expensive_stocks_affordable(engine):
+    """Regression: a small account must not be structurally locked out of
+    good-but-expensive names. RICH (~$400/share) is unaffordable as even
+    one whole share against a small account's per-ticker cap, but must
+    still be actionable via a fractional dollar amount."""
+    buying_power = 80.0
+    brief = build_brief(engine, tickers=["RICH"], buying_power=buying_power)
+    rich = brief["focus"][0]
+    assert rich["verdict"] in ("BUY", "STRONG BUY")
+    assert rich["size_hint_dollars"] is not None
+    # The dollar size must respect the account's cap and never suggest
+    # spending more than what's available.
+    assert 0 < rich["size_hint_dollars"] <= buying_power
+    assert rich["size_hint_dollars"] == pytest.approx(
+        rich["size_hint_pct"] / 100 * buying_power, rel=0.01
+    )
+    # Fractional share count follows directly, well under 1 share.
+    assert rich["est_shares"] is not None
+    assert rich["est_shares"] < 1.0
+    assert rich["est_shares"] == pytest.approx(
+        rich["size_hint_dollars"] / rich["price"], abs=0.0001
+    )
+
+
+def test_dollar_sizing_absent_without_buying_power(engine):
+    """No account balance known -> only the percentage hint, no dollar
+    figure invented from nothing."""
+    brief = build_brief(engine, tickers=["RICH"])
+    rich = brief["focus"][0]
+    assert rich["size_hint_dollars"] is None
+    assert rich["est_shares"] is None
+    assert rich["size_hint_pct"] > 0  # percentage still available
+
+
+def test_dollar_sizing_zero_for_non_actionable_names(engine):
+    """A name with no suggested position (e.g. a HOLD/SELL) gets no
+    dollar size, even when buying_power is known."""
+    brief = build_brief(engine, tickers=["WEAK"], buying_power=80.0)
+    weak = brief["focus"][0]
+    assert weak["verdict"] in ("SELL", "STRONG SELL", "HOLD")
+    assert weak["size_hint_dollars"] is None
+
+
 def test_brief_includes_model_record(engine):
     for i in range(6):
         sid = engine.db.record_suggestion("CHEAP", "BUY", 0.4, 8.0, {"x": 0.4}, 5)

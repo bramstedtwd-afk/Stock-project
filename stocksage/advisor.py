@@ -75,7 +75,9 @@ def _congress_note(summary: dict, ticker: str) -> dict | None:
     }
 
 
-def _entry_from_suggestion(s, engine: Engine, congress: dict | None = None) -> dict:
+def _entry_from_suggestion(
+    s, engine: Engine, congress: dict | None = None, buying_power: float | None = None
+) -> dict:
     price = s.price
     atr_pct = s.risk.get("atr_pct")
     stop = target = None
@@ -83,6 +85,17 @@ def _entry_from_suggestion(s, engine: Engine, congress: dict | None = None) -> d
         stop_dist = STOP_ATR_MULT * atr_pct
         stop = round(price * (1 - stop_dist), 2)
         target = round(price * (1 + REWARD_TO_RISK * stop_dist), 2)
+    # Dollar-based sizing: this is the number to actually act on. A $330
+    # stock and a $9 stock are equally buyable at $12 — sizing by whole
+    # shares is what makes expensive-but-good names look "unaffordable"
+    # on a small account when they're not. Fractional/dollar entries are
+    # the normal case here, not a fallback.
+    size_hint_dollars = None
+    est_shares = None
+    if buying_power and buying_power > 0 and s.position_fraction > 0:
+        size_hint_dollars = round(s.position_fraction * buying_power, 2)
+        if price and price > 0:
+            est_shares = round(size_hint_dollars / price, 4)
     ctx = engine._past_context(s.ticker)
     top_signals = sorted(s.signals.items(), key=lambda kv: -abs(kv[1]))[:3]
     earnings_blackout = s.earnings_days is not None and 0 <= s.earnings_days <= 3
@@ -117,6 +130,8 @@ def _entry_from_suggestion(s, engine: Engine, congress: dict | None = None) -> d
         "earnings_blackout": earnings_blackout,
         "congress_buying": _congress_note(congress or {}, s.ticker),
         "size_hint_pct": round(s.position_fraction * 100, 1),
+        "size_hint_dollars": size_hint_dollars,
+        "est_shares": est_shares,
         "top_signals": [
             {"name": n, "value": round(v, 3), "meaning": SIGNAL_GLOSS.get(n, n)}
             for n, v in top_signals
@@ -149,12 +164,19 @@ def build_brief(
     top: int = 5,
     congress_summary: dict | None = None,
     holdings: list[str] | None = None,
+    buying_power: float | None = None,
 ) -> dict:
     """One research packet: verdicts on `tickers`, plus ranked candidates.
 
     `holdings` (tickers currently held) makes the per-name `actionable` flag
     correct for sells — a SELL on a name you hold is actionable; a sell
     signal on something you don't hold is only an avoid.
+
+    `buying_power`, when known, turns each suggestion's abstract sizing
+    fraction into an actual dollar amount (`size_hint_dollars`) and share
+    count (`est_shares`) — the number to act on. Without it, only the
+    percentage (`size_hint_pct`) is available and the routine has to do
+    that math itself against its own account pull.
     """
     # Absorb any repo-carried brain snapshot first (idempotent; merges only
     # add), so a routine running in a fresh environment starts with the
@@ -202,7 +224,7 @@ def build_brief(
     for t in requested:
         s = by_ticker.get(t)
         focus.append(
-            _entry_from_suggestion(s, engine, congress_summary)
+            _entry_from_suggestion(s, engine, congress_summary, buying_power)
             if s
             else _degraded_entry(t, engine)
         )
@@ -228,7 +250,7 @@ def build_brief(
         "congress_watch": _congress_watch(congress_summary),
         "focus": focus,
         "candidates": [
-            _entry_from_suggestion(s, engine, congress_summary)
+            _entry_from_suggestion(s, engine, congress_summary, buying_power)
             for s in candidates[:top]
         ],
         "avoid": [
@@ -314,7 +336,10 @@ def desktop_sync_cycle(engine: Engine, client=None) -> dict:
     from .robinhood import RobinhoodClient
 
     client = client or RobinhoodClient()
-    stats = {"synced": None, "fills_ingested": 0, "graded": 0, "holdings": []}
+    stats = {
+        "synced": None, "fills_ingested": 0, "graded": 0,
+        "holdings": [], "buying_power": None,
+    }
     try:
         sync = client.sync_history(engine.db)
         if sync is not None:
@@ -324,6 +349,7 @@ def desktop_sync_cycle(engine: Engine, client=None) -> dict:
         portfolio = client.portfolio()
         if portfolio is not None:
             stats["holdings"] = [h.ticker for h in portfolio.holdings]
+            stats["buying_power"] = portfolio.buying_power
     except Exception as exc:  # never let a broker hiccup block grading/publish
         stats["sync_error"] = str(exc)
     stats["graded"] = engine.evaluate_pending()
@@ -339,6 +365,7 @@ def publish_brief(
     include_playbook: bool = True,
     include_snapshot: bool = True,
     holdings: list[str] | None = None,
+    buying_power: float | None = None,
 ) -> dict:
     """Write a fresh research packet into a folder for the routine to read.
 
@@ -359,7 +386,8 @@ def publish_brief(
 
     focus = tickers if tickers is not None else engine.db.watchlist()
     packet = build_brief(
-        engine, tickers=focus, max_price=max_price, top=top, holdings=holdings
+        engine, tickers=focus, max_price=max_price, top=top, holdings=holdings,
+        buying_power=buying_power,
     )
 
     brief_path = out_dir / f"StockSage Brief - {date.today().isoformat()}.json"
@@ -389,6 +417,7 @@ def publish_brief_via_api(
     max_price: float | None = None,
     top: int = 8,
     holdings: list[str] | None = None,
+    buying_power: float | None = None,
 ) -> dict:
     """Push research straight to Google Drive via the API — no desktop
     sync client, no admin rights, nothing installed on the machine beyond
@@ -406,7 +435,8 @@ def publish_brief_via_api(
 
     focus = tickers if tickers is not None else engine.db.watchlist()
     packet = build_brief(
-        engine, tickers=focus, max_price=max_price, top=top, holdings=holdings
+        engine, tickers=focus, max_price=max_price, top=top, holdings=holdings,
+        buying_power=buying_power,
     )
     playbook_text = ROUTINE_PATH.read_text() if ROUTINE_PATH.exists() else ""
     # Same reasoning as publish_brief: export outside the repo tree so an

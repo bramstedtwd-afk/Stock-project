@@ -60,7 +60,7 @@ ENTRY_FIELDS = {
     "ticker", "verdict", "actionable", "score", "price", "sector", "stop", "target",
     "reward_to_risk", "atr_pct", "annualized_vol", "model_record", "recent_shock",
     "events_12mo", "earnings_days", "earnings_blackout", "congress_buying",
-    "size_hint_pct", "top_signals", "notes",
+    "size_hint_pct", "size_hint_dollars", "est_shares", "top_signals", "notes",
 }
 
 
@@ -108,6 +108,30 @@ def test_candidates_are_all_actionable(brief):
         assert c["actionable"] is True
         assert c["verdict"] in ("BUY", "STRONG BUY")
         assert c["size_hint_pct"] > 0
+
+
+def test_candidates_get_dollar_sizing_when_buying_power_known(monkeypatch):
+    """Regression: a routine reading `candidates` must be able to size a
+    real order in dollars, not just a percentage it has to convert itself
+    (and a per-share price it might wrongly treat as an affordability gate).
+    Uses a high-priced fixture to match the real bug: a $300+ stock must
+    still come back with a small, affordable dollar amount."""
+    from stocksage import universe
+
+    frames = {
+        "PRICEY": make_ohlcv(days=250, start_price=310.0, daily_drift=0.004, seed=11),
+    }
+    monkeypatch.setattr(universe, "all_tickers", lambda: list(frames))
+    eng = Engine(db=Database(":memory:"), market=SimMarket(frames))
+    brief = build_brief(eng, tickers=["PRICEY"], buying_power=80.0, congress_summary={})
+    entry = brief["focus"][0]
+    assert entry["verdict"] in ("BUY", "STRONG BUY")
+    assert entry["actionable"] is True
+    assert entry["size_hint_dollars"] is not None
+    assert 0 < entry["size_hint_dollars"] <= 80.0
+    assert entry["est_shares"] < 1.0  # unaffordable as a whole share, fine fractionally
+    if brief["candidates"]:
+        assert brief["candidates"][0]["size_hint_dollars"] is not None
 
 
 def test_sell_actionability_depends_on_holdings(monkeypatch):

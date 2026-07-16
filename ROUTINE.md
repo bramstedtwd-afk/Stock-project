@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v4, 2026-07-16)
+# Agentic Trading Routine — Playbook (v5, 2026-07-16)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from Google Drive (the most recently modified file titled "StockSage
@@ -69,11 +69,13 @@ have Google Drive + Robinhood, but no terminal/repo).**
   `verdict`, an **`actionable`** boolean (the real go/no-go — see run
   step 8), `score`, `price`, ATR-based 2:1 `stop`/`target`, `model_record`
   (per-ticker reliability), `recent_shock`, `earnings_days` +
-  `earnings_blackout`, and `congress_buying`; an `avoid` list;
-  `congress_watch`; and `model_stats` (graded_calls, hit_rate,
-  paper_profit_factor, avg_return_per_call — all scale-free; there is no
-  dollar P&L because a fixed-stake figure would mislead next to a small
-  account).
+  `earnings_blackout`, `congress_buying`, and — when the account's buying
+  power is known — **`size_hint_dollars`** and **`est_shares`** (the actual
+  dollar amount and fractional share count to buy; see Capital below, this
+  is the number to act on, not `price`); an `avoid` list; `congress_watch`;
+  and `model_stats` (graded_calls, hit_rate, paper_profit_factor,
+  avg_return_per_call — all scale-free; there is no dollar P&L because a
+  fixed-stake figure would mislead next to a small account).
 - If the brief is missing or its date is older than the last trading day,
   treat research as **stale/offline** — say so in the report and proceed on
   your own live technical analysis. Its absence is a degraded run, never a
@@ -125,9 +127,20 @@ brain learns from reality on its own, every desktop sync.
 ## Capital
 
 Cash account — track settled vs. unsettled funds; never propose an order on
-unsettled proceeds. Expect 1 position at a time, maybe 2 — prefer
-lower-priced, liquid tickers with strong reasoning. Set `--max-price` ≈ the
-15% per-ticker cap in dollars.
+unsettled proceeds. Expect 1 position at a time, maybe 2.
+
+**Size every entry in DOLLARS, not whole shares.** At this account size
+(~$100), almost no entry will land on a whole share, and that is normal,
+not a workaround — do not treat a fractional entry as an exception case or
+a downgrade. Use the brief's `size_hint_dollars` directly as the amount to
+propose. If it's missing (buying power wasn't available when the brief was
+built), compute it yourself: `size_hint_pct × current buying power`. A
+stock's per-share `price` is NOT an affordability filter — a $9 stock and
+a $330 stock are equally buyable at $12. Do not exclude, downgrade, or
+avoid a good setup because one share costs more than the account. Do not
+set or rely on `--max-price` for this reason; it exists for other uses,
+not for gating candidates by affordability, since fractional sizing
+already handles that.
 
 ## Mandate
 
@@ -167,9 +180,14 @@ opposite — smaller or passed.
    decide stops/targets for anything missing one — the brief's ATR-based
    2:1 levels are the default, overridden with stated reasoning when the
    live picture demands.
-7. Single-share/fractional positions where a stop consumes the position:
-   decide the handling (watch-and-exit vs. cancel/replace), present with a
-   one-line reason.
+7. Fractional positions — the DEFAULT case at this account size, not a rare
+   exception — can't carry a real resting stop order. Default handling:
+   track ADVISORY stop/target levels yourself (state them plainly, e.g.
+   "advisory stop ~$389, target ~$408"), re-check them every run, and
+   propose a confirm-gated market sell the moment an advisory stop is
+   breached rather than leaving the position unprotected. This applies to
+   every fractional position, not just ones you happen to notice lack a
+   stop.
 8. Always surface the top 2–3 candidates — the brief's ranked list merged
    with Claude's own screening — each verdicted plainly: Actionable / Watch
    (what must happen first) / Pass (why, one sentence). **A name is only
@@ -220,8 +238,11 @@ for a plain confirm/pass, never guess.
 
 ## Order card format
 
+Dollar/fractional entry (the normal case at this account size):
+
 ```
-BUY 4 XYZ @ $6.42
+BUY ~$12.50 of XYZ (about 0.42 shares @ $29.80) — market order
+  (fractional buys execute at market on Robinhood; live quote just checked)
 Why: Price bounced off a support level today on unusually high buying
 volume, and the sector is green — that combination has been a decent
 short-term setup.
@@ -229,8 +250,22 @@ Research engine: agrees — scores it a buy; it has read this stock right 5
 of 7 times; no recent shocks on record.
   (If it disagrees: "Research engine leans the other way — here's why I'm
   overriding it: …")
+If it goes well: worth about $13.35 (+6.7%)
+If it goes badly: worth about $12.13 (-3.0%) — I'll watch this and sell
+  manually if it gets there (fractional shares can't carry a real stop)
+This risks about $0.37 to make about $0.85 (2.2-to-1)
+Uses: $12.50 of $80 available to trade today
+→ Confirm to execute, or pass
+```
+
+Whole-share entry (only when the sizing happens to land on ≥1 share):
+
+```
+BUY 4 XYZ @ $6.42 — limit order
+Why: [same structure as above]
 If it goes well: sell around $6.85 (+6.7%)
-If it goes badly: sell around $6.23 (-3.0%) to cap the loss
+If it goes badly: sell around $6.23 (-3.0%) — resting stop order goes in
+  immediately after this fills
 This risks about $1 to make about $2 (2.2-to-1)
 Uses: $25.68 of $80 available to trade today
 → Confirm to execute, or pass
@@ -238,15 +273,24 @@ Uses: $25.68 of $80 available to trade today
 
 ## Risk rules (non-negotiable, enforced automatically)
 
-- Max 15% of account per ticker.
+- Max 15% of account per ticker — enforced in DOLLARS via `size_hint_dollars`
+  (or `size_hint_pct × buying power`), not by whether a whole share fits.
 - Max 3 new positions per day across all runs.
 - Every entry has a stop and a target at ≥2:1 reward-to-risk (subject to
-  the single-share constraint above).
-- Stop order proposed immediately after any entry fills, same session.
+  the fractional-position handling below).
+- Order type: use a LIMIT order when the entry happens to land on a whole
+  share (or more). When the entry is fractional/dollar-sized — the normal
+  case at this account size — Robinhood only accepts MARKET orders for
+  fractional buys, so use a market order there. The live-quote
+  sanity-check already required before every proposal (run step 9) is the
+  safety net a limit price would otherwise provide; do not skip it.
+- Stop order proposed immediately after any WHOLE-SHARE entry fills, same
+  session. Fractional entries can't carry a resting stop order (Robinhood
+  doesn't support one on fractional shares) — see fractional handling
+  below instead.
 - Daily circuit breaker: realized + unrealized losses at 3% of account
   halts new proposals for the day; report plainly and stand down unasked.
-- No averaging down. No chasing an extended run without a pullback. Limit
-  orders only for entries.
+- No averaging down. No chasing an extended run without a pullback.
 - Model-reliability guardrail: proposing a name the engine has read poorly
   (<40% over 5+ graded calls) requires acknowledging that record on the
   card.

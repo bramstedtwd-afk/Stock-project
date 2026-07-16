@@ -269,10 +269,17 @@ def cmd_brief(args) -> int:
     import json as _json
 
     from .advisor import build_brief
+    from .robinhood import RobinhoodClient
 
     engine = Engine()
+    buying_power = None
+    if RobinhoodClient.credentials_available():
+        portfolio = RobinhoodClient().portfolio()
+        if portfolio is not None:
+            buying_power = portfolio.buying_power
     brief = build_brief(
-        engine, tickers=args.tickers or None, max_price=args.max_price, top=args.top
+        engine, tickers=args.tickers or None, max_price=args.max_price, top=args.top,
+        buying_power=buying_power,
     )
     if args.json:
         print(_json.dumps(brief, indent=2))
@@ -299,9 +306,15 @@ def cmd_brief(args) -> int:
                 f"record {rec['hit_rate']:.0%} over {rec['graded_calls']}"
                 if rec["hit_rate"] is not None else "no record yet"
             )
+            size_txt = (
+                f"  buy ~${e['size_hint_dollars']:,.2f} (~{e['est_shares']:g} sh)"
+                if e.get("size_hint_dollars")
+                else f"  size {e['size_hint_pct']}%"
+            )
             print(
                 f"  {e['ticker']:<7}{e['verdict']:<12}score {e['score']:+.2f}  "
-                f"${e['price']:,.2f}  stop {e['stop']}  target {e['target']}  ({rec_txt})"
+                f"${e['price']:,.2f}  stop {e['stop']}  target {e['target']}  "
+                f"({rec_txt}){size_txt}"
             )
             if e["recent_shock"]:
                 sh = e["recent_shock"]
@@ -368,7 +381,7 @@ def cmd_publish(args) -> int:
     sync, focus = _sync_and_focus(engine, args.tickers)
     result = publish_brief(
         engine, args.drive_folder, tickers=focus, max_price=args.max_price,
-        holdings=sync.get("holdings"),
+        holdings=sync.get("holdings"), buying_power=sync.get("buying_power"),
     )
     print(f"Published research to {result['folder']}:")
     for path in result["written"]:
@@ -390,7 +403,7 @@ def cmd_publish_drive(args) -> int:
     try:
         result = publish_brief_via_api(
             engine, tickers=focus, max_price=args.max_price,
-            holdings=sync.get("holdings"),
+            holdings=sync.get("holdings"), buying_power=sync.get("buying_power"),
         )
     except DriveNotConfigured as exc:
         print(f"Not set up yet: {exc}")
