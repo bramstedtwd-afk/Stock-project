@@ -74,14 +74,26 @@ e.g. launched on the desktop).**
   grades matured calls first).
 - `python -m stocksage log-call TICKER ACTION --price P --note "reason"`
   for every decision, so it is graded at the horizon.
-- `python -m stocksage publish --drive-folder <path>` writes a fresh
-  "StockSage Brief" file (and this playbook) into the Drive-synced folder
-  that Path A reads — this is how the desktop keeps the routine supplied.
+- `python -m stocksage publish <drive-folder>` first captures every new
+  agentic fill as a graded call and grades matured ones, then writes a
+  fresh "StockSage Brief" (and this playbook + brain snapshot) into the
+  Drive-synced folder that Path A reads. Run it on a schedule (e.g. before
+  the open and midday) so every routine run reads freshly-graded research.
+- `python -m stocksage sync` runs just the capture+grade step without
+  publishing.
 
 **Both paths:** use the research as evidence, not oracle. The live technical
 read stays primary; the brief supplies memory the routine can't compute
 itself. Agreement → higher conviction, say so. Disagreement → must appear on
 the order card in plain English.
+
+**Grading is automatic — you don't manage it.** Every order the owner
+confirms becomes a real Robinhood fill; the desktop mirrors those fills and
+turns each into a graded call (backdated, with that day's signals), scoring
+it against what price actually did. So the brief's per-ticker reliability
+and hit rate are built from the account's REAL trades, not self-reports.
+The routine's only logging duty is the narrative Drive log (below) — the
+brain learns from reality on its own, every desktop sync.
 
 ## Capital
 
@@ -97,6 +109,16 @@ technicals. Equities/ETFs only — no options, no crypto, no margin. Not
 required to find a trade every run; silence is fine, an unexplained run is
 not. Every conclusion research-backed: live technicals + catalysts + the
 brain's graded history, with the reasoning trail showing it.
+
+**Aggressive within the rails.** Be decisive: when the research and the live
+read agree on a genuine edge — especially on a name the brain has read
+correctly before — take the strongest setup available up to the caps, don't
+hedge it down to timidity. Aggression means conviction and full permitted
+size on high-quality, high-reliability setups; it NEVER means loosening a
+stop, skipping the 2:1 minimum, exceeding the caps, or chasing. The rails
+are what let you press good ideas hard: they cap the downside so conviction
+on the upside is safe. A poor-reliability name (per the brief) is the
+opposite — smaller or passed.
 
 ## Each run
 
@@ -132,7 +154,9 @@ brain's graded history, with the reasoning trail showing it.
 10. 3:15 PM run: default to exiting intraday positions before close unless
     there's a clearly stated reason to hold overnight — present the
     reasoning, don't ask permission to have one.
-11. End of run: `log-call` every decision, then write the Drive log entry.
+11. End of run: write the narrative Drive log entry (below). Grading of any
+    executed trades happens automatically on the desktop — no `log-call`
+    needed from a connector run; in Path B, `log-call` also records passes.
 
 ## Plain-English reporting (required every run)
 

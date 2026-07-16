@@ -313,10 +313,38 @@ def cmd_brief(args) -> int:
     return 0
 
 
-def cmd_publish(args) -> int:
-    from .advisor import publish_brief
+def cmd_sync(args) -> int:
+    from .advisor import desktop_sync_cycle
 
     engine = Engine()
+    stats = desktop_sync_cycle(engine)
+    if stats.get("sync_error"):
+        print(f"Robinhood sync skipped: {stats['sync_error']}")
+    elif stats["synced"]:
+        print(
+            f"Mirrored {stats['synced']['orders_total']} orders "
+            f"({stats['synced']['orders_added']} new)."
+        )
+    else:
+        print("Robinhood not linked — grading recorded calls only.")
+    print(
+        f"Captured {stats['fills_ingested']} new trades as graded calls, "
+        f"graded {stats['graded']} matured calls. The brain just got smarter."
+    )
+    return 0
+
+
+def cmd_publish(args) -> int:
+    from .advisor import desktop_sync_cycle, publish_brief
+
+    engine = Engine()
+    # Capture every real trade + grade before publishing fresh research.
+    sync = desktop_sync_cycle(engine)
+    if sync["fills_ingested"] or sync["graded"]:
+        print(
+            f"(Captured {sync['fills_ingested']} new trades, "
+            f"graded {sync['graded']} matured calls first.)"
+        )
     result = publish_brief(
         engine, args.drive_folder, tickers=args.tickers or None, max_price=args.max_price
     )
@@ -497,6 +525,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("tickers", nargs="*", help="focus tickers (default: your watchlist)")
     p.add_argument("--max-price", type=float)
     p.set_defaults(func=cmd_publish)
+
+    p = sub.add_parser(
+        "sync", help="capture real trades as graded calls + grade matured ones"
+    )
+    p.set_defaults(func=cmd_sync)
 
     p = sub.add_parser(
         "log-call", help="record a trading decision so the brain grades it later"

@@ -173,6 +173,80 @@ def build_brief(
     }
 
 
+def ingest_fills(engine: Engine, orders: list[dict], horizon_days: int = 5) -> dict:
+    """Turn actual executed orders into graded, weight-training brain calls.
+
+    This is how the routine's real behavior compounds into memory: every
+    filled buy/sell (from the Robinhood mirror) becomes a recorded call,
+    backdated to when it actually executed, with the technical signals as
+    they stood that day (no look-ahead). The normal grading loop then scores
+    it against what price did next — so per-ticker reliability, the learned
+    weights, and the profit ledger all learn from what you truly did, not
+    from self-reported intentions. Idempotent: each order is ingested once.
+    """
+    import pandas as pd
+
+    recorded = 0
+    for o in orders:
+        order_id = str(o.get("order_id") or "")
+        if not order_id or engine.db.fill_ingested(order_id):
+            continue
+        side = (o.get("side") or "").lower()
+        action = "BUY" if side == "buy" else "SELL" if side == "sell" else None
+        price = float(o.get("price") or 0)
+        ticker = (o.get("ticker") or "").upper()
+        executed_at = str(o.get("executed_at") or "").replace("Z", "+00:00")
+        if action is None or price <= 0 or not ticker or not executed_at:
+            continue
+
+        # Signals as they stood on the fill date (history sliced, no peeking).
+        signals: dict[str, float] = {}
+        df = engine.market.history(ticker)
+        if df is not None and not df.empty:
+            try:
+                as_of = pd.Timestamp(executed_at).tz_localize(None).normalize()
+                sliced = df.loc[:as_of]
+                feats = compute_features(sliced) if len(sliced) else None
+                if feats:
+                    signals = feats
+            except (ValueError, TypeError, KeyError):
+                signals = {}
+
+        direction = 1.0 if action == "BUY" else -1.0
+        sid = engine.db.record_suggestion(
+            ticker, action, round(direction * 0.35, 4), price, signals,
+            horizon_days, created_at=executed_at,
+        )
+        engine.db.mark_fill_ingested(order_id, sid)
+        recorded += 1
+    return {"fills_ingested": recorded}
+
+
+def desktop_sync_cycle(engine: Engine, client=None) -> dict:
+    """The full desktop-side heartbeat that keeps the brain current.
+
+    Pull the live Robinhood order/dividend history, turn any new fills into
+    graded calls, then grade everything matured. Run this before every
+    publish (and it's safe to run anytime) so the brain captures every real
+    trade automatically — "grading every single run". Robinhood being absent
+    degrades to just grading what's already recorded.
+    """
+    from .robinhood import RobinhoodClient
+
+    client = client or RobinhoodClient()
+    stats = {"synced": None, "fills_ingested": 0, "graded": 0}
+    try:
+        sync = client.sync_history(engine.db)
+        if sync is not None:
+            stats["synced"] = sync
+            orders = [dict(r) for r in engine.db.rh_orders()]
+            stats["fills_ingested"] = ingest_fills(engine, orders)["fills_ingested"]
+    except Exception as exc:  # never let a broker hiccup block grading/publish
+        stats["sync_error"] = str(exc)
+    stats["graded"] = engine.evaluate_pending()
+    return stats
+
+
 def publish_brief(
     engine: Engine,
     folder: str,
