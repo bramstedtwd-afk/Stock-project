@@ -23,12 +23,15 @@ combines them with its own live quotes.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from .engine import Engine
 from .indicators import compute_features
 from .learning import weighted_score
 from .profit import paper_trades, profit_stats
+
+log = logging.getLogger(__name__)
 
 BUYISH = ("BUY", "STRONG BUY")
 SELLISH = ("SELL", "STRONG SELL")
@@ -322,6 +325,32 @@ def ingest_fills(engine: Engine, orders: list[dict], horizon_days: int = 5) -> d
         engine.db.mark_fill_ingested(order_id, sid)
         recorded += 1
     return {"fills_ingested": recorded}
+
+
+def catch_up_from_drive(engine: Engine) -> dict | None:
+    """Pull whatever the brain last learned anywhere — another device, an
+    earlier stateless cloud run — from Drive and merge it in.
+
+    Merging only ever adds, so this is safe and idempotent. Call it before
+    grading or scanning so a machine with no local history at all (e.g. a
+    fresh cloud session with a brand-new empty database) starts smart
+    instead of from scratch. Returns merge stats, or None if Drive isn't
+    configured or nothing has been published there yet. Never raises — a
+    Drive hiccup must not block a run.
+    """
+    from .brain import STATE_DIR, import_brain
+    from .drive_api import DriveNotConfigured, pull_brain_snapshot
+
+    try:
+        pulled = pull_brain_snapshot(STATE_DIR / "drive-pull.db")
+    except DriveNotConfigured:
+        return None
+    except Exception as exc:
+        log.warning("Drive catch-up failed: %s", exc)
+        return None
+    if pulled is None:
+        return None
+    return import_brain(pulled, db_path=engine.db.path)
 
 
 def desktop_sync_cycle(engine: Engine, client=None) -> dict:

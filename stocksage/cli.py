@@ -256,6 +256,28 @@ def cmd_brain(args) -> int:
         print(f"Brain now lives at {target}")
         print("Run the same command with the same folder on your other devices —")
         print("they will all share this one brain.")
+    elif args.brain_action == "pull-drive":
+        from pathlib import Path
+
+        from .drive_api import DriveNotConfigured, pull_brain_snapshot
+
+        try:
+            pulled = pull_brain_snapshot(Path("~/.stocksage/drive-pull.db").expanduser())
+        except DriveNotConfigured as exc:
+            print(f"Not set up yet: {exc}")
+            return 1
+        if pulled is None:
+            print("No brain has been published to Drive yet — nothing to pull.")
+            return 0
+        stats = brain.import_brain(pulled)
+        print(
+            f"Pulled the shared brain from Drive and merged it in: "
+            f"+{stats['suggestions_added']} suggestions, "
+            f"+{stats['move_events_added']} move events, "
+            f"weights kept from the {stats['weights_taken_from']} brain "
+            "(the one that learned most recently). No Drive-for-Desktop "
+            "install needed — this is the same no-install API path as publish-drive."
+        )
     else:  # info
         info = brain.brain_info()
         print("\nBrain")
@@ -394,11 +416,26 @@ def cmd_publish(args) -> int:
     return 0
 
 
+def _pull_drive_brain(engine) -> None:
+    """Best-effort catch-up before grading or scanning — see
+    advisor.catch_up_from_drive for the mechanics. Silent no-op if Drive
+    isn't configured or has nothing new; never blocks the run."""
+    from .advisor import catch_up_from_drive
+
+    stats = catch_up_from_drive(engine)
+    if stats and (stats.get("suggestions_added") or stats.get("move_events_added")):
+        print(
+            f"(Caught up from Drive: +{stats['suggestions_added']} suggestions, "
+            f"+{stats['move_events_added']} move events.)"
+        )
+
+
 def cmd_publish_drive(args) -> int:
     from .advisor import publish_brief_via_api
     from .drive_api import DriveNotConfigured
 
     engine = Engine()
+    _pull_drive_brain(engine)
     sync, focus = _sync_and_focus(engine, args.tickers)
     try:
         result = publish_brief_via_api(
@@ -584,6 +621,11 @@ def build_parser() -> argparse.ArgumentParser:
     b.set_defaults(func=cmd_brain)
     b = brain_sub.add_parser("sync", help="keep the brain in a cloud-synced folder")
     b.add_argument("path", help="folder synced by Dropbox/iCloud/OneDrive/...")
+    b.set_defaults(func=cmd_brain)
+    b = brain_sub.add_parser(
+        "pull-drive",
+        help="pull the shared brain from Google Drive (no-install path) and merge it in",
+    )
     b.set_defaults(func=cmd_brain)
     b = brain_sub.add_parser("info", help="where the brain lives and what it knows")
     b.set_defaults(func=cmd_brain)

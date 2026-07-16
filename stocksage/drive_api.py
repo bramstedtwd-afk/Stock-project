@@ -20,11 +20,21 @@ ambiguity about which one is current, unlike the read/create-only
 connector tools used elsewhere in this project. Scope is deliberately
 narrow (`drive.file`): this app can only see files it created itself,
 never your other Drive contents.
+
+Headless machines (no browser at all, e.g. a scheduled cloud session):
+once a device has done the one-time browser sign-in above, its
+~/.stocksage/drive_token.json contains a refresh token that's good
+indefinitely. Copy that file's contents into the STOCKSAGE_DRIVE_TOKEN
+environment variable on the headless machine and get_service() seeds
+~/.stocksage/drive_token.json from it on first use — no browser, no
+drive_credentials.json needed there at all, since a valid token alone is
+enough to refresh itself.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -32,6 +42,7 @@ log = logging.getLogger(__name__)
 STATE_DIR = Path("~/.stocksage").expanduser()
 CREDENTIALS_PATH = STATE_DIR / "drive_credentials.json"
 TOKEN_PATH = STATE_DIR / "drive_token.json"
+TOKEN_ENV_VAR = "STOCKSAGE_DRIVE_TOKEN"
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 FOLDER_NAME = "StockSage"
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -47,14 +58,22 @@ def credentials_available() -> bool:
 
 def get_service():
     """Authenticated Drive API client, refreshing or requesting consent
-    as needed. Raises DriveNotConfigured with setup instructions if the
-    one-time OAuth client hasn't been downloaded yet."""
-    if not CREDENTIALS_PATH.exists():
-        raise DriveNotConfigured(
-            "No Google Drive API credentials found. One-time setup "
-            f"(no install required): see README, then save your OAuth "
-            f"client JSON as {CREDENTIALS_PATH}"
-        )
+    as needed. Raises DriveNotConfigured with setup instructions if
+    there's no way to get a working token.
+
+    On a headless machine with no token on disk yet, seeds one from the
+    STOCKSAGE_DRIVE_TOKEN environment variable if set — see module
+    docstring. drive_credentials.json is only required for the one-time
+    interactive browser consent; once a valid token exists (on disk or
+    seeded), it's never touched again.
+    """
+    if not TOKEN_PATH.exists():
+        seed = os.environ.get(TOKEN_ENV_VAR)
+        if seed:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            TOKEN_PATH.write_text(seed)
+            TOKEN_PATH.chmod(0o600)
+
     try:
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
@@ -73,6 +92,12 @@ def get_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
+            if not CREDENTIALS_PATH.exists():
+                raise DriveNotConfigured(
+                    "No Google Drive API credentials found. One-time setup "
+                    f"(no install required): see README, then save your OAuth "
+                    f"client JSON as {CREDENTIALS_PATH}"
+                )
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(CREDENTIALS_PATH), SCOPES
             )
@@ -125,6 +150,35 @@ def upload_or_update(
         service.files().create(body=meta, media_body=media, fields="id").execute()
     )
     return created["id"]
+
+
+def download_file(service, name: str, folder_id: str) -> bytes | None:
+    """Raw bytes of a file in the StockSage Drive folder, or None if no
+    file by that name has been published there yet."""
+    fid = find_file(service, name, parent_id=folder_id)
+    if fid is None:
+        return None
+    return service.files().get_media(fileId=fid).execute()
+
+
+def pull_brain_snapshot(dest_path: str | Path) -> Path | None:
+    """Download the shared brain-snapshot.db from Drive to dest_path.
+
+    Returns the local path it was saved to, or None if no snapshot has
+    been published to Drive yet (nothing to catch up on). Raises
+    DriveNotConfigured the same way every other Drive call does if
+    there's no way to authenticate — callers that want this to be
+    optional should catch that.
+    """
+    service = get_service()
+    folder_id = ensure_folder(service)
+    content = download_file(service, "brain-snapshot.db", folder_id)
+    if content is None:
+        return None
+    dest_path = Path(dest_path).expanduser()
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    dest_path.write_bytes(content)
+    return dest_path
 
 
 def _escape(name: str) -> str:

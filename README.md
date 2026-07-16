@@ -85,6 +85,22 @@ git clone <your-repo-url> && cd Stock-project
 ./start.sh brain import <file>    # or brain sync <folder>
 ```
 
+**No admin rights / can't install Dropbox, iCloud, OneDrive, or Google
+Drive for Desktop on this machine?** If you've already set up the [no-install
+Google Drive API path](#the-learning-loop-the-point-of-the-whole-tool) (see
+`publish-drive` below) on another device, the brain travels the exact same
+way, with nothing to install here either:
+
+```bash
+git clone <your-repo-url> && cd Stock-project
+./start.sh                        # sets itself up
+./start.sh brain pull-drive       # pulls the whole shared brain straight from Drive
+```
+
+One-time OAuth consent (the same browser popup as `publish-drive`'s setup)
+if this machine hasn't signed in before — after that it's one command, no
+installer, ever, on this machine.
+
 Robinhood credentials are deliberately **never** part of the brain — link
 Robinhood fresh on each device. `./start.sh brain info` shows where the
 brain lives and what it knows.
@@ -246,6 +262,38 @@ freshest history.
   folder in your Drive, in three files that get updated in place each
   run (no dated duplicates to clean up, no ambiguity about which is
   current).
+
+  **Running independent of any personal device (no computer needs to be
+  on):** `publish-drive` has no dependency on a locally-mounted folder, so
+  it can run from any machine that can reach the internet — including a
+  scheduled cloud session (a Claude Code Routine, a CI runner, any
+  headless box) that has no browser and no local `~/.stocksage/` history
+  of its own. Two things make that work, both already built in:
+
+  - **No browser needed there.** After doing the one-time browser consent
+    above on *any* device, copy that device's `~/.stocksage/drive_token.json`
+    contents into a `STOCKSAGE_DRIVE_TOKEN` environment variable on the
+    headless machine. `get_service()` seeds the token file from it on
+    first use and refreshes silently forever after — `drive_credentials.json`
+    is never needed there at all. (There's no dedicated secrets store on
+    most cloud-session platforms — env vars there are typically visible to
+    anyone who can edit that environment/session, so treat this token with
+    the same care as a password, and remember its `drive.file` scope means
+    it can only ever see files it created itself, nothing else in your Drive.)
+  - **No local brain history needed there either.** Every `publish-drive`
+    run first calls `brain pull-drive` internally — pulling whatever the
+    brain last learned anywhere (this device, another device, an earlier
+    cloud run) from Drive and merging it in before grading or scanning —
+    then re-publishes the merged, newly-updated brain back to Drive when
+    it's done. A totally fresh machine with an empty database starts smart
+    on its very first run, and every run anywhere keeps the one shared
+    brain moving forward together.
+
+  Robinhood credentials are **not** required on a headless publish-drive
+  machine — without them it just degrades to percentage-based position
+  sizing in the brief (the trading routine already knows to compute a
+  dollar amount itself from its own live buying power when that happens;
+  see `ROUTINE.md`). Only the Drive token needs to travel.
 
 ### The learning loop (the point of the whole tool)
 

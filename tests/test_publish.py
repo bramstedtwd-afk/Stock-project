@@ -1,6 +1,6 @@
 import json
 
-from stocksage.advisor import publish_brief, publish_brief_via_api
+from stocksage.advisor import catch_up_from_drive, publish_brief, publish_brief_via_api
 from stocksage.db import Database
 from stocksage.engine import Engine
 from tests.conftest import make_ohlcv
@@ -105,3 +105,61 @@ def test_publish_via_api_end_to_end(tmp_path, monkeypatch):
     packet = json.loads(svc.db[brief_id]["content"])
     assert packet["focus"][0]["ticker"] == "CHEAP"  # watchlist default, same as folder path
     assert result["candidates"] >= 1
+
+
+# --- catch_up_from_drive: how a stateless machine (fresh cloud session,
+# brand-new device) starts smart instead of from scratch ---
+
+def test_catch_up_from_drive_merges_when_snapshot_present(tmp_path, monkeypatch):
+    from googleapiclient.http import MediaFileUpload
+
+    from stocksage import brain, drive_api
+    from tests.test_drive_api import FakeDriveService
+
+    monkeypatch.setattr(brain, "STATE_DIR", tmp_path / "state")
+
+    # Simulate another machine's brain that already has a graded call.
+    source_db = tmp_path / "source.db"
+    src_engine = Engine(db=Database(source_db), market=FakeMarket({}))
+    sid = src_engine.db.record_suggestion("NVDA", "BUY", 0.4, 120.0, {"x": 0.4}, 5)
+    src_engine.db.mark_evaluated(sid, 0.05, True)
+    snap = brain.export_brain(tmp_path / "snap.db", db_path=source_db)
+
+    svc = FakeDriveService()
+    folder_id = drive_api.ensure_folder(svc)
+    media = MediaFileUpload(str(snap), mimetype="application/x-sqlite3")
+    svc.files().create(
+        body={"name": "brain-snapshot.db", "parents": [folder_id]},
+        media_body=media, fields="id",
+    ).execute()
+    monkeypatch.setattr(drive_api, "get_service", lambda: svc)
+
+    fresh_engine = Engine(db=Database(tmp_path / "fresh.db"), market=FakeMarket({}))
+    stats = catch_up_from_drive(fresh_engine)
+    assert stats is not None
+    assert stats["suggestions_added"] == 1
+    rows = fresh_engine.db.recent_suggestions()
+    assert rows[0]["ticker"] == "NVDA"
+
+
+def test_catch_up_from_drive_none_when_not_configured(tmp_path, monkeypatch):
+    from stocksage import brain, drive_api
+
+    monkeypatch.setattr(brain, "STATE_DIR", tmp_path / "state")
+
+    def _raise():
+        raise drive_api.DriveNotConfigured("nope")
+
+    monkeypatch.setattr(drive_api, "get_service", lambda: _raise())
+    engine = Engine(db=Database(tmp_path / "e.db"), market=FakeMarket({}))
+    assert catch_up_from_drive(engine) is None
+
+
+def test_catch_up_from_drive_none_when_nothing_published(tmp_path, monkeypatch):
+    from stocksage import brain, drive_api
+    from tests.test_drive_api import FakeDriveService
+
+    monkeypatch.setattr(brain, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(drive_api, "get_service", lambda: FakeDriveService())
+    engine = Engine(db=Database(tmp_path / "e.db"), market=FakeMarket({}))
+    assert catch_up_from_drive(engine) is None

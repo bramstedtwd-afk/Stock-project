@@ -67,6 +67,9 @@ class FakeFiles:
             self.db[fileId]["content"] = _content_of(media_body)
         return _Exec({"id": fileId})
 
+    def get_media(self, fileId):
+        return _Exec(self.db[fileId]["content"])
+
 
 class FakeDriveService:
     def __init__(self):
@@ -183,3 +186,86 @@ def test_credentials_available(tmp_path, monkeypatch):
 
 def test_escape_prevents_query_injection():
     assert drive_api._escape("it's a test") == "it\\'s a test"
+
+
+# --- download_file / pull_brain_snapshot ---
+
+def test_download_file_none_when_absent():
+    svc = FakeDriveService()
+    folder_id = drive_api.ensure_folder(svc)
+    assert drive_api.download_file(svc, "brain-snapshot.db", folder_id) is None
+
+
+def test_download_file_returns_uploaded_bytes():
+    svc = FakeDriveService()
+    folder_id = drive_api.ensure_folder(svc)
+    drive_api.upload_or_update(
+        svc, "brain-snapshot.db", "sqlite-bytes", "application/x-sqlite3", folder_id
+    )
+    assert drive_api.download_file(svc, "brain-snapshot.db", folder_id) == b"sqlite-bytes"
+
+
+def test_pull_brain_snapshot_downloads_when_present(tmp_path, monkeypatch):
+    svc = FakeDriveService()
+    monkeypatch.setattr(drive_api, "get_service", lambda: svc)
+    folder_id = drive_api.ensure_folder(svc)
+    drive_api.upload_or_update(
+        svc, "brain-snapshot.db", "the-brain", "application/x-sqlite3", folder_id
+    )
+
+    dest = tmp_path / "pulled" / "brain.db"
+    result = drive_api.pull_brain_snapshot(dest)
+    assert result == dest
+    assert dest.read_bytes() == b"the-brain"
+
+
+def test_pull_brain_snapshot_none_when_nothing_published(tmp_path, monkeypatch):
+    svc = FakeDriveService()
+    monkeypatch.setattr(drive_api, "get_service", lambda: svc)
+    assert drive_api.pull_brain_snapshot(tmp_path / "pulled.db") is None
+
+
+# --- headless env-var token seeding (no browser, e.g. a cloud session) ---
+
+def test_headless_seeding_from_env_var_needs_no_credentials_file(tmp_path, monkeypatch):
+    """A machine with STOCKSAGE_DRIVE_TOKEN set must authenticate without
+    ever touching drive_credentials.json — the whole point of headless
+    seeding is that a cloud session never runs the interactive flow."""
+    from google.oauth2.credentials import Credentials
+
+    monkeypatch.setattr(drive_api, "TOKEN_PATH", tmp_path / "drive_token.json")
+    monkeypatch.setattr(drive_api, "CREDENTIALS_PATH", tmp_path / "never-created.json")
+    monkeypatch.setenv(drive_api.TOKEN_ENV_VAR, '{"seeded": "token"}')
+
+    fake_creds = type("FakeCreds", (), {"valid": True, "expired": False, "refresh_token": None})()
+    monkeypatch.setattr(Credentials, "from_authorized_user_file", lambda *a, **k: fake_creds)
+    monkeypatch.setattr("googleapiclient.discovery.build", lambda *a, **k: "FAKE_SERVICE")
+
+    service = drive_api.get_service()
+    assert service == "FAKE_SERVICE"
+    assert drive_api.TOKEN_PATH.read_text() == '{"seeded": "token"}'
+    assert not drive_api.CREDENTIALS_PATH.exists()
+
+
+def test_headless_seeding_does_not_overwrite_an_existing_token(tmp_path, monkeypatch):
+    from google.oauth2.credentials import Credentials
+
+    token_path = tmp_path / "drive_token.json"
+    token_path.write_text('{"real": "token"}')
+    monkeypatch.setattr(drive_api, "TOKEN_PATH", token_path)
+    monkeypatch.setenv(drive_api.TOKEN_ENV_VAR, '{"seeded": "should-not-land"}')
+
+    fake_creds = type("FakeCreds", (), {"valid": True, "expired": False, "refresh_token": None})()
+    monkeypatch.setattr(Credentials, "from_authorized_user_file", lambda *a, **k: fake_creds)
+    monkeypatch.setattr("googleapiclient.discovery.build", lambda *a, **k: "FAKE_SERVICE")
+
+    drive_api.get_service()
+    assert token_path.read_text() == '{"real": "token"}'
+
+
+def test_no_token_no_env_var_no_credentials_raises_helpful_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(drive_api, "TOKEN_PATH", tmp_path / "no_token.json")
+    monkeypatch.setattr(drive_api, "CREDENTIALS_PATH", tmp_path / "no_creds.json")
+    monkeypatch.delenv(drive_api.TOKEN_ENV_VAR, raising=False)
+    with pytest.raises(drive_api.DriveNotConfigured, match="One-time setup"):
+        drive_api.get_service()
