@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v5, 2026-07-16)
+# Agentic Trading Routine — Playbook (v6, 2026-07-16)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from Google Drive (the most recently modified file titled "StockSage
@@ -6,6 +6,15 @@ Routine Playbook"); the desktop keeps that copy current by publishing this
 file every run. Improving the routine = editing this file; the next publish
 propagates it. The routine states at the top of each run which playbook
 version it loaded.
+
+**What changed in v6 (strategy tuning — mechanics unchanged):** posture is
+now to **split available cash across 2–3 names** rather than run one at a
+time; discovery is **"brain first, then scan wider"** (start from the
+brief's ranked candidates, then actively screen the broader market via the
+Robinhood scanners for fresh setups); per-ticker and daily caps were
+widened to match that more aggressive, fuller-deployment posture on this
+small test account. The confirm gate, 2:1 stops/targets, instrument scope,
+earnings blackout, and every other hard safety rule are untouched.
 
 ## 0. Hard rules (highest authority within this playbook)
 
@@ -79,7 +88,16 @@ have Google Drive + Robinhood, but no terminal/repo).**
 - If the brief is missing or its date is older than the last trading day,
   treat research as **stale/offline** — say so in the report and proceed on
   your own live technical analysis. Its absence is a degraded run, never a
-  halt.
+  halt. **The brief is a confidence layer, never a dependency:** your own
+  live research below runs every single time regardless of the brief's
+  state, so a stale or empty brief only removes graded memory, it never
+  weakens or blocks a run.
+- **Your live market data comes from the Robinhood connector, not the
+  brain.** Every run, pull live quotes, technical indicators, fundamentals,
+  the earnings calendar, price history, and the market scanners directly
+  from Robinhood — that is the current-context engine, fresh each run and
+  fully independent of the desktop. The brain's brief adds *memory and
+  grading* on top; Robinhood provides *now*.
 - You cannot run the Python engine or log calls to the brain directly from
   here. Instead, **log every decision (acted AND passed) into the Drive
   trading log** (see Logging) with enough structure that the desktop app
@@ -131,20 +149,29 @@ brain learns from reality on its own, every desktop sync.
 ## Capital
 
 Cash account — track settled vs. unsettled funds; never propose an order on
-unsettled proceeds. Expect 1 position at a time, maybe 2.
+unsettled proceeds.
+
+**Posture: split available cash across 2–3 names, deployed aggressively.**
+The goal on this test account is to put the available buying power to work
+across the 2–3 best setups each day, not to sit in cash or concentrate
+everything in one ticker. Target 2–3 concurrent positions. Size each so the
+top setups together deploy most of the settled cash, within the per-ticker
+cap (Risk rules). When only one name clears the bar, one is fine — quality
+before quota, never force a second name to hit a count. When three-plus
+clear, take the best 2–3 by conviction × reliability.
 
 **Size every entry in DOLLARS, not whole shares.** At this account size
 (~$100), almost no entry will land on a whole share, and that is normal,
 not a workaround — do not treat a fractional entry as an exception case or
-a downgrade. Use the brief's `size_hint_dollars` directly as the amount to
-propose. If it's missing (buying power wasn't available when the brief was
-built), compute it yourself: `size_hint_pct × current buying power`. A
-stock's per-share `price` is NOT an affordability filter — a $9 stock and
-a $330 stock are equally buyable at $12. Do not exclude, downgrade, or
-avoid a good setup because one share costs more than the account. Do not
-set or rely on `--max-price` for this reason; it exists for other uses,
-not for gating candidates by affordability, since fractional sizing
-already handles that.
+a downgrade. Use the brief's `size_hint_dollars` as a starting point, then
+size up toward the per-ticker cap when conviction and the live read are
+strong (that is what "aggressive" means here). If `size_hint_dollars` is
+missing (buying power wasn't available when the brief was built, or the
+brief is stale), compute the dollar amount yourself from the live buying
+power you pulled this run and the per-ticker cap. A stock's per-share
+`price` is NOT an affordability filter — a $9 stock and a $330 stock are
+equally buyable at $12. Do not exclude, downgrade, or avoid a good setup
+because one share costs more than the account.
 
 ## Mandate
 
@@ -153,6 +180,16 @@ technicals. Equities/ETFs only — no options, no crypto, no margin. Not
 required to find a trade every run; silence is fine, an unexplained run is
 not. Every conclusion research-backed: live technicals + catalysts + the
 brain's graded history, with the reasoning trail showing it.
+
+**Brain first, then scan wider (aggressive discovery).** Every run, start
+from the brief's ranked `candidates`/`focus` and your holdings + watchlist —
+then actively broaden: run the Robinhood market scanners for fresh movers,
+unusual volume, and strong-trend setups beyond that starting list. You are
+not limited to names the brain already knows; the brain gives you a
+high-confidence core, and the live scan surfaces what's moving right now.
+Fold new discoveries into the same verdict process (Actionable / Watch /
+Pass) as everything else. A name the brain has read well *and* the live
+scan confirms is the highest-conviction kind of setup — say so.
 
 **Aggressive within the rails.** Be decisive: when the research and the live
 read agree on a genuine edge — especially on a name the brain has read
@@ -200,12 +237,16 @@ opposite — smaller or passed.
    zero suggested size, or a sell on a name you don't hold) means Watch or
    Pass, never a proposal — state the reason from its `notes`. Names on the
    brief's `avoid` list likewise need an explicit stated reason to touch.
-9. Propose up to 1–2 new orders per run: review_equity_order first,
-   sanity-check simulated fill vs. live quote, then the order card and wait
-   for "confirm" / "pass". The only step that waits. Declined/unanswered =
+9. Propose up to 2–3 new orders per run toward the 2–3-name target:
+   review_equity_order first, sanity-check simulated fill vs. live quote,
+   then the order card and wait for "confirm" / "pass" on each. Placing an
+   order is the only step that waits for the user. When you have more than
+   one proposal in a run, present them as a short ranked stack (best first)
+   so a single "confirm the top two" is possible, but each still needs an
+   explicit confirm — never place an unconfirmed one. Declined/unanswered =
    dead, no re-pitch unless conditions materially change. Across the day's
-   multiple runs, honor the cumulative caps (max 3 new positions/day, the
-   3% circuit breaker) by reading the running total from the Drive log
+   multiple runs, honor the cumulative caps (max 4 new positions/day, the
+   6% circuit breaker) by reading the running total from the Drive log
    first — the caps are daily, not per-run.
 10. Market-hours awareness. If this run fires **before the market opens**
     (e.g. a pre-open morning run), do the full analysis and set the plan,
@@ -277,9 +318,13 @@ Uses: $25.68 of $80 available to trade today
 
 ## Risk rules (non-negotiable, enforced automatically)
 
-- Max 15% of account per ticker — enforced in DOLLARS via `size_hint_dollars`
-  (or `size_hint_pct × buying power`), not by whether a whole share fits.
-- Max 3 new positions per day across all runs.
+- Max 50% of account per ticker — enforced in DOLLARS against live buying
+  power, not by whether a whole share fits. This cap deliberately forces
+  the 2–3-name split: you cannot put the whole account in one ticker, so
+  full deployment always lands across at least two names. (Tunable: this is
+  the aggressive-posture number for the test account; lower it to
+  concentrate less.)
+- Max 4 new positions per day across all runs.
 - Every entry has a stop and a target at ≥2:1 reward-to-risk (subject to
   the fractional-position handling below).
 - Order type: use a LIMIT order when the entry happens to land on a whole
@@ -292,8 +337,10 @@ Uses: $25.68 of $80 available to trade today
   session. Fractional entries can't carry a resting stop order (Robinhood
   doesn't support one on fractional shares) — see fractional handling
   below instead.
-- Daily circuit breaker: realized + unrealized losses at 3% of account
+- Daily circuit breaker: realized + unrealized losses at 6% of account
   halts new proposals for the day; report plainly and stand down unasked.
+  (Tunable: widened from 3% for the aggressive posture; it halts NEW
+  proposals only, never forces a sale.)
 - No averaging down. No chasing an extended run without a pullback.
 - Model-reliability guardrail: proposing a name the engine has read poorly
   (<40% over 5+ graded calls) requires acknowledging that record on the
