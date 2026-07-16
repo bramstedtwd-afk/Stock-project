@@ -53,11 +53,17 @@ path — never fail the run because one path is unavailable.
 **Path A — connector environment (this is the normal scheduled run: you
 have Google Drive + Robinhood, but no terminal/repo).**
 - At run start, read the freshest Drive file titled **"StockSage Brief"**
-  (most recent by date). It is a JSON research packet: market mood by
-  sector; per requested ticker a verdict + ATR-based 2:1 stop/target;
-  ranked buy candidates under the price cap; an avoid list; per-ticker
-  model reliability; recent shocks with tagged reasons; overall model
-  stats (hit rate, paper profit factor).
+  (most recent by date). It is a JSON research packet: `market_mood` by
+  sector (may be empty if breadth data was unavailable — then just say so);
+  a `focus` list and a ranked `candidates` list, each entry carrying
+  `verdict`, an **`actionable`** boolean (the real go/no-go — see run
+  step 8), `score`, `price`, ATR-based 2:1 `stop`/`target`, `model_record`
+  (per-ticker reliability), `recent_shock`, `earnings_days` +
+  `earnings_blackout`, and `congress_buying`; an `avoid` list;
+  `congress_watch`; and `model_stats` (graded_calls, hit_rate,
+  paper_profit_factor, avg_return_per_call — all scale-free; there is no
+  dollar P&L because a fixed-stake figure would mislead next to a small
+  account).
 - If the brief is missing or its date is older than the last trading day,
   treat research as **stale/offline** — say so in the report and proceed on
   your own live technical analysis. Its absence is a degraded run, never a
@@ -150,17 +156,30 @@ opposite — smaller or passed.
 7. Single-share/fractional positions where a stop consumes the position:
    decide the handling (watch-and-exit vs. cancel/replace), present with a
    one-line reason.
-8. Always surface the top 2–3 candidates — brief's ranked list merged with
-   Claude's own screening — each verdicted plainly: Actionable / Watch
-   (what must happen first) / Pass (why, one sentence). Names on the
-   brief's avoid list need an explicit stated reason to be proposed anyway.
+8. Always surface the top 2–3 candidates — the brief's ranked list merged
+   with Claude's own screening — each verdicted plainly: Actionable / Watch
+   (what must happen first) / Pass (why, one sentence). **A name is only
+   proposable when its brief entry has `actionable: true`.** A `verdict` of
+   BUY is NOT enough on its own: `actionable: false` (earnings blackout,
+   zero suggested size, or a sell on a name you don't hold) means Watch or
+   Pass, never a proposal — state the reason from its `notes`. Names on the
+   brief's `avoid` list likewise need an explicit stated reason to touch.
 9. Propose up to 1–2 new orders per run: review_equity_order first,
    sanity-check simulated fill vs. live quote, then the order card and wait
    for "confirm" / "pass". The only step that waits. Declined/unanswered =
-   dead, no re-pitch unless conditions materially change.
-10. 3:15 PM run: default to exiting intraday positions before close unless
-    there's a clearly stated reason to hold overnight — present the
-    reasoning, don't ask permission to have one.
+   dead, no re-pitch unless conditions materially change. Across the day's
+   multiple runs, honor the cumulative caps (max 3 new positions/day, the
+   3% circuit breaker) by reading the running total from the Drive log
+   first — the caps are daily, not per-run.
+10. Market-hours awareness. If this run fires **before the market opens**
+    (e.g. a pre-open morning run), do the full analysis and set the plan,
+    but treat pre-market quotes as indicative only: any entry is a resting
+    limit order that fills after the open, and say so on the card. On the
+    **last scheduled run of the trading day**, default to deciding exits on
+    intraday positions before the close unless there's a clearly stated
+    reason to hold overnight — present the reasoning, don't ask permission
+    to have one. (Don't wait for a fixed clock time that may not have a run;
+    the last run of the day owns the close decision.)
 11. End of run: write the narrative Drive log entry (below). Grading of any
     executed trades happens automatically on the desktop — no `log-call`
     needed from a connector run; in Path B, `log-call` also records passes.

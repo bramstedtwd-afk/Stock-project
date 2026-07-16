@@ -360,7 +360,8 @@ def cmd_publish(args) -> int:
         if t not in focus:
             focus.append(t)
     result = publish_brief(
-        engine, args.drive_folder, tickers=focus or None, max_price=args.max_price
+        engine, args.drive_folder, tickers=focus or None, max_price=args.max_price,
+        holdings=sync.get("holdings"),
     )
     print(f"Published research to {result['folder']}:")
     for path in result["written"]:

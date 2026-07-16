@@ -85,9 +85,18 @@ def _entry_from_suggestion(s, engine: Engine, congress: dict | None = None) -> d
         target = round(price * (1 + REWARD_TO_RISK * stop_dist), 2)
     ctx = engine._past_context(s.ticker)
     top_signals = sorted(s.signals.items(), key=lambda kv: -abs(kv[1]))[:3]
+    earnings_blackout = s.earnings_days is not None and 0 <= s.earnings_days <= 3
+    # One unambiguous flag: can the routine act on this name right now?
+    if s.action in BUYISH:
+        actionable = s.position_fraction > 0 and not earnings_blackout
+    elif s.action in SELLISH:
+        actionable = s.owned_shares > 0  # you can only sell what you hold
+    else:
+        actionable = False
     return {
         "ticker": s.ticker,
         "verdict": s.action,
+        "actionable": actionable,
         "score": s.risk_adjusted_score,
         "price": round(price, 2) if price else None,
         "sector": s.sector,
@@ -105,9 +114,7 @@ def _entry_from_suggestion(s, engine: Engine, congress: dict | None = None) -> d
         "recent_shock": ctx.recent_event,
         "events_12mo": ctx.events_12mo,
         "earnings_days": s.earnings_days,
-        "earnings_blackout": (
-            s.earnings_days is not None and 0 <= s.earnings_days <= 3
-        ),
+        "earnings_blackout": earnings_blackout,
         "congress_buying": _congress_note(congress or {}, s.ticker),
         "size_hint_pct": round(s.position_fraction * 100, 1),
         "top_signals": [
@@ -124,6 +131,7 @@ def _degraded_entry(ticker: str, engine: Engine) -> dict:
         "ticker": ticker,
         "data": "unavailable",
         "verdict": None,
+        "actionable": False,  # no live data -> routine must use its own quote
         "model_record": {
             "graded_calls": ctx.graded_calls,
             "hit_rate": round(ctx.hit_rate, 3) if ctx.hit_rate is not None else None,
@@ -140,8 +148,14 @@ def build_brief(
     max_price: float | None = None,
     top: int = 5,
     congress_summary: dict | None = None,
+    holdings: list[str] | None = None,
 ) -> dict:
-    """One research packet: verdicts on `tickers`, plus ranked candidates."""
+    """One research packet: verdicts on `tickers`, plus ranked candidates.
+
+    `holdings` (tickers currently held) makes the per-name `actionable` flag
+    correct for sells — a SELL on a name you hold is actionable; a sell
+    signal on something you don't hold is only an avoid.
+    """
     # Absorb any repo-carried brain snapshot first (idempotent; merges only
     # add), so a routine running in a fresh environment starts with the
     # accumulated knowledge before grading and scanning.
@@ -164,13 +178,24 @@ def build_brief(
         except Exception:
             congress_summary = {}
 
-    result = engine.scan(capture_context=False, record=False)
+    portfolio = None
+    if holdings:
+        from .robinhood import Holding, Portfolio
+
+        portfolio = Portfolio(
+            holdings=[Holding(t.upper(), 1.0, 0.0, 0.0, 0.0) for t in holdings],
+            buying_power=0.0,
+        )
+
+    result = engine.scan(portfolio=portfolio, capture_context=False, record=False)
     by_ticker = {s.ticker: s for s in result.suggestions}
 
     requested = [t.strip().upper() for t in (tickers or []) if t.strip()]
     missing = [t for t in requested if t not in by_ticker]
     if missing:
-        extra = engine.scan(tickers=missing, capture_context=False, record=False)
+        extra = engine.scan(
+            tickers=missing, portfolio=portfolio, capture_context=False, record=False
+        )
         by_ticker.update({s.ticker: s for s in extra.suggestions})
 
     focus = []
@@ -218,7 +243,11 @@ def build_brief(
             "paper_profit_factor": round(ledger["profit_factor"], 2)
             if ledger["profit_factor"] is not None
             else None,
-            "paper_pnl": ledger["total_pnl"],
+            # Scale-free: avg return per call, not a dollar figure (a fixed-
+            # stake paper P&L would be meaningless next to a small account).
+            "avg_return_per_call": round(ledger["return_per_trade"], 4)
+            if ledger.get("return_per_trade") is not None
+            else None,
         },
         "scan_errors": len(result.errors),
     }
@@ -309,6 +338,7 @@ def publish_brief(
     top: int = 8,
     include_playbook: bool = True,
     include_snapshot: bool = True,
+    holdings: list[str] | None = None,
 ) -> dict:
     """Write a fresh research packet into a folder for the routine to read.
 
@@ -328,7 +358,9 @@ def publish_brief(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     focus = tickers if tickers is not None else engine.db.watchlist()
-    packet = build_brief(engine, tickers=focus, max_price=max_price, top=top)
+    packet = build_brief(
+        engine, tickers=focus, max_price=max_price, top=top, holdings=holdings
+    )
 
     brief_path = out_dir / f"StockSage Brief - {date.today().isoformat()}.json"
     brief_path.write_text(json.dumps(packet, indent=2))
