@@ -1,11 +1,11 @@
-# Agentic Trading Routine — Playbook (v2)
+# Agentic Trading Routine — Playbook (v3, 2026-07-16)
 
-This file is the routine's COMPLETE operating manual. The routine's stored
-instructions are only a loader that pulls this repo and reads this file
-fresh every run — so improving the routine = editing this file and pushing.
-The routine always executes whatever version it just pulled, and states at
-the top of each run report that the playbook was loaded fresh (and by which
-path).
+This is the routine's COMPLETE operating manual. The connector routine reads
+it from Google Drive (the most recently modified file titled "StockSage
+Routine Playbook"); the desktop keeps that copy current by publishing this
+file every run. Improving the routine = editing this file; the next publish
+propagates it. The routine states at the top of each run which playbook
+version it loaded.
 
 ## 0. Hard rules (highest authority within this playbook)
 
