@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -20,6 +21,13 @@ log = logging.getLogger(__name__)
 DEFAULT_CACHE_DIR = Path("~/.stocksage/cache")
 CACHE_TTL_SECONDS = 4 * 3600  # refresh price history at most every 4 hours
 HISTORY_PERIOD = "1y"
+
+
+def next_future_earnings(dates: list[str], today: date | None = None) -> str | None:
+    """The soonest earnings date on/after today from a list of ISO dates."""
+    ref = (today or date.today()).isoformat()
+    future = sorted(d[:10] for d in dates if d and d[:10] >= ref)
+    return future[0] if future else None
 
 
 def parse_news_items(raw: list, limit: int) -> list[dict]:
@@ -97,6 +105,24 @@ class MarketData:
         if df is None or df.empty:
             return None
         return float(df["Close"].iloc[-1])
+
+    # --- earnings calendar ---
+
+    def earnings_date(self, ticker: str, today: date | None = None) -> str | None:
+        """Next scheduled earnings date (ISO) at or after today, or None.
+
+        Best-effort from yfinance; any failure returns None so a scan is
+        never blocked by a missing/renamed calendar field.
+        """
+        try:
+            import yfinance as yf
+
+            df = yf.Ticker(ticker).get_earnings_dates(limit=12)
+            candidates = [str(idx.date()) for idx in df.index] if df is not None else []
+        except Exception as exc:
+            log.debug("earnings lookup failed for %s: %s", ticker, exc)
+            return None
+        return next_future_earnings(candidates, today)
 
     # --- news ---
 

@@ -210,6 +210,11 @@ Uses: $25.68 of $80 available to trade today
 - Model-reliability guardrail: proposing a name the engine has read poorly
   (<40% over 5+ graded calls) requires acknowledging that record on the
   card.
+- Earnings blackout: do not open a new position within 3 days of a name's
+  earnings print (a surprise can gap through the stop). The brief marks
+  such names `earnings_blackout: true` and drops them from candidates;
+  respect it. For a name you already hold into earnings, decide before the
+  print whether to hold through the risk or trim, and say which.
 
 ## Logging (two layers)
 

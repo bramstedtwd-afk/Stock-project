@@ -307,6 +307,9 @@ def cmd_brief(args) -> int:
                 sh = e["recent_shock"]
                 print(f"          shock {sh['date']}: {sh['return_pct']:+.1%} "
                       f"[{', '.join(sh['reasons'])}]")
+            if e.get("earnings_blackout"):
+                print(f"          ⚠ earnings in {e['earnings_days']} day(s) — "
+                      "new entry on hold until after the print")
     if brief["avoid"]:
         print("\nAVOID: " + ", ".join(f"{a['ticker']} ({a['verdict']})" for a in brief["avoid"]))
     print(DISCLAIMER)

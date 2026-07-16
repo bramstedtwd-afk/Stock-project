@@ -119,6 +119,24 @@ class Engine:
             events_12mo=events_12mo,
         )
 
+    def _days_to_earnings(self, ticker: str) -> int | None:
+        """Calendar days until the next earnings print, if the data source
+        exposes it. Never raises — earnings info is a bonus, not a dependency."""
+        getter = getattr(self.market, "earnings_date", None)
+        if getter is None:
+            return None
+        try:
+            iso = getter(ticker)
+        except Exception:
+            return None
+        if not iso:
+            return None
+        try:
+            edate = datetime.strptime(iso[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return None
+        return max(0, (edate - datetime.now(timezone.utc).date()).days)
+
     def weights_for(self, ticker: str, global_weights: dict[str, float]) -> dict[str, float]:
         """Effective weights for one name: global blended with its sector's."""
         sector = universe.sector_of(ticker)
@@ -189,6 +207,7 @@ class Engine:
                 sector=sector.name if sector else None,
                 owned_shares=owned,
                 past=self._past_context(ticker),
+                earnings_days=self._days_to_earnings(ticker),
             )
             result.suggestions.append(suggestion)
 

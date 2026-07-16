@@ -77,6 +77,10 @@ def _entry_from_suggestion(s, engine: Engine) -> dict:
         },
         "recent_shock": ctx.recent_event,
         "events_12mo": ctx.events_12mo,
+        "earnings_days": s.earnings_days,
+        "earnings_blackout": (
+            s.earnings_days is not None and 0 <= s.earnings_days <= 3
+        ),
         "size_hint_pct": round(s.position_fraction * 100, 1),
         "top_signals": [
             {"name": n, "value": round(v, 3), "meaning": SIGNAL_GLOSS.get(n, n)}
@@ -140,6 +144,7 @@ def build_brief(
         s
         for s in result.suggestions
         if s.action in BUYISH
+        and s.position_fraction > 0  # excludes earnings-blackout / zero-size names
         and (max_price is None or (s.price and s.price <= max_price))
     ]
     avoid = [s for s in result.suggestions if s.action in SELLISH][:top]

@@ -228,6 +228,8 @@ with tab_sugg:
                     c3.caption(f"Suggested size: {s.position_fraction:.0%} of cash")
                 if s.owned_shares:
                     c3.caption(f"You hold {s.owned_shares:g} shares")
+                if s.earnings_days is not None and 0 <= s.earnings_days <= 3:
+                    c3.caption(f"⚠ Earnings in {s.earnings_days}d")
                 with c4:
                     for note in s.notes:
                         st.caption(f"· {note}")
