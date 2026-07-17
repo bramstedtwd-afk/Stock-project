@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v7, 2026-07-17)
+# Agentic Trading Routine — Playbook (v8, 2026-07-17)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from the **"StockSage" Drive folder, file "StockSage Routine
@@ -7,6 +7,11 @@ Playbook.md" — exact folder + exact filename, never a bare title search**
 publishing this file every run. Improving the routine = editing this file;
 the next publish propagates it. The routine states at the top of each run
 which playbook version it loaded, straight from this file's own header.
+
+**What changed in v8:** the Drive log-upload step now verifies the file it
+just wrote and self-cleans the intermittent ~1-byte corrupt-upload (seen on
+runs v10–v12) instead of leaving stray junk files behind. No strategy
+change. See Logging.
 
 **What changed in v7:** fixed a real bug where the routine's old
 "most recently modified file titled…" search could match a stale duplicate
@@ -379,6 +384,19 @@ Uses: $25.68 of $80 available to trade today
    context, the brief's headline (mood, model hit rate, graded count),
    every decision with reasoning (acted and passed), fills, positions with
    plain verdicts, daily P&L, settled buying power, anomalies + resolutions.
+
+   **Known upload quirk — verify and self-clean (do this every run):** the
+   Drive create-file step intermittently lands the first attempt as a
+   corrupt ~1-byte file (observed on v10–v12). Do NOT leave that stray
+   behind. After writing the log: (a) read back the file you just created
+   and confirm its size is plausible (hundreds+ of bytes, and it actually
+   contains this run's text); (b) if it came back ~1 byte or empty,
+   **delete that stray file**, then re-create it — repeat up to 3 times;
+   (c) only the one verified good file may keep the vN+1 name — if a stray
+   already took that number, the good copy takes the next number and the
+   stray is deleted, so there is never more than one real file per version
+   and no 1-byte clutter accumulates. This is a routine self-heal, not an
+   anomaly to halt on.
 
 ## Invariants (hold in every run, every playbook version)
 
