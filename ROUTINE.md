@@ -1,11 +1,19 @@
-# Agentic Trading Routine — Playbook (v6, 2026-07-16)
+# Agentic Trading Routine — Playbook (v7, 2026-07-17)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
-it from Google Drive (the most recently modified file titled "StockSage
-Routine Playbook"); the desktop keeps that copy current by publishing this
-file every run. Improving the routine = editing this file; the next publish
-propagates it. The routine states at the top of each run which playbook
-version it loaded.
+it from the **"StockSage" Drive folder, file "StockSage Routine
+Playbook.md" — exact folder + exact filename, never a bare title search**
+(see Path A below for why). The desktop keeps that copy current by
+publishing this file every run. Improving the routine = editing this file;
+the next publish propagates it. The routine states at the top of each run
+which playbook version it loaded, straight from this file's own header.
+
+**What changed in v7:** fixed a real bug where the routine's old
+"most recently modified file titled…" search could match a stale duplicate
+elsewhere in Drive instead of the real, current file — it ran on playbook
+v5 when v6 was already live. Loading is now path-based (exact folder +
+exact filename) instead of title-search-based, which makes that entire bug
+class impossible, not just today's copies. No strategy change from v6.
 
 **What changed in v6 (strategy tuning — mechanics unchanged):** posture is
 now to **split available cash across 2–3 names** rather than run one at a
@@ -61,17 +69,27 @@ path — never fail the run because one path is unavailable.
 
 **Path A — connector environment (this is the normal scheduled run: you
 have Google Drive + Robinhood, but no terminal/repo).**
-- At run start, find the research. Look for a Drive folder named
-  **"StockSage"**; inside it (or by title search if there's no folder):
-  - If a file named exactly **"StockSage Brief.json"** exists (no date in
-    the name), read that one — it's updated in place every publish, so it
-    is *always* current by construction.
-  - Otherwise, look for files whose names start with **"StockSage
-    Brief"** (older delivery style, one dated file per day) and use the
-    most recent by date/modified-time.
-  - Same rule for the playbook: prefer a file/doc named exactly
-    "StockSage Routine Playbook" (or ending .md) if present; it's kept
-    current automatically. Note in your report which one you found.
+- At run start, find the research. **Locate the "StockSage" folder in Drive
+  first, then only look for files INSIDE that folder** — never a bare
+  title search across all of Drive. Drive can accumulate stray files with
+  similar titles outside that folder (old test artifacts, duplicates from a
+  since-abandoned delivery method); a title-only search can match one of
+  those by mistake and silently load stale or wrong data. A path match
+  (folder + exact filename) cannot make that mistake.
+  - Inside the "StockSage" folder, the file named **exactly
+    "StockSage Brief.json"** is the research packet — it's updated in
+    place every publish, so it is *always* current by construction. If
+    it isn't there, research is unavailable this run — do not substitute
+    any other file found by title search; treat it as stale/offline
+    (below) instead.
+  - Same rule for the playbook: the file **exactly** named
+    "StockSage Routine Playbook.md" inside that same folder is the one
+    kept current automatically. If a search surfaces anything else with
+    a similar title (a Google Doc without the .md extension, a copy
+    outside the folder, an older dated version) — ignore it, it is stale
+    by definition; only the exact in-folder `.md` file is authoritative.
+    State the playbook version you loaded from the file's own header at
+    the top of your report, so a wrong load is visible immediately.
 - Either way it's a JSON research packet: `market_mood` by
   sector (may be empty if breadth data was unavailable — then just say so);
   a `focus` list and a ranked `candidates` list, each entry carrying
