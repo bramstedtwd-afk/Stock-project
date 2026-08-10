@@ -54,6 +54,37 @@ def drop_partial_bar(df: pd.DataFrame, now: datetime | None = None) -> pd.DataFr
     return df
 
 
+def _calendar_earnings_dates(calendar) -> list[str]:
+    """ISO dates out of yfinance's `.calendar`, across its shapes.
+
+    Newer yfinance returns a dict {"Earnings Date": [date, ...]}; older
+    versions returned a DataFrame with an "Earnings Date" row. Anything
+    unrecognizable yields nothing rather than raising.
+    """
+    if isinstance(calendar, dict):
+        raw = calendar.get("Earnings Date")
+    elif calendar is not None:
+        try:
+            raw = list(calendar.loc["Earnings Date"])
+        except Exception:
+            return []
+    else:
+        return []
+    if raw is None:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raw = [raw]
+    out = []
+    for value in raw:
+        if value is None:
+            continue
+        try:
+            out.append(str(pd.Timestamp(value).date()))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def next_future_earnings(dates: list[str], today: date | None = None) -> str | None:
     """The soonest earnings date on/after today from a list of ISO dates."""
     ref = (today or date.today()).isoformat()
@@ -206,14 +237,36 @@ class MarketData:
         return value
 
     def _fetch_earnings_date(self, ticker: str, today: date | None = None) -> str | None:
+        """Next earnings date from yfinance, trying both sources it exposes.
+
+        `get_earnings_dates` returns an empty frame on some yfinance versions
+        without raising, which silently disabled the earnings blackout — the
+        calendar looked like "no earnings scheduled" rather than "broken". The
+        `.calendar` property is populated in those cases, so fall through to it
+        rather than trusting a single source.
+        """
         try:
             import yfinance as yf
 
-            df = yf.Ticker(ticker).get_earnings_dates(limit=12)
-            candidates = [str(idx.date()) for idx in df.index] if df is not None else []
+            handle = yf.Ticker(ticker)
         except Exception as exc:
             log.debug("earnings lookup failed for %s: %s", ticker, exc)
             return None
+
+        candidates: list[str] = []
+        try:
+            df = handle.get_earnings_dates(limit=12)
+            if df is not None and len(df):
+                candidates = [str(idx.date()) for idx in df.index]
+        except Exception as exc:
+            log.debug("get_earnings_dates failed for %s: %s", ticker, exc)
+
+        if not candidates:
+            try:
+                candidates = _calendar_earnings_dates(handle.calendar)
+            except Exception as exc:
+                log.debug("calendar lookup failed for %s: %s", ticker, exc)
+
         return next_future_earnings(candidates, today)
 
     # --- news ---

@@ -82,3 +82,44 @@ def test_earnings_cache_tolerates_the_older_flat_format(tmp_path):
     md = MarketData(cache_dir=tmp_path)
     (tmp_path / "earnings_dates.json").write_text(json.dumps({"AAPL": "2026-07-30"}))
     assert md.earnings_date("AAPL") == "2026-07-30"
+
+
+def test_calendar_fallback_handles_both_yfinance_shapes():
+    """get_earnings_dates returns an empty frame on some versions without
+    raising, which silently switched the earnings blackout off. .calendar is
+    populated in those cases."""
+    from stocksage.data import _calendar_earnings_dates
+
+    assert _calendar_earnings_dates({"Earnings Date": ["2026-10-28"]}) == ["2026-10-28"]
+    # A bare (non-list) value, as some versions return.
+    assert _calendar_earnings_dates({"Earnings Date": "2026-10-28"}) == ["2026-10-28"]
+    # Unrecognizable input yields nothing rather than raising.
+    assert _calendar_earnings_dates(None) == []
+    assert _calendar_earnings_dates({}) == []
+    assert _calendar_earnings_dates({"Earnings Date": None}) == []
+
+
+def test_fetch_falls_through_to_calendar_when_frame_is_empty(monkeypatch, tmp_path):
+    import pandas as pd
+
+    from stocksage.data import MarketData as MD
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            pass
+
+        def get_earnings_dates(self, limit=12):
+            return pd.DataFrame()  # empty, no exception — the real failure mode
+
+        @property
+        def calendar(self):
+            return {"Earnings Date": ["2026-10-28"]}
+
+    import types
+    fake_yf = types.SimpleNamespace(Ticker=FakeTicker)
+    monkeypatch.setitem(__import__("sys").modules, "yfinance", fake_yf)
+
+    md = MD(cache_dir=tmp_path)
+    from datetime import date as _d
+
+    assert md._fetch_earnings_date("AAPL", today=_d(2026, 8, 10)) == "2026-10-28"

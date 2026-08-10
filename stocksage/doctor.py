@@ -174,27 +174,62 @@ def check_update_channel() -> dict:
     )
 
 
-def check_autopilot() -> dict:
+def _job_scheduled(launchd_plist, schtask_name, cron_tag) -> bool:
     from . import autopilot as ap
 
     try:
         if sys.platform == "darwin":
-            on = ap.LAUNCHD_PLIST.exists()
-        elif sys.platform.startswith("win"):
+            return launchd_plist.exists()
+        if sys.platform.startswith("win"):
             import subprocess
 
-            on = subprocess.run(
-                ["schtasks", "/Query", "/TN", ap.SCHTASK_NAME], capture_output=True
-            ).returncode == 0
-        else:
-            on = ap.CRON_TAG in ap._current_crontab()
+            # The publish job registers one task per run time, so match any
+            # task whose name starts with the base name.
+            out = subprocess.run(
+                ["schtasks", "/Query", "/FO", "LIST"], capture_output=True, text=True
+            )
+            return schtask_name in (out.stdout or "")
+        return cron_tag in ap._current_crontab()
     except Exception:
-        on = False
-    if on:
-        return _check("Autopilot", PASS, "scheduled — learns every weekday")
+        return False
+
+
+def check_autopilot() -> dict:
+    """Both halves of autopilot, reported separately.
+
+    Learning and publishing are independent scheduled jobs, and only the
+    publish job refreshes the research the trading routine reads. Reporting
+    a single "Autopilot: scheduled" hid a 16-day outage where the brain kept
+    learning locally while the routine read a stale brief the whole time.
+    """
+    from . import autopilot as ap
+
+    learns = _job_scheduled(ap.LAUNCHD_PLIST, ap.SCHTASK_NAME, ap.CRON_TAG)
+    publishes = _job_scheduled(
+        ap.PUBLISH_LAUNCHD_PLIST, ap.PUBLISH_SCHTASK_NAME, ap.PUBLISH_CRON_TAG
+    )
+    if learns and publishes:
+        return _check(
+            "Autopilot", PASS, "learns every weekday and publishes research on schedule"
+        )
+    if learns and not publishes:
+        return _check(
+            "Autopilot", WARN,
+            "learns every weekday, but does NOT publish — the trading routine "
+            "will read older and older research",
+            "Run 'start.bat autopilot publish-drive' so the brief refreshes "
+            "automatically. Without it the brief only updates when you run "
+            "publish-drive by hand.",
+        )
+    if publishes and not learns:
+        return _check(
+            "Autopilot", WARN, "publishes on schedule, but does not learn",
+            "Run 'start.bat autopilot' so the model grades its calls daily",
+        )
     return _check(
         "Autopilot", WARN, "off — learning only happens when you open the app",
-        "Run ./start.sh autopilot to learn automatically every weekday",
+        "Run 'start.bat autopilot' to learn every weekday, then "
+        "'start.bat autopilot publish-drive' to keep the routine's research fresh",
     )
 
 
