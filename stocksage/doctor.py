@@ -88,6 +88,41 @@ def check_market_data() -> dict:
     )
 
 
+def check_earnings_calendar(tickers: tuple[str, ...] = ("AAPL", "MSFT", "JPM")) -> dict:
+    """Can we resolve an earnings date at all?
+
+    This is worth its own check because failure is *silent*: the blackout
+    that stops new entries right before a print simply never fires, and the
+    published brief shows `earnings_days: null` on every candidate, which
+    reads like "no earnings scheduled" rather than "the lookup is broken".
+    Several well-known names are tried, since any one of them may genuinely
+    have no date scheduled.
+    """
+    from .data import MarketData
+
+    market = MarketData()
+    errors: list[str] = []
+    for ticker in tickers:
+        try:
+            if market._fetch_earnings_date(ticker):  # bypass the cache
+                return _check(
+                    "Earnings calendar", PASS, f"resolved a date for {ticker}"
+                )
+        except Exception as exc:
+            errors.append(f"{ticker}: {type(exc).__name__}: {exc}")
+    detail = "no earnings date resolved for " + ", ".join(tickers)
+    if errors:
+        detail += f" — {errors[0]}"
+    return _check(
+        "Earnings calendar", WARN, detail,
+        "Suggestions still work, but the earnings blackout is switched off, "
+        "so a buy can land right before a print. Usually Yahoo rate-limiting "
+        "or a yfinance version change: try 'start.bat update', and if it "
+        "persists report this line — the lookup is data.MarketData."
+        "_fetch_earnings_date",
+    )
+
+
 def check_robinhood() -> dict:
     from .robinhood import RobinhoodClient
 
@@ -169,6 +204,7 @@ ALL_CHECKS = (
     check_env_file,
     check_brain,
     check_market_data,
+    check_earnings_calendar,
     check_robinhood,
     check_update_channel,
     check_autopilot,
