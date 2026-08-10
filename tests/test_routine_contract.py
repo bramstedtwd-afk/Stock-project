@@ -99,7 +99,12 @@ def test_model_stats_has_no_misleading_dollar_figure(brief):
 
 def test_reliability_and_congress_surface_for_the_routine(brief):
     good = next(e for e in brief["focus"] if e["ticker"] == "GOOD")
-    assert good["model_record"]["graded_calls"] == 2
+    # GOOD's history here comes from ingested owner fills, so it belongs to
+    # the owner's record. `model_record` must stay the ENGINE's accuracy —
+    # the routine quotes it as "the research engine read this right N of M",
+    # and blending the owner's trades in would make that claim false.
+    assert good["owner_record"]["graded_calls"] == 2
+    assert good["model_record"]["graded_calls"] == 0
     assert good["congress_buying"]["members"] == 2  # tilt visible on the card
 
 

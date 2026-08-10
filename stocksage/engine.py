@@ -20,7 +20,7 @@ import pandas as pd
 from . import universe
 from .context import capture_move_context
 from .data import MarketData
-from .db import Database
+from .db import SOURCE_MODEL, Database
 from .indicators import compute_features, risk_metrics
 from .learning import blended_weights, update_weights, weighted_score
 from .robinhood import Portfolio, RobinhoodClient
@@ -41,6 +41,10 @@ RECORD_THRESHOLD = 0.20
 # of it in calendar days (data outage, delisting), grade with what we have.
 STALE_GRADE_MULTIPLE = 3
 
+# Sentinel: this call can never be honestly graded (its entry predates all
+# available history). Distinct from None, which means "not due yet".
+UNGRADEABLE = "ungradeable"
+
 
 @dataclass
 class ScanResult:
@@ -57,6 +61,14 @@ class ScanResult:
     @property
     def actionable(self) -> list[Suggestion]:
         return [s for s in self.suggestions if s.action != "HOLD"]
+
+
+def _source_of(row) -> str:
+    """A row's source, tolerating brains written before the column existed."""
+    try:
+        return row["source"] or SOURCE_MODEL
+    except (KeyError, IndexError):
+        return SOURCE_MODEL
 
 
 class Engine:
@@ -90,16 +102,27 @@ class Engine:
                 exit_close = float(df["Close"].iloc[exit_pos])
                 if exit_close > 0:
                     return exit_close / row["price"] - 1.0, str(df.index[exit_pos].date())
+            if entry_pos < 0:
+                # The call predates every bar we have — typically a real
+                # broker fill from years ago, backdated on ingest. Its true
+                # horizon return is unknowable from this history, and the
+                # latest-price fallback below would book the entire holding
+                # period as a single five-day call (a 2023 NVDA fill grading
+                # as +442%). That is what inflated the ledger to a 4.35
+                # profit factor and a +22% average call. Refuse to guess.
+                return UNGRADEABLE
             # Post-call bars exist but the horizon hasn't been reached: wait,
             # unless the row is so old the data has clearly stopped coming.
-            has_post_call_bars = len(df) - 1 > max(entry_pos, -1)
+            has_post_call_bars = len(df) - 1 > entry_pos
             created_dt = datetime.fromisoformat(row["created_at"])
             if created_dt.tzinfo is None:
                 created_dt = created_dt.replace(tzinfo=timezone.utc)
             age_days = (now - created_dt).days
             if has_post_call_bars and age_days < horizon * STALE_GRADE_MULTIPLE:
                 return None
-        # Degraded path (no usable history): the old latest-price grading.
+        # Degraded path (no usable history at all): the latest-price grading.
+        # Only reachable when we have no bars for the ticker, never when the
+        # call simply predates the ones we do have.
         price_now = self.market.latest_price(row["ticker"])
         if price_now is None:
             return None
@@ -139,8 +162,14 @@ class Engine:
         sector_state: dict[str, dict[str, float]] = {}
         sector_grades: dict[str, int] = {}
         count = 0
+        trained = 0
         for row in self.db.pending_evaluations(now):
             outcome = self._resolve_outcome(row, now)
+            if outcome is UNGRADEABLE:
+                # Close it so it stops being retried every run, with a NULL
+                # return so it stays out of every average and the ledger.
+                self.db.mark_ungradeable(row["id"])
+                continue
             if outcome is None:
                 continue
             realized, exit_date = outcome
@@ -149,6 +178,14 @@ class Engine:
             predicted_up = row["score"] > 0
             hit = (realized > 0) == predicted_up
             self.db.mark_evaluated(row["id"], realized, hit, benchmark)
+            count += 1
+
+            # Only the model's own calls train the model. The owner's real
+            # fills are recorded and graded so their record can be measured,
+            # but training on them makes the learned weights a blend of two
+            # decision-makers and the track record describe neither.
+            if _source_of(row) != SOURCE_MODEL:
+                continue
             signals = json.loads(row["signals"])
             weights, detail = update_weights(weights, signals, excess)
             detail["raw_return"] = realized
@@ -161,8 +198,8 @@ class Engine:
                 )
                 sector_state[sector.name], _ = update_weights(sw, signals, excess)
                 sector_grades[sector.name] = sector_grades.get(sector.name, 0) + 1
-            count += 1
-        if count:
+            trained += 1
+        if trained:
             self.db.save_weights(weights)
             for name, sw in sector_state.items():
                 if sw:
@@ -170,7 +207,11 @@ class Engine:
             for name, n in sector_grades.items():
                 key = f"sector_grades:{name}"
                 self.db.set_meta(key, str(int(self.db.get_meta(key, "0")) + n))
-            log.info("evaluated %d matured suggestions; weights updated", count)
+        if count:
+            log.info(
+                "graded %d matured calls (%d of them the model's own, "
+                "which is what trained the weights)", count, trained
+            )
         return count
 
     def _past_context(self, ticker: str) -> PastContext:

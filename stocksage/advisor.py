@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+from .db import SOURCE_OWNER, SOURCE_ROUTINE
 from .engine import Engine
 from .indicators import compute_features
 from .learning import weighted_score
@@ -138,6 +139,23 @@ def _congress_note(summary: dict, ticker: str) -> dict | None:
     }
 
 
+
+def _owner_record(engine: Engine, ticker: str) -> dict:
+    """How the OWNER's own trades in this name have graded out.
+
+    Reported beside `model_record`, never merged into it: one answers "does
+    the engine read this stock well", the other "do I trade this stock well".
+    Blending them produces a number that answers neither.
+    """
+    from .db import SOURCE_OWNER
+
+    calls, hit_rate, _ = engine.db.ticker_track_record(ticker, source=SOURCE_OWNER)
+    return {
+        "graded_calls": calls,
+        "hit_rate": round(hit_rate, 3) if hit_rate is not None else None,
+    }
+
+
 def _entry_from_suggestion(
     s, engine: Engine, congress: dict | None = None, buying_power: float | None = None
 ) -> dict:
@@ -187,6 +205,9 @@ def _entry_from_suggestion(
             "graded_calls": ctx.graded_calls,
             "hit_rate": round(ctx.hit_rate, 3) if ctx.hit_rate is not None else None,
         },
+        # The owner's own record on this name, kept strictly separate — it is
+        # useful context, but it must never be read as the engine's accuracy.
+        "owner_record": _owner_record(engine, s.ticker),
         "recent_shock": ctx.recent_event,
         "events_12mo": ctx.events_12mo,
         "earnings_days": s.earnings_days,
@@ -214,6 +235,9 @@ def _degraded_entry(ticker: str, engine: Engine) -> dict:
             "graded_calls": ctx.graded_calls,
             "hit_rate": round(ctx.hit_rate, 3) if ctx.hit_rate is not None else None,
         },
+        # The owner's own record on this name, kept strictly separate — it is
+        # useful context, but it must never be read as the engine's accuracy.
+        "owner_record": _owner_record(engine, ticker),
         "recent_shock": ctx.recent_event,
         "events_12mo": ctx.events_12mo,
         "notes": ["Price data unreachable — brain context only; use live quotes."],
@@ -382,7 +406,7 @@ def ingest_fills(engine: Engine, orders: list[dict], horizon_days: int = 5) -> d
         direction = 1.0 if action == "BUY" else -1.0
         sid = engine.db.record_suggestion(
             ticker, action, round(direction * 0.35, 4), price, signals,
-            horizon_days, created_at=executed_at,
+            horizon_days, created_at=executed_at, source=SOURCE_OWNER,
         )
         engine.db.mark_fill_ingested(order_id, sid)
         recorded += 1
@@ -582,7 +606,8 @@ def log_call(
         score = direction * max(0.2, min(0.6, magnitude + 0.2 * direction * model_view))
 
     sid = engine.db.record_suggestion(
-        ticker, action, round(score, 4), price, feats or {}, horizon_days
+        ticker, action, round(score, 4), price, feats or {}, horizon_days,
+        source=SOURCE_ROUTINE,
     )
     if note:
         engine.db.log_learning(sid, {"routine_note": note, "logged_at_price": price})

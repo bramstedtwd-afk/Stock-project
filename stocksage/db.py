@@ -96,6 +96,13 @@ CREATE TABLE IF NOT EXISTS learning_log (
 """
 
 
+# Who made a call. The model's record must be measurable on its own — mixing
+# the owner's real trades into it produces a number that describes neither.
+SOURCE_MODEL = "model"    # the engine's own scan
+SOURCE_OWNER = "owner"    # an actual Robinhood fill, ingested after the fact
+SOURCE_ROUTINE = "routine"  # a decision the trading routine logged
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -124,6 +131,25 @@ class Database:
             # Market (SPY) return over the same window as realized_return, so
             # a call can be judged against "would cash-in-the-index have won".
             self.conn.execute("ALTER TABLE suggestions ADD COLUMN benchmark_return REAL")
+        if "source" not in cols:
+            # Who made this call: the model's own scan, the owner's actual
+            # broker fill, or a routine decision. Without this the scoreboard
+            # measures a blend of two decision-makers and reads as if it were
+            # the model's record.
+            self.conn.execute(
+                f"ALTER TABLE suggestions ADD COLUMN source TEXT NOT NULL"
+                f" DEFAULT '{SOURCE_MODEL}'"
+            )
+            # Existing rows are recoverable: every ingested fill recorded the
+            # suggestion it created, so the split applies retroactively.
+            if self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+                " AND name='ingested_fills'"
+            ).fetchone():
+                self.conn.execute(
+                    f"UPDATE suggestions SET source = '{SOURCE_OWNER}' WHERE id IN"
+                    " (SELECT suggestion_id FROM ingested_fills)"
+                )
 
     def close(self) -> None:
         self.conn.close()
@@ -139,17 +165,35 @@ class Database:
         signals: dict[str, float],
         horizon_days: int,
         created_at: str | None = None,
+        source: str = SOURCE_MODEL,
     ) -> int:
         """Record a call. `created_at` may be backdated (e.g. an actual fill
-        time) so its grading horizon is measured from when it really happened."""
+        time) so its grading horizon is measured from when it really happened.
+        `source` keeps the model's record separable from the owner's."""
         cur = self.conn.execute(
             "INSERT INTO suggestions (created_at, ticker, action, score, price,"
-            " signals, horizon_days) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            " signals, horizon_days, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (created_at or _now(), ticker, action, score, price,
-             json.dumps(signals), horizon_days),
+             json.dumps(signals), horizon_days, source),
         )
         self.conn.commit()
         return int(cur.lastrowid)
+
+    def mark_ungradeable(self, suggestion_id: int) -> None:
+        """Close a call that can never be honestly graded.
+
+        Used when the entry date predates all available price history: the
+        true horizon return is unknowable, and falling back to today's price
+        would book a multi-year holding period as a five-day call. Marked
+        evaluated so it stops being retried, with a NULL return so it is
+        excluded from every average, the ledger, and the weight updates.
+        """
+        self.conn.execute(
+            "UPDATE suggestions SET evaluated = 1, realized_return = NULL,"
+            " hit = NULL WHERE id = ?",
+            (suggestion_id,),
+        )
+        self.conn.commit()
 
     def fill_ingested(self, order_id: str) -> bool:
         return self.conn.execute(
@@ -199,22 +243,40 @@ class Database:
         )
         self.conn.commit()
 
-    def evaluated_suggestions(self) -> list[sqlite3.Row]:
-        """The full graded record, chronological — feeds the profit ledger."""
-        return self.conn.execute(
-            "SELECT * FROM suggestions WHERE evaluated = 1 ORDER BY created_at, id"
-        ).fetchall()
+    def evaluated_suggestions(self, source: str | None = SOURCE_MODEL) -> list[sqlite3.Row]:
+        """The graded record, chronological — feeds the profit ledger.
+
+        Defaults to the model's own calls: a ledger blending the model's
+        picks with the owner's real trades describes neither. Pass
+        source=None for everything, or SOURCE_OWNER for the owner's record.
+        Rows with a NULL return are ungradeable and never included.
+        """
+        sql = (
+            "SELECT * FROM suggestions WHERE evaluated = 1"
+            " AND realized_return IS NOT NULL"
+        )
+        params: tuple = ()
+        if source is not None:
+            sql += " AND source = ?"
+            params = (source,)
+        return self.conn.execute(sql + " ORDER BY created_at, id", params).fetchall()
 
     def recent_suggestions(self, limit: int = 50) -> list[sqlite3.Row]:
         return self.conn.execute(
             "SELECT * FROM suggestions ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
 
-    def performance_summary(self) -> dict:
-        row = self.conn.execute(
+    def performance_summary(self, source: str | None = SOURCE_MODEL) -> dict:
+        """Graded-record headline numbers, the model's own by default."""
+        sql = (
             "SELECT COUNT(*) AS n, AVG(hit) AS hit_rate, AVG(realized_return) AS avg_ret"
-            " FROM suggestions WHERE evaluated = 1"
-        ).fetchone()
+            " FROM suggestions WHERE evaluated = 1 AND realized_return IS NOT NULL"
+        )
+        params: tuple = ()
+        if source is not None:
+            sql += " AND source = ?"
+            params = (source,)
+        row = self.conn.execute(sql, params).fetchone()
         return {
             "evaluated": row["n"] or 0,
             "hit_rate": row["hit_rate"],
@@ -305,13 +367,25 @@ class Database:
         ).fetchall()
         return {r["key"].split(":", 1)[1]: int(r["value"]) for r in rows}
 
-    def ticker_track_record(self, ticker: str) -> tuple[int, float | None, float | None]:
-        """The model's own graded record on one name: (calls, hit_rate, avg_return)."""
-        row = self.conn.execute(
+    def ticker_track_record(
+        self, ticker: str, source: str | None = SOURCE_MODEL
+    ) -> tuple[int, float | None, float | None]:
+        """The model's own graded record on one name: (calls, hit_rate, avg_return).
+
+        Model-only by default — this drives the reliability multiplier, which
+        is meant to answer "does the model read THIS name well", not "do the
+        model and the owner combined".
+        """
+        sql = (
             "SELECT COUNT(*) AS n, AVG(hit) AS hit_rate, AVG(realized_return) AS avg_ret"
-            " FROM suggestions WHERE evaluated = 1 AND ticker = ?",
-            (ticker,),
-        ).fetchone()
+            " FROM suggestions WHERE evaluated = 1 AND realized_return IS NOT NULL"
+            " AND ticker = ?"
+        )
+        params: tuple = (ticker,)
+        if source is not None:
+            sql += " AND source = ?"
+            params = (ticker, source)
+        row = self.conn.execute(sql, params).fetchone()
         return (row["n"] or 0, row["hit_rate"], row["avg_ret"])
 
     def log_learning(self, suggestion_id: int, detail: dict) -> None:

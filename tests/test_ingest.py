@@ -52,10 +52,16 @@ def test_backdated_fill_grades_immediately():
     graded = engine.evaluate_pending()
     assert graded == 1
     row = [r for r in engine.db.recent_suggestions() if r["evaluated"]][0]
-    # AAPL uptrend now well above 100 -> a buy call is a hit, trains reliability.
+    # AAPL uptrend now well above 100 -> a buy call is a hit.
     assert row["hit"] == 1
-    n, hit_rate, _ = engine.db.ticker_track_record("AAPL")
+    # The fill lands under the OWNER's record, not the model's: the model's
+    # per-ticker reliability answers "does the model read this name well",
+    # and blending the owner's trades into it makes it answer neither.
+    from stocksage.db import SOURCE_OWNER
+
+    n, hit_rate, _ = engine.db.ticker_track_record("AAPL", source=SOURCE_OWNER)
     assert n == 1 and hit_rate == 1.0
+    assert engine.db.ticker_track_record("AAPL")[0] == 0
 
 
 def test_recent_fill_not_yet_matured_waits():

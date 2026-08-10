@@ -150,3 +150,86 @@ def test_grading_waits_when_horizon_not_reached(engine):
     # Much later, with the data clearly never arriving, it grades with what exists.
     stale = (df.index[-1] + timedelta(days=40)).tz_localize(timezone.utc)
     assert engine.evaluate_pending(now=stale) == 1
+
+
+# --- source separation and ungradeable backdated fills ---
+
+
+def test_backdated_fill_before_history_is_never_graded_as_a_five_day_call(engine):
+    """A real broker fill from years ago has no resolvable 5-day horizon in a
+    1-year window. Grading it on today's price books the whole holding period
+    as one call — that is what produced a +22% average and a 4.35 profit
+    factor on the owner's brain."""
+    df = engine.market.frames["UPUP"]
+    old_price = float(df["Close"].iloc[0]) / 4  # bought years ago, far cheaper
+    sid = engine.db.record_suggestion(
+        "UPUP", "BUY", 0.35, old_price, {"trend_long": 1.0}, 5,
+        created_at="2019-03-04T15:00:00+00:00",
+    )
+    now = (df.index[-1] + timedelta(days=1)).tz_localize(timezone.utc)
+    engine.evaluate_pending(now=now)
+    row = engine.db.conn.execute(
+        "SELECT * FROM suggestions WHERE id = ?", (sid,)
+    ).fetchone()
+    assert row["evaluated"] == 1          # closed, so it stops being retried
+    assert row["realized_return"] is None  # but contributes no number anywhere
+    # And it stays out of every aggregate.
+    assert engine.db.performance_summary(source=None)["evaluated"] == 0
+    assert engine.db.evaluated_suggestions(source=None) == []
+
+
+def test_owner_fills_are_graded_but_do_not_train_the_model(engine):
+    from stocksage.db import SOURCE_OWNER
+
+    df = engine.market.frames["UPUP"]
+    entry = float(df["Close"].iloc[-10])
+    sid = engine.db.record_suggestion(
+        "UPUP", "BUY", 0.35, entry, {"trend_long": 1.0}, 5,
+        created_at=str(df.index[-10].date()) + "T21:00:00+00:00",
+        source=SOURCE_OWNER,
+    )
+    now = (df.index[-1] + timedelta(days=5)).tz_localize(timezone.utc)
+    assert engine.evaluate_pending(now=now) == 1
+
+    row = engine.db.conn.execute(
+        "SELECT * FROM suggestions WHERE id = ?", (sid,)
+    ).fetchone()
+    assert row["realized_return"] is not None   # graded, so it can be measured
+    assert engine.db.load_weights() == {}       # but it trained nothing
+    # It is visible under its own source, and absent from the model's record.
+    assert len(engine.db.evaluated_suggestions(source=SOURCE_OWNER)) == 1
+    assert engine.db.evaluated_suggestions() == []
+    assert engine.db.performance_summary()["evaluated"] == 0
+
+
+def test_existing_brains_split_retroactively_on_upgrade(tmp_path):
+    """The owner already has hundreds of mixed calls. The ingested_fills
+    table makes the split recoverable without losing history."""
+    import sqlite3
+
+    from stocksage.db import SOURCE_MODEL, SOURCE_OWNER, Database
+
+    path = tmp_path / "old.db"
+    db = Database(path)
+    model_id = db.record_suggestion("AAA", "BUY", 0.5, 100.0, {}, 5)
+    fill_id = db.record_suggestion("BBB", "BUY", 0.35, 50.0, {}, 5)
+    db.mark_fill_ingested("order-1", fill_id)
+    # Simulate a brain written before the column existed.
+    db.conn.execute("ALTER TABLE suggestions RENAME TO s_old")
+    db.conn.execute(
+        "CREATE TABLE suggestions AS SELECT id, created_at, ticker, action,"
+        " score, price, signals, horizon_days, evaluated, realized_return,"
+        " hit, benchmark_return FROM s_old"
+    )
+    db.conn.commit()
+    db.close()
+    assert "source" not in {
+        r[1] for r in sqlite3.connect(path).execute("PRAGMA table_info(suggestions)")
+    }
+
+    upgraded = Database(path)  # opening migrates and backfills
+    rows = {r["id"]: r["source"] for r in upgraded.conn.execute(
+        "SELECT id, source FROM suggestions")}
+    assert rows[model_id] == SOURCE_MODEL
+    assert rows[fill_id] == SOURCE_OWNER
+    upgraded.close()
