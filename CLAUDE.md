@@ -84,6 +84,16 @@ live technical analysis (degraded run, never a halt).
 - DB schema changes must be additive (`CREATE TABLE IF NOT EXISTS`) — existing brains migrate automatically; brain merges must tolerate older-schema files.
 - Credentials live only in `.env` (gitignored, 0600). Never move them into the brain, logs, or commits.
 
+## ⚠️ Never hand the owner a bare `stocksage …` command
+
+`stocksage` is not on PATH — it lives only inside the project's virtualenv.
+Every command given to the owner (in chat, in an error message, in
+ROUTINE.md) must use the launcher and assume a fresh terminal:
+`cd C:\Users\<you>\Stock-project` then `start.bat <cmd>` on Windows,
+`./start.sh <cmd>` elsewhere. A bare `stocksage publish-drive` was shipped
+inside a user-facing error string and failed with CommandNotFoundException
+the moment they tried it.
+
 ## ⚠️ Always `git fetch` before reasoning about branch state
 
 A previous session read `origin/...` refs cached at container-clone time,
