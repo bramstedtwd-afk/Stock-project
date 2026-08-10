@@ -47,6 +47,12 @@ SELLISH = ("SELL", "STRONG SELL")
 # Reward:risk used for the advisory target — a 2:1 measured move off the stop.
 REWARD_RISK_MULTIPLE = 2.0
 
+# Benchmark-graded calls needed before the headline states a verdict. Below
+# this an "edge" is a coin-flip dressed up as evidence — and after a fresh
+# merge the count starts near zero while `graded_calls` is already large,
+# which is exactly when a confident sentence would mislead most.
+MIN_COVERED_FOR_VERDICT = 10
+
 # Plain-language gloss per signal, so the agent (and the owner) never has to
 # guess what a raw signal name means.
 SIGNAL_MEANINGS: dict[str, str] = {
@@ -152,6 +158,7 @@ def scoreboard(db) -> dict:
         "total_paper_pnl": stats.get("total_pnl"),
         # Present only once calls have been graded against the benchmark.
         "edge_vs_market": stats.get("edge_vs_market"),
+        "covered_pnl": stats.get("covered_pnl"),
         "benchmark_pnl": stats.get("benchmark_pnl"),
         "covered_trades": stats.get("covered_trades", 0),
     }
@@ -159,26 +166,60 @@ def scoreboard(db) -> dict:
 
 
 def headline_sentence(stats: dict) -> str:
-    """The one sentence to put in front of the owner."""
+    """The one sentence to put in front of the owner.
+
+    Two traps this deliberately avoids. Beating the market while *losing
+    money* is a real outcome (both fell, the model fell less) and must never
+    be phrased as "earned" — the owner would read a loss as a gain. And an
+    edge computed from a handful of trades is noise, so below a minimum
+    sample the sentence reports the running figure without claiming a verdict.
+    """
+    graded = stats.get("graded_calls") or 0
     edge = stats.get("edge_vs_market")
     covered = stats.get("covered_trades") or 0
+    if not graded:
+        return (
+            "No calls graded yet — there is nothing to judge this tool on "
+            "so far. Check back after a week of daily runs."
+        )
     if edge is None or not covered:
-        graded = stats.get("graded_calls") or 0
-        if not graded:
-            return (
-                "No calls graded yet — there is nothing to judge this tool on "
-                "so far. Check back after a week of daily runs."
-            )
         return (
             f"{graded} calls graded, but none yet measured against the market — "
             "the honest scoreboard needs benchmark-graded calls before it can "
             "say whether this beats an index fund."
         )
-    verdict = "MORE than" if edge >= 0 else "LESS than"
+    plural = "s" if covered != 1 else ""
+    if covered < MIN_COVERED_FOR_VERDICT:
+        return (
+            f"Too early to judge: only {covered} of {graded} graded "
+            f"call{plural} {'have' if covered != 1 else 'has'} been measured "
+            f"against the market so far (running edge ${edge:+,.2f}). "
+            f"{MIN_COVERED_FOR_VERDICT} are needed before that number means "
+            "anything."
+        )
+
+    own = stats.get("covered_pnl")
+    bench = stats.get("benchmark_pnl")
+    if own is None or bench is None:  # defensive; both travel with the edge
+        verdict = "ahead of" if edge >= 0 else "behind"
+        return (
+            f"Across {covered} graded trades these calls are ${abs(edge):,.2f} "
+            f"{verdict} putting the same money in SPY."
+        )
+    made = f"earned ${own:,.2f}" if own >= 0 else f"lost ${abs(own):,.2f}"
+    spy_did = (
+        f"earned ${bench:,.2f}" if bench >= 0 else f"lost ${abs(bench):,.2f}"
+    )
+    if edge >= 0:
+        return (
+            f"Across {covered} graded trades these calls {made}, while the same "
+            f"money in SPY would have {spy_did} — beating the market by "
+            f"${edge:,.2f}."
+        )
     return (
-        f"Following these calls has earned ${abs(edge):,.2f} {verdict} putting "
-        f"the same money in SPY, across {covered} graded "
-        f"trade{'s' if covered != 1 else ''}."
+        f"Across {covered} graded trades these calls {made}, while the same "
+        f"money in SPY would have {spy_did} — trailing the market by "
+        f"${abs(edge):,.2f}."
     )
 
 

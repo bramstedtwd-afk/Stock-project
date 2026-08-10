@@ -89,21 +89,50 @@ def test_earnings_blackout_marks_candidate_not_actionable():
     assert c["size_hint_pct"] == 0.0
 
 
-def test_headline_reports_edge_over_spy():
+def _graded_db(rows):
+    """Brain with `rows` of (realized, benchmark) already graded."""
     db = Database(":memory:")
-    for ticker, realized, bench in (("AAA", 0.06, 0.02), ("BBB", 0.01, 0.03)):
-        sid = db.record_suggestion(ticker, "BUY", 0.5, 100.0, {"x": 0.5}, 5)
+    for i, (realized, bench) in enumerate(rows):
+        sid = db.record_suggestion(f"T{i}", "BUY", 0.5, 100.0, {"x": 0.5}, 5)
         db.mark_evaluated(sid, realized, realized > 0, benchmark_return=bench)
-    stats = scoreboard(db)
-    assert stats["edge_vs_market"] == pytest.approx(20.0)
-    line = headline_sentence(stats)
-    assert "$20.00 MORE than" in line and "SPY" in line
+    return db
 
-    # And the losing case reads as plainly as the winning one.
-    db2 = Database(":memory:")
-    sid = db2.record_suggestion("CCC", "BUY", 0.5, 100.0, {"x": 0.5}, 5)
-    db2.mark_evaluated(sid, 0.01, True, benchmark_return=0.05)
-    assert "LESS than" in headline_sentence(scoreboard(db2))
+
+def test_headline_reports_edge_over_spy():
+    db = _graded_db([(0.06, 0.02)] * 6 + [(0.01, 0.03)] * 6)
+    stats = scoreboard(db)
+    line = headline_sentence(stats)
+    assert "beating the market by" in line
+    assert "12 graded trades" in line
+    # Both sides of the comparison are stated, so "beat SPY" can't be
+    # mistaken for "made money" or vice versa.
+    assert "earned" in line and "SPY" in line
+
+
+def test_headline_never_calls_a_loss_an_earning():
+    """Beating a falling market is still a loss — say so."""
+    db = _graded_db([(-0.01, -0.05)] * 12)  # down 1%, SPY down 5%
+    line = headline_sentence(scoreboard(db))
+    assert "lost $" in line
+    assert "beating the market by" in line
+    assert "earned $120.00" not in line  # never phrase the edge as a gain
+
+
+def test_headline_states_trailing_plainly():
+    db = _graded_db([(0.01, 0.05)] * 12)
+    line = headline_sentence(scoreboard(db))
+    assert "trailing the market by" in line
+
+
+def test_headline_refuses_a_verdict_on_a_thin_sample():
+    """One lucky trade must not read as proof of an edge."""
+    db = _graded_db([(0.06, 0.02)])
+    stats = scoreboard(db)
+    assert stats["edge_vs_market"] == pytest.approx(40.0)
+    line = headline_sentence(stats)
+    assert "Too early to judge" in line
+    assert "running edge" in line
+    assert "beating the market" not in line
 
 
 def test_headline_refuses_to_claim_edge_without_benchmark_grades():
