@@ -704,6 +704,14 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",
     )
+    if not args.verbose:
+        # yfinance logs a red ERROR per failed symbol, and retries mean one
+        # delisted or unrecognized ticker in a watchlist prints the same
+        # scary line a dozen times on a run that otherwise succeeded. We
+        # already catch these, fall back to cached data, and report them
+        # ourselves as scan errors — so its chatter is pure noise to the
+        # owner. -v still shows everything.
+        logging.getLogger("yfinance").setLevel(logging.CRITICAL)
     return args.func(args)
 
 

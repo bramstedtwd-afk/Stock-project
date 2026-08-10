@@ -156,3 +156,23 @@ def test_extract_watchlist_symbols_tolerates_all_shapes():
     assert extract_watchlist_symbols({"results": [{"no": "symbol"}, "junk", None]}) == []
     assert extract_watchlist_symbols(None) == []
     assert extract_watchlist_symbols("garbage") == []
+
+
+def test_yfinance_chatter_is_silenced_unless_verbose():
+    """One unrecognized ticker in a watchlist made yfinance print the same
+    red ERROR a dozen times on a successful run. We catch those failures and
+    report them ourselves, so its logger is noise at default verbosity."""
+    import logging
+
+    from stocksage.cli import main
+
+    yf_log = logging.getLogger("yfinance")
+    yf_log.setLevel(logging.NOTSET)
+    try:
+        main(["watch", "list"])
+        assert yf_log.level == logging.CRITICAL
+        yf_log.setLevel(logging.NOTSET)
+        main(["-v", "watch", "list"])
+        assert yf_log.level != logging.CRITICAL  # -v still shows everything
+    finally:
+        yf_log.setLevel(logging.NOTSET)

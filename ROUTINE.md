@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v10, 2026-08-10)
+# Agentic Trading Routine — Playbook (v11, 2026-08-10)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from the **"StockSage" Drive folder, file "StockSage Routine
@@ -7,6 +7,16 @@ Playbook.md" — exact folder + exact filename, never a bare title search**
 publishing this file every run. Improving the routine = editing this file;
 the next publish propagates it. The routine states at the top of each run
 which playbook version it loaded, straight from this file's own header.
+
+**What changed in v11 — the brief may describe a different account.**
+The desktop that builds the brief signs in to Robinhood separately from
+this routine, and on 2026-08-10 it was linked to a personal account, not
+the agentic one: the brief's `focus` list showed personal holdings and its
+`size_hint_dollars` were built from ~$3,100 of buying power while the
+agentic account held $0.89. Sizing now always comes from your own live
+pull, and `focus`/"you currently hold this" notes must be cross-checked
+against your own positions before they mean anything (Capital). No change
+to the confirm gate or any hard safety rule.
 
 **What changed in v10 — concentration, notification volume, exit cards.**
 1. **The per-ticker cap now measures the whole book.** It was "50% of
@@ -292,12 +302,26 @@ actually happened — 17 straight days unable to trade. Prevent it:
 **Size every entry in DOLLARS, not whole shares.** At this account size
 (~$100), almost no entry will land on a whole share, and that is normal,
 not a workaround — do not treat a fractional entry as an exception case or
-a downgrade. Use the brief's `size_hint_dollars` as a starting point, then
-size up toward the per-ticker cap when conviction and the live read are
-strong (that is what "aggressive" means here). If `size_hint_dollars` is
-missing (buying power wasn't available when the brief was built, or the
-brief is stale), compute the dollar amount yourself from the live buying
-power you pulled this run and the per-ticker cap. A stock's per-share
+a downgrade.
+
+**Always compute the dollar amount from the live buying power YOU pulled
+this run for the agentic account, never from `size_hint_dollars`.** The
+desktop that builds the brief may be signed in to a different Robinhood
+account than the one you trade — on 2026-08-10 it was, and the brief
+carried size hints of $110–$147 built from roughly $3,100 of buying power
+in a personal account, while the agentic account held $0.89. Following
+those hints would have proposed orders more than a hundred times what the
+account could fund. Treat `size_hint_dollars` and `est_shares` as
+*context* about relative conviction, and `size_hint_pct` as the shape of
+the idea; the money always comes from your own live pull. Same for the
+brief's `focus` list: it reflects whatever account the desktop is linked
+to, so a holding listed there is not evidence the agentic account holds
+it — cross-check against your own positions pull before acting on any
+"you currently hold this" note. Hard rule 1 (agentic account only) governs
+regardless of anything the brief says.
+
+Then size up toward the per-ticker cap when conviction and the live read
+are strong (that is what "aggressive" means here). A stock's per-share
 `price` is NOT an affordability filter — a $9 stock and a $330 stock are
 equally buyable at $12. Do not exclude, downgrade, or avoid a good setup
 because one share costs more than the account.
