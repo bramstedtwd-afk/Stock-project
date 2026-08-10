@@ -52,6 +52,27 @@ class DriveNotConfigured(RuntimeError):
     """Raised when drive_credentials.json hasn't been set up yet."""
 
 
+class DriveAuthExpired(DriveNotConfigured):
+    """A previously-working Drive sign-in can no longer refresh itself.
+
+    Distinct from DriveNotConfigured because the two want opposite handling:
+    never-configured is normal on a machine that doesn't use Drive and should
+    stay quiet, while an expired grant means sync *was* working and has
+    silently stopped — which must be said out loud or the brain quietly stops
+    travelling between devices.
+    """
+
+
+def _is_dead_refresh_token(exc: Exception) -> bool:
+    """True when a refresh failed because the grant itself is gone.
+
+    Google signals expired/revoked refresh tokens as 'invalid_grant'
+    regardless of the underlying reason, so match on that rather than on an
+    exception type that varies across google-auth versions.
+    """
+    return "invalid_grant" in str(exc).lower()
+
+
 def credentials_available() -> bool:
     return CREDENTIALS_PATH.exists()
 
@@ -90,7 +111,33 @@ def get_service():
         creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except Exception as exc:
+                if not _is_dead_refresh_token(exc):
+                    raise
+                # Google returns a bare "invalid_grant" for every cause, so
+                # spell out the one that actually bites: while the OAuth
+                # consent screen sits in "Testing", Google expires refresh
+                # tokens after 7 days, which silently kills Drive sync about
+                # once a week forever.
+                TOKEN_PATH.unlink(missing_ok=True)
+                raise DriveAuthExpired(
+                    "Your Google Drive sign-in has expired and can't renew "
+                    "itself.\n\n"
+                    "The usual cause: the OAuth consent screen for your Google "
+                    "Cloud project is still in 'Testing' mode, and Google "
+                    "expires those refresh tokens after 7 days. To stop this "
+                    "recurring, open Google Cloud Console -> APIs & Services "
+                    "-> OAuth consent screen and press 'Publish app'. For a "
+                    "personal single-user app no verification review is "
+                    "needed; you just click through the 'unverified app' "
+                    "warning once.\n\n"
+                    "Either way, re-authorize now by running:  "
+                    "stocksage publish-drive\n"
+                    "(the expired token has been cleared, so this will prompt "
+                    "a fresh sign-in)."
+                ) from exc
         else:
             if not CREDENTIALS_PATH.exists():
                 raise DriveNotConfigured(

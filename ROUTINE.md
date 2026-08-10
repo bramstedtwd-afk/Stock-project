@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v9, 2026-08-10)
+# Agentic Trading Routine — Playbook (v10, 2026-08-10)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from the **"StockSage" Drive folder, file "StockSage Routine
@@ -7,6 +7,28 @@ Playbook.md" — exact folder + exact filename, never a bare title search**
 publishing this file every run. Improving the routine = editing this file;
 the next publish propagates it. The routine states at the top of each run
 which playbook version it loaded, straight from this file's own header.
+
+**What changed in v10 — concentration, notification volume, exit cards.**
+1. **The per-ticker cap now measures the whole book.** It was "50% of
+   buying power", which sizes against today's *cash* and therefore says
+   nothing about the resulting portfolio — the account passed that check
+   while holding 74% of its equity in two names. Now **25% of total
+   equity, computed post-trade with existing positions counted** (Risk
+   rules). Posture widens 2–3 → 3–4 names as the direct arithmetic
+   consequence.
+2. **A notification budget.** Silence is now the default and there is a cap
+   of one decision request per day (Notification budget). Forty
+   notifications saying "add money" is how the one that matters gets
+   skimmed past.
+3. **An exit/sell card format**, so a stop breach produces a one-word
+   sell decision on the phone instead of prose (Order card format). The
+   confirm gate is restated as absolute and explicitly covering exits.
+4. **Track record is reported from the brief's `headline`** — the engine's
+   edge over holding SPY — not from hit rate or profit factor, which
+   flatter in a rising market. A stale brief for two runs running is now
+   itself a Watch notification, with the usual cause (expired Drive
+   sign-in) named.
+No change to the confirm gate or any hard safety rule.
 
 **What changed in v9 — fixes three problems found auditing 42 live runs.**
 The account sat unable to trade for 17 consecutive days, fragmented into
@@ -123,6 +145,25 @@ have Google Drive + Robinhood, but no terminal/repo).**
   and `model_stats` (graded_calls, hit_rate, paper_profit_factor,
   avg_return_per_call — all scale-free; there is no dollar P&L because a
   fixed-stake figure would mislead next to a small account).
+- **Report the engine's record using `headline`, never the raw stats.** The
+  brief carries a one-sentence `headline` stating the engine's edge over
+  simply holding SPY, plus `edge_vs_market_per_call`, `covered_trades` and
+  `benchmark_return_per_call` in `model_stats`. Quote the headline verbatim
+  as the track-record line in run step 2. Hit rate, profit factor and
+  average return all flatter the engine in a rising market — they measure
+  whether it made money, not whether it beat doing nothing, and only the
+  second question justifies running this at all. When `headline` says the
+  sample is too thin for a verdict, say exactly that; do not substitute the
+  flattering numbers because they sound better.
+- **A stale brief is not the same as a broken pipeline.** If the brief's
+  `as_of` is more than one trading day old on two consecutive runs, that is
+  a Watch-level notification in its own right: the desktop has stopped
+  publishing, and the most common cause is the Google Drive sign-in
+  expiring (Google kills refresh tokens after 7 days while the OAuth
+  consent screen sits in "Testing" mode). Tell the owner to run
+  `stocksage publish-drive` on the desktop to re-authorize, and to publish
+  the OAuth app once so it stops recurring. Do not silently keep running
+  degraded for weeks — that happened for 16 straight days.
 - If the brief is missing or its date is older than the last trading day,
   treat research as **stale/offline** — proceed on your own live technical
   analysis. Its absence is a degraded run, never a halt. **The brief is a
@@ -200,14 +241,21 @@ brain learns from reality on its own, every desktop sync.
 Cash account — track settled vs. unsettled funds; never propose an order on
 unsettled proceeds.
 
-**Posture: split available cash across 2–3 names, deployed aggressively.**
+**Posture: split available cash across 3–4 names, deployed aggressively.**
 The goal on this test account is to put the available buying power to work
-across the 2–3 best setups each day, not to sit in cash or concentrate
-everything in one ticker. Target 2–3 concurrent positions. Size each so the
+across the best setups each day, not to sit in cash or concentrate
+everything in one ticker. Target 3–4 concurrent positions. Size each so the
 top setups together deploy most of the settled cash, within the per-ticker
 cap (Risk rules). When only one name clears the bar, one is fine — quality
-before quota, never force a second name to hit a count. When three-plus
-clear, take the best 2–3 by conviction × reliability.
+before quota, never force another name to hit a count. When more clear,
+take the best by conviction × reliability.
+
+(Widened from 2–3 in v10 as the direct arithmetic consequence of the 25%
+per-ticker equity cap: four names is the minimum that can be fully deployed
+under it. This is a deliberate trade — slightly more fragmentation in
+exchange for no single earnings gap being able to take out a third of the
+account. The $15 minimum entry below still governs; four names at 25% of a
+$100 account is $25 each, comfortably clear of that floor.)
 
 **Minimum entry size: $15.** Never open a new position below this. If
 available cash is under $15, propose nothing new and say plainly that cash
@@ -360,11 +408,54 @@ No jargon reaches the user without a plain explanation attached:
 Everyday reasoning first; technical term afterward in parentheses only if
 useful.
 
+## Notification budget (what actually reaches the phone)
+
+Silence is the default. Every run ends in exactly one of three states, and
+only the third is allowed to interrupt:
+
+1. **Nothing needed — send no notification at all.** Write the log row and
+   stop. This explicitly includes: cash unchanged, positions unchanged, no
+   stop inside its warning band, health OK. A run that reaches the same
+   conclusion as yesterday is not news.
+2. **Watch item — one line, no reply expected, at most one per day.** Use
+   when a position enters its warning band (cushion under 1.5%), or the
+   brief is stale/degraded, but nothing must be decided yet.
+3. **Decision needed — one message, ONE question, a recommended answer, and
+   a deadline.** Reserved for: a stop breach, an exit or entry ready to
+   place, a held name entering its earnings blackout, or a health failure
+   that invalidates the run.
+
+Cap: **at most one decision request per day.** If two would fire, send the
+one with more money attached and hold the other for the next run.
+
+Why this is a hard rule: between 7/25 and 8/10 the routine sent roughly
+forty notifications whose entire actionable content was "add money." That
+volume trains the owner to skim, which is exactly how the one message that
+matters gets missed. A notification budget is a safety feature, not a
+courtesy.
+
 ## Confirm flow
 
 Every order card ends: **→ Reply "confirm" to execute, or "pass"** — no
 extra steps or re-confirmation of shown details. Ambiguous reply → ask once
 for a plain confirm/pass, never guess.
+
+**The confirm gate is absolute and applies to exits exactly as it does to
+entries.** Never place, modify, or cancel any order without an explicit
+confirm in reply to a card. A stop breach is not self-executing authority:
+it produces an exit card like any other. Standing or blanket pre-approval
+is not a thing — "confirm" covers the one card it answers and nothing else.
+
+A decision card must be answerable with one word from a phone, must lead
+with the recommendation, and must state what happens if the owner does
+nothing:
+
+```
+GE breached its stop ($109.90). Recommend: SELL all 0.250000 shares
+(~$27.50) at market.
+If you do nothing: the position stays open and keeps falling with the stock.
+→ Reply "confirm" to sell, or "pass" to hold.
+```
 
 ## Order card format
 
@@ -401,14 +492,49 @@ Uses: $25.68 of $80 available to trade today
 → Confirm to execute, or pass
 ```
 
+Exit / sell card (stop breach, time-based exit, rotation, or trim):
+
+```
+SELL all 0.250000 of GE (~$27.50 @ $110.06) — market order
+Reason: hit its stop at $109.90. The stop was set at twice the stock's
+normal daily swing below its recent high, so falling through it means this
+has moved further against us than its usual noise explains.
+Held: 14 trading days · Result: about -$1.10 (-2.8%) on the position
+Research engine: rates it a sell; it has read GE right 4 of 6 times.
+Frees: $27.50 back to buying power (currently $0.89)
+Selling never needs buying power, so this is executable regardless of cash.
+→ Reply "confirm" to sell, or "pass" to hold
+```
+
+Partial trims use the same card with the share count and dollar amount for
+the trimmed slice only, and state what remains after: "leaves 0.05 shares
+(~$18, 17% of equity)."
+
 ## Risk rules (non-negotiable, enforced automatically)
 
-- Max 50% of account per ticker — enforced in DOLLARS against live buying
-  power, not by whether a whole share fits. This cap deliberately forces
-  the 2–3-name split: you cannot put the whole account in one ticker, so
-  full deployment always lands across at least two names. (Tunable: this is
-  the aggressive-posture number for the test account; lower it to
-  concentrate less.)
+- **Max 25% of total account EQUITY per ticker — measured on the whole book
+  after the trade, not on today's cash.** Before proposing a buy, compute:
+
+      post-trade weight = (current value of that position + proposed dollars)
+                          / (total equity + proposed dollars)
+
+  and reject the proposal if it exceeds 25%. Enforced in DOLLARS, not by
+  whether a whole share fits.
+
+  This replaces the old "50% of buying power" rule, which could not do the
+  job it was written for: sizing against *cash* says nothing about the
+  resulting portfolio, so a nearly-fully-invested account passed the check
+  while holding 74% of its equity in two names (GE 37.5%, MS 36.4% on
+  2026-08-10). A cap that ignores what you already own is not a cap.
+
+  **Names already over the cap: no new buys in them at any size.** Say so
+  plainly when one comes up, and offer a trim as a separate decision — do
+  not silently skip it.
+
+  (Tunable. Note the arithmetic: at 25% a fully-deployed book needs at
+  least four names, which is why the posture below says 3–4 rather than
+  2–3. Raising this back toward 50% re-permits a two-name book and
+  re-accepts single-name gap risk on most of the account.)
 - Max 4 new positions per day across all runs.
 - Every entry has a stop and a target at ≥2:1 reward-to-risk (subject to
   the fractional-position handling below).

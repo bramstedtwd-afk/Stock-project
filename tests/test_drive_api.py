@@ -269,3 +269,49 @@ def test_no_token_no_env_var_no_credentials_raises_helpful_error(tmp_path, monke
     monkeypatch.delenv(drive_api.TOKEN_ENV_VAR, raising=False)
     with pytest.raises(drive_api.DriveNotConfigured, match="One-time setup"):
         drive_api.get_service()
+
+
+# --- expired refresh token (the once-a-week Drive outage) ---
+
+
+def test_expired_refresh_token_explains_itself_and_clears_the_token(tmp_path, monkeypatch):
+    """Google reports every dead grant as a bare 'invalid_grant'. The owner
+    must get the real cause and a command, not that string."""
+    token = tmp_path / "drive_token.json"
+    token.write_text('{"refresh_token": "dead"}')
+    monkeypatch.setattr(drive_api, "TOKEN_PATH", token)
+    monkeypatch.setattr(drive_api, "STATE_DIR", tmp_path)
+
+    class DeadCreds:
+        valid = False
+        expired = True
+        refresh_token = "dead"
+
+        def refresh(self, _request):
+            raise Exception("('invalid_grant: Bad Request', {'error': 'invalid_grant'})")
+
+    # get_service imports Credentials lazily, so patch it at the source.
+    import google.oauth2.credentials as goc
+
+    monkeypatch.setattr(
+        goc.Credentials, "from_authorized_user_file",
+        staticmethod(lambda *a, **k: DeadCreds()),
+    )
+
+    with pytest.raises(drive_api.DriveAuthExpired) as caught:
+        drive_api.get_service()
+
+    message = str(caught.value)
+    assert "expired" in message.lower()
+    assert "Testing" in message and "7 days" in message   # the actual cause
+    assert "publish-drive" in message                     # and the way out
+    # The dead token is cleared so the next run can re-consent instead of
+    # failing the same way forever.
+    assert not token.exists()
+
+
+def test_expired_token_is_distinguishable_from_never_configured():
+    """catch_up_from_drive must stay quiet for one and shout for the other."""
+    assert issubclass(drive_api.DriveAuthExpired, drive_api.DriveNotConfigured)
+    assert drive_api._is_dead_refresh_token(Exception("invalid_grant: Bad Request"))
+    assert not drive_api._is_dead_refresh_token(Exception("connection reset by peer"))

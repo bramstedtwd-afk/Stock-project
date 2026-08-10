@@ -401,12 +401,17 @@ def catch_up_from_drive(engine: Engine) -> dict | None:
     Drive hiccup must not block a run.
     """
     from .brain import STATE_DIR, import_brain
-    from .drive_api import DriveNotConfigured, pull_brain_snapshot
+    from .drive_api import DriveAuthExpired, DriveNotConfigured, pull_brain_snapshot
 
     try:
         pulled = pull_brain_snapshot(STATE_DIR / "drive-pull.db")
-    except DriveNotConfigured:
+    except DriveAuthExpired as exc:
+        # Sync *was* working and has stopped. Silence here means the brain
+        # quietly stops travelling between devices, so say it in full.
+        log.warning("%s", exc)
         return None
+    except DriveNotConfigured:
+        return None  # never set up on this machine — normal, stay quiet
     except Exception as exc:
         log.warning("Drive catch-up failed: %s", exc)
         return None
