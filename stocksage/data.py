@@ -29,6 +29,9 @@ MARKET_CLOSE_HOUR = 16  # 4pm ET
 
 # Earnings dates change rarely; a stale date is still a useful date.
 EARNINGS_CACHE_TTL_SECONDS = 3 * 24 * 3600
+# A "no date found" answer is usually the source being unreachable rather
+# than a real absence, so it is retried much sooner than a found date.
+EARNINGS_MISS_TTL_SECONDS = 6 * 3600
 
 
 def drop_partial_bar(df: pd.DataFrame, now: datetime | None = None) -> pd.DataFrame:
@@ -196,9 +199,9 @@ class MarketData:
         """
         cache = self._earnings_cache()
         if ticker in cache:
-            return cache[ticker] or None
+            return cache[ticker][0] or None
         value = self._fetch_earnings_date(ticker, today)
-        cache[ticker] = value or ""
+        cache[ticker] = [value or "", time.time()]
         self._save_earnings_cache(cache)
         return value
 
@@ -229,18 +232,41 @@ class MarketData:
     def _earnings_cache_path(self) -> Path:
         return self.cache_dir / "earnings_dates.json"
 
-    def _earnings_cache(self) -> dict[str, str]:
+    def _earnings_cache(self, now: float | None = None) -> dict[str, list]:
+        """Cached answers as {ticker: [iso_date_or_empty, fetched_epoch]}.
+
+        Entries past their TTL are dropped on read, so a caller that finds a
+        ticker present can trust it. Misses expire far sooner than hits: a
+        found date is stable for days, but "no date found" is usually the
+        calendar source being unreachable, and caching that for days keeps
+        the earnings blackout switched off long after the cause is gone.
+        """
+        now = time.time() if now is None else now
         path = self._earnings_cache_path()
         try:
-            if path.exists() and time.time() - path.stat().st_mtime < EARNINGS_CACHE_TTL_SECONDS:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    return {k: v for k, v in data.items() if isinstance(v, str)}
+            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         except (OSError, json.JSONDecodeError):
-            pass
-        return {}
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        fresh: dict[str, list] = {}
+        for ticker, entry in data.items():
+            # Tolerate the older flat {ticker: "date"} format written before
+            # per-entry timestamps existed.
+            if isinstance(entry, str):
+                value, fetched = entry, now
+            elif isinstance(entry, list) and len(entry) == 2:
+                value, fetched = entry[0], entry[1]
+            else:
+                continue
+            if not isinstance(value, str) or not isinstance(fetched, (int, float)):
+                continue
+            ttl = EARNINGS_CACHE_TTL_SECONDS if value else EARNINGS_MISS_TTL_SECONDS
+            if now - fetched < ttl:
+                fresh[ticker] = [value, fetched]
+        return fresh
 
-    def _save_earnings_cache(self, cache: dict[str, str]) -> None:
+    def _save_earnings_cache(self, cache: dict[str, list]) -> None:
         try:
             self._earnings_cache_path().write_text(json.dumps(cache), encoding="utf-8")
         except OSError as exc:

@@ -50,10 +50,35 @@ def test_prefetch_skips_fresh_cache(tmp_path):
 
 def test_earnings_date_uses_disk_cache(tmp_path):
     md = MarketData(cache_dir=tmp_path)
-    cache_file = tmp_path / "earnings_dates.json"
+    now = time.time()
     # The empty string is a cached "no date found" — it must be honored as an
     # answer, not treated as a miss, or every scan re-pays the network cost.
-    cache_file.write_text(json.dumps({"AAPL": "2026-07-30", "NOPE": ""}))
-    assert time.time() - cache_file.stat().st_mtime < 60
+    (tmp_path / "earnings_dates.json").write_text(
+        json.dumps({"AAPL": ["2026-07-30", now], "NOPE": ["", now]})
+    )
     assert md.earnings_date("AAPL") == "2026-07-30"
     assert md.earnings_date("NOPE") is None
+
+
+def test_earnings_misses_expire_far_sooner_than_hits(tmp_path):
+    """A 'no date' answer is usually an unreachable source. Caching that for
+    days would keep the earnings blackout switched off long after a fix."""
+    from stocksage.data import EARNINGS_CACHE_TTL_SECONDS, EARNINGS_MISS_TTL_SECONDS
+
+    assert EARNINGS_MISS_TTL_SECONDS < EARNINGS_CACHE_TTL_SECONDS
+    md = MarketData(cache_dir=tmp_path)
+    now = time.time()
+    aged = now - (EARNINGS_MISS_TTL_SECONDS + 60)  # older than a miss may live
+    (tmp_path / "earnings_dates.json").write_text(
+        json.dumps({"HIT": ["2026-09-30", aged], "MISS": ["", aged]})
+    )
+    cache = md._earnings_cache(now=now)
+    assert "HIT" in cache      # a found date is still good at this age
+    assert "MISS" not in cache  # the failure is retried instead
+
+
+def test_earnings_cache_tolerates_the_older_flat_format(tmp_path):
+    """Brains written before per-entry timestamps must still be readable."""
+    md = MarketData(cache_dir=tmp_path)
+    (tmp_path / "earnings_dates.json").write_text(json.dumps({"AAPL": "2026-07-30"}))
+    assert md.earnings_date("AAPL") == "2026-07-30"
