@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v8, 2026-07-17)
+# Agentic Trading Routine — Playbook (v9, 2026-08-10)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from the **"StockSage" Drive folder, file "StockSage Routine
@@ -7,6 +7,21 @@ Playbook.md" — exact folder + exact filename, never a bare title search**
 publishing this file every run. Improving the routine = editing this file;
 the next publish propagates it. The routine states at the top of each run
 which playbook version it loaded, straight from this file's own header.
+
+**What changed in v9 — fixes three problems found auditing 42 live runs.**
+The account sat unable to trade for 17 consecutive days, fragmented into
+six holdings against a 2–3 target, while the desktop silently stopped
+publishing for 16 of those days and nobody noticed. Root causes and fixes:
+1. **No exit discipline** — aggressive full deployment with nothing that
+   ever returns capital. Added a **10-trading-day time-based exit** and a
+   rotation-over-accumulation rule (Capital → Capital recycling), wired
+   into run step 6.
+2. **No minimum entry size** — cash trickling in bought $4–$5 scraps.
+   Added a **$15 entry floor** (Capital).
+3. **Stale research reported too quietly** — a 16-day desktop outage was
+   noted only inside the Drive log. Staleness is now a **loud first line
+   of the phone notification** with the age named (Research engine).
+No change to the confirm gate or any hard safety rule.
 
 **What changed in v8:** the Drive log-upload step now verifies the file it
 just wrote and self-cleans the intermittent ~1-byte corrupt-upload (seen on
@@ -109,12 +124,23 @@ have Google Drive + Robinhood, but no terminal/repo).**
   avg_return_per_call — all scale-free; there is no dollar P&L because a
   fixed-stake figure would mislead next to a small account).
 - If the brief is missing or its date is older than the last trading day,
-  treat research as **stale/offline** — say so in the report and proceed on
-  your own live technical analysis. Its absence is a degraded run, never a
-  halt. **The brief is a confidence layer, never a dependency:** your own
-  live research below runs every single time regardless of the brief's
-  state, so a stale or empty brief only removes graded memory, it never
-  weakens or blocks a run.
+  treat research as **stale/offline** — proceed on your own live technical
+  analysis. Its absence is a degraded run, never a halt. **The brief is a
+  confidence layer, never a dependency:** your own live research below runs
+  every single time regardless of the brief's state, so a stale or empty
+  brief only removes graded memory, it never weakens or blocks a run.
+- **Stale research is a LOUD alert, not a footnote.** When the brief is
+  more than one trading day old, the FIRST line of the phone notification
+  must say so and name the age — e.g. "⚠️ RESEARCH STALE: brief is 6 days
+  old (desktop hasn't published since 8/4) — running on live analysis
+  only." Do not bury it in the log or the middle of the report. Also state
+  the loaded playbook version on that line whenever the brief is stale,
+  since both come from the same desktop publish and go stale together.
+  (History: the desktop silently stopped publishing for 16 days; the
+  routine noted it only inside the log, so it went unseen for over two
+  weeks while every run used a months-old playbook. One loud line on the
+  first day would have caught it.) A stale brief still does not block
+  trading — it changes what you say, not what you do.
 - **Your live market data comes from the Robinhood connector, not the
   brain.** Every run, pull live quotes, technical indicators, fundamentals,
   the earnings calendar, price history, and the market scanners directly
@@ -183,6 +209,36 @@ cap (Risk rules). When only one name clears the bar, one is fine — quality
 before quota, never force a second name to hit a count. When three-plus
 clear, take the best 2–3 by conviction × reliability.
 
+**Minimum entry size: $15.** Never open a new position below this. If
+available cash is under $15, propose nothing new and say plainly that cash
+sits below the entry floor — do NOT deploy scraps. (History: without this
+floor the account fragmented into $4–$5 positions as small amounts of cash
+trickled in, ending up with six holdings against a 2–3 target, none big
+enough to matter.) Cash waiting for a real entry is correct behavior, not
+idle capital. Separately, Robinhood rejects any fractional order under $1,
+so below that there is no decision to make at all.
+
+**Capital recycling — the aggressive posture REQUIRES an exit discipline.**
+Full deployment with no way out deadlocks the account: every dollar sits in
+positions whose targets are 12–15% away and whose stops are 3–6% away, so
+nothing resolves, no cash returns, and no new setup can ever be taken. This
+actually happened — 17 straight days unable to trade. Prevent it:
+
+- **Time-based exit: 10 trading days.** Every run, check each open
+  position's age (fill date from the order history / the Drive log). Any
+  position at **10+ trading days** that has neither hit its target nor is
+  *clearly still trending in your favor* (higher highs, momentum intact,
+  thesis visibly working) gets a confirm-gated exit proposal — framed
+  plainly as "this one has had its 10 days and hasn't worked; freeing the
+  capital for a better setup," not as a loss or a failure. A position that
+  IS clearly trending may be held past 10 days, but state why on that run.
+- This mirrors the brain's own 5-day grading horizon: if a thesis hasn't
+  played out in twice that window, the edge behind it has gone stale.
+- **Rotation beats accumulation.** When a genuinely better setup appears
+  and cash is short, prefer proposing an exit of the weakest existing
+  position to fund it over passing on the new idea. Present both legs
+  together so a single confirm covers the rotation.
+
 **Size every entry in DOLLARS, not whole shares.** At this account size
 (~$100), almost no entry will land on a whole share, and that is normal,
 not a workaround — do not treat a fractional entry as an exception case or
@@ -243,7 +299,13 @@ opposite — smaller or passed.
    (holding up / weakening / no clear reason it was bought); proactively
    decide stops/targets for anything missing one — the brief's ATR-based
    2:1 levels are the default, overridden with stated reasoning when the
-   live picture demands.
+   live picture demands. **Check each position's age here too** and apply
+   the 10-trading-day time-based exit (see Capital → Capital recycling):
+   report each position's age in days alongside its verdict, and propose a
+   confirm-gated exit for any that has run out its 10 days without working
+   and without clearly still trending. Capital recycling is part of
+   managing positions, not an afterthought — a run that reports six
+   stagnant positions and proposes no exits has not managed them.
 7. Fractional positions — the DEFAULT case at this account size, not a rare
    exception — can't carry a real resting stop order. Default handling:
    track ADVISORY stop/target levels yourself (state them plainly, e.g.
