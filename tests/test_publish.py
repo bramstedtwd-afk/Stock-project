@@ -163,3 +163,55 @@ def test_catch_up_from_drive_none_when_nothing_published(tmp_path, monkeypatch):
     monkeypatch.setattr(drive_api, "get_service", lambda: FakeDriveService())
     engine = Engine(db=Database(tmp_path / "e.db"), market=FakeMarket({}))
     assert catch_up_from_drive(engine) is None
+
+
+# --- Windows encoding (cp1252) regression ---
+
+
+def test_playbook_reads_as_utf8_regardless_of_platform_locale():
+    """ROUTINE.md is full of em-dashes and arrows. On Windows, Python's
+    default text encoding is the locale codepage (cp1252), so an
+    unqualified read_text() raised UnicodeDecodeError and killed
+    publish-drive outright. Every text read must name its encoding.
+    """
+    from pathlib import Path
+
+    import pytest
+
+    routine = Path(__file__).resolve().parent.parent / "ROUTINE.md"
+    assert routine.exists()
+    raw = routine.read_bytes()
+    # The file genuinely contains non-cp1252-safe bytes, so this test would
+    # be vacuous if it ever became pure ASCII.
+    assert any(b > 0x7F for b in raw), "expected non-ASCII in ROUTINE.md"
+    with pytest.raises(UnicodeDecodeError):
+        raw.decode("cp1252")
+    assert raw.decode("utf-8")  # the encoding the code must actually use
+
+
+def test_no_unqualified_text_io_in_the_package():
+    """Guardrail: any read_text()/write_text() without an explicit encoding
+    is a latent Windows crash, because the default is the locale codepage."""
+    import re
+    from pathlib import Path
+
+    pkg = Path(__file__).resolve().parent.parent / "stocksage"
+    offenders = []
+    for py in pkg.glob("*.py"):
+        src = py.read_text(encoding="utf-8")
+        for call in re.finditer(r"\.(read_text|write_text)\(", src):
+            # Grab the balanced call text so multi-line calls are handled.
+            i = call.end() - 1
+            depth, j = 0, i
+            while j < len(src):
+                if src[j] == "(":
+                    depth += 1
+                elif src[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            if "encoding=" not in src[i : j + 1]:
+                line = src[: call.start()].count("\n") + 1
+                offenders.append(f"{py.name}:{line}")
+    assert not offenders, f"text I/O without explicit encoding: {offenders}"

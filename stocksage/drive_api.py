@@ -92,7 +92,7 @@ def get_service():
         seed = os.environ.get(TOKEN_ENV_VAR)
         if seed:
             STATE_DIR.mkdir(parents=True, exist_ok=True)
-            TOKEN_PATH.write_text(seed)
+            TOKEN_PATH.write_text(seed, encoding="utf-8")
             TOKEN_PATH.chmod(0o600)
 
     try:
@@ -151,7 +151,7 @@ def get_service():
             )
             creds = flow.run_local_server(port=0)
         STATE_DIR.mkdir(parents=True, exist_ok=True)
-        TOKEN_PATH.write_text(creds.to_json())
+        TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
         TOKEN_PATH.chmod(0o600)
     return build("drive", "v3", credentials=creds)
 

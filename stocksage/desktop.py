@@ -93,7 +93,7 @@ def start_server(port: int, address: str = "localhost") -> subprocess.Popen | No
 
 def _print_log_tail(lines: int = 15) -> None:
     try:
-        for line in SERVER_LOG.read_text().splitlines()[-lines:]:
+        for line in SERVER_LOG.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]:
             print("   ", line)
     except OSError:
         pass
@@ -285,10 +285,13 @@ def _install_macos() -> int:
         "  <key>CFBundleExecutable</key><string>stocksage</string>\n"
         "  <key>CFBundlePackageType</key><string>APPL</string>\n"
         "  <key>LSUIElement</key><false/>\n"
-        "</dict></plist>\n"
+        "</dict></plist>\n",
+        encoding="utf-8",
     )
     launcher = macos_dir / "stocksage"
-    launcher.write_text(f'#!/bin/bash\nexec "{PROJECT_ROOT}/start.sh" app\n')
+    launcher.write_text(
+        f'#!/bin/bash\nexec "{PROJECT_ROOT}/start.sh" app\n', encoding="utf-8"
+    )
     launcher.chmod(0o755)
     say(f"Installed {app_root}")
     say("Find StockSage in ~/Applications (or Spotlight) — drag it to your Dock.")
@@ -330,12 +333,12 @@ def _install_linux() -> int:
     apps_dir = Path("~/.local/share/applications").expanduser()
     apps_dir.mkdir(parents=True, exist_ok=True)
     target = apps_dir / "stocksage.desktop"
-    target.write_text(entry)
+    target.write_text(entry, encoding="utf-8")
     target.chmod(0o755)
     desktop = Path("~/Desktop").expanduser()
     if desktop.is_dir():
         icon = desktop / "stocksage.desktop"
-        icon.write_text(entry)
+        icon.write_text(entry, encoding="utf-8")
         icon.chmod(0o755)
         say(f"Installed {target} and a Desktop icon.")
     else:

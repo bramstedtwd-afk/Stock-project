@@ -22,7 +22,7 @@ def load_env(path: Path | None = None) -> dict[str, str]:
     loaded: dict[str, str] = {}
     if not path.exists():
         return loaded
-    for raw in path.read_text().splitlines():
+    for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -42,14 +42,14 @@ def save_env(values: dict[str, str], path: Path | None = None) -> None:
     path = path or ENV_PATH
     existing = {}
     if path.exists():
-        for raw in path.read_text().splitlines():
+        for raw in path.read_text(encoding="utf-8").splitlines():
             line = raw.strip()
             if line and not line.startswith("#") and "=" in line:
                 k, _, v = line.partition("=")
                 existing[k.strip()] = v.strip()
     existing.update({k: v for k, v in values.items() if v is not None})
     body = "\n".join(f"{k}={v}" for k, v in existing.items()) + "\n"
-    path.write_text(body)
+    path.write_text(body, encoding="utf-8")
     path.chmod(stat.S_IRUSR | stat.S_IWUSR)
     # Make the new values visible to this process immediately.
     for k, v in values.items():

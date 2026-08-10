@@ -487,7 +487,7 @@ def publish_brief(
     )
 
     brief_path = out_dir / f"StockSage Brief - {date.today().isoformat()}.json"
-    brief_path.write_text(json.dumps(packet, indent=2))
+    brief_path.write_text(json.dumps(packet, indent=2), encoding="utf-8")
     written = [str(brief_path)]
 
     if include_playbook and ROUTINE_PATH.exists():
@@ -534,7 +534,7 @@ def publish_brief_via_api(
         engine, tickers=focus, max_price=max_price, top=top, holdings=holdings,
         buying_power=buying_power,
     )
-    playbook_text = ROUTINE_PATH.read_text() if ROUTINE_PATH.exists() else ""
+    playbook_text = ROUTINE_PATH.read_text(encoding="utf-8") if ROUTINE_PATH.exists() else ""
     # Same reasoning as publish_brief: export outside the repo tree so an
     # automated run never leaves the git working directory dirty.
     snap = export_brain(

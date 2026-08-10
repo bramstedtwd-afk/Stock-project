@@ -233,7 +233,7 @@ class MarketData:
         path = self._earnings_cache_path()
         try:
             if path.exists() and time.time() - path.stat().st_mtime < EARNINGS_CACHE_TTL_SECONDS:
-                data = json.loads(path.read_text())
+                data = json.loads(path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
                     return {k: v for k, v in data.items() if isinstance(v, str)}
         except (OSError, json.JSONDecodeError):
@@ -242,7 +242,7 @@ class MarketData:
 
     def _save_earnings_cache(self, cache: dict[str, str]) -> None:
         try:
-            self._earnings_cache_path().write_text(json.dumps(cache))
+            self._earnings_cache_path().write_text(json.dumps(cache), encoding="utf-8")
         except OSError as exc:
             log.debug("earnings cache write failed: %s", exc)
 

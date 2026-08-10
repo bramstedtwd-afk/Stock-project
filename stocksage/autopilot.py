@@ -236,7 +236,7 @@ def turn_on() -> int:
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     if sys.platform == "darwin":
         LAUNCHD_PLIST.parent.mkdir(parents=True, exist_ok=True)
-        LAUNCHD_PLIST.write_text(launchd_plist())
+        LAUNCHD_PLIST.write_text(launchd_plist(), encoding="utf-8")
         subprocess.run(
             ["launchctl", "unload", str(LAUNCHD_PLIST)], capture_output=True
         )  # re-load cleanly if it already existed
@@ -290,7 +290,7 @@ def turn_on_publish(folder: str | None) -> int:
     PUBLISH_LOG.parent.mkdir(parents=True, exist_ok=True)
     if sys.platform == "darwin":
         PUBLISH_LAUNCHD_PLIST.parent.mkdir(parents=True, exist_ok=True)
-        PUBLISH_LAUNCHD_PLIST.write_text(publish_launchd_plist(folder))
+        PUBLISH_LAUNCHD_PLIST.write_text(publish_launchd_plist(folder), encoding="utf-8")
         subprocess.run(
             ["launchctl", "unload", str(PUBLISH_LAUNCHD_PLIST)], capture_output=True
         )
