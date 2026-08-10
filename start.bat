@@ -58,7 +58,7 @@ if "%~1"=="" (
     if "%~2"=="" (
         %VENV_PY% -m stocksage.autopilot on
     ) else (
-        %VENV_PY% -m stocksage.autopilot %2
+        %VENV_PY% -m stocksage.autopilot %2 %3
     )
 ) else (
     %VENV_PY% -m stocksage %*

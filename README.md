@@ -85,6 +85,22 @@ git clone <your-repo-url> && cd Stock-project
 ./start.sh brain import <file>    # or brain sync <folder>
 ```
 
+**No admin rights / can't install Dropbox, iCloud, OneDrive, or Google
+Drive for Desktop on this machine?** If you've already set up the [no-install
+Google Drive API path](#the-learning-loop-the-point-of-the-whole-tool) (see
+`publish-drive` below) on another device, the brain travels the exact same
+way, with nothing to install here either:
+
+```bash
+git clone <your-repo-url> && cd Stock-project
+./start.sh                        # sets itself up
+./start.sh brain pull-drive       # pulls the whole shared brain straight from Drive
+```
+
+One-time OAuth consent (the same browser popup as `publish-drive`'s setup)
+if this machine hasn't signed in before — after that it's one command, no
+installer, ever, on this machine.
+
 Robinhood credentials are deliberately **never** part of the brain — link
 Robinhood fresh on each device. `./start.sh brain info` shows where the
 brain lives and what it knows.
@@ -143,7 +159,8 @@ Anything you pass to the launcher goes to the CLI instead of the dashboard:
 ./start.sh moves          # "why it moved" memory
 ./start.sh performance    # learning status & signal weights
 ./start.sh profit         # paper ledger, incl. edge vs just holding SPY
-./start.sh brief --out Brief.json   # publish the JSON your routine agent reads
+./start.sh brief          # research packet for the trading routine
+./start.sh publish <dir>  # publish brief + playbook + brain to a Drive folder
 ```
 
 (Windows: `start.bat daily`, etc.)
@@ -204,13 +221,82 @@ freshest history.
   every weekday at 5:30pm even when nothing is open:
 
   ```bash
-  ./start.sh autopilot            # on   (Windows: start.bat autopilot)
-  ./start.sh autopilot status     # check
-  ./start.sh autopilot off        # stop
+  ./start.sh autopilot                       # learn every weekday 17:30
+  ./start.sh autopilot publish "<folder>"    # + supply the trading routine
+  ./start.sh autopilot status                # check both
+  ./start.sh autopilot off                   # stop everything
   ```
 
   Uses launchd on macOS, cron on Linux, Task Scheduler on Windows; output
-  goes to `~/.stocksage/daily.log`. The computer must be awake at run time.
+  goes to `~/.stocksage/daily.log` and `~/.stocksage/publish.log`. The
+  computer must be awake at run time.
+
+  **`autopilot publish "<folder>"`** is the hands-off trading bridge: every
+  weekday (5 times, timed just ahead of a typical trading routine's runs)
+  it mirrors your Robinhood fills into graded calls, grades matured ones,
+  and writes a fresh research brief into a Google-Drive-synced folder — so
+  your trading routine reads freshly-graded research on every run with
+  zero manual steps. Point `<folder>` at a directory synced by Google
+  Drive for Desktop (e.g. `"G:\My Drive\StockSage"`).
+
+  **No admin rights / can't install Google Drive for Desktop?** Use
+  `./start.sh autopilot publish-drive` instead — it talks to Google
+  Drive's API directly from Python, with nothing installed beyond two
+  packages already in StockSage's own virtual environment. One-time
+  setup (all in a browser, no downloads):
+
+  1. Go to [console.cloud.google.com](https://console.cloud.google.com/),
+     create a project (free), then **APIs & Services → Library** →
+     enable the **Google Drive API**.
+  2. **APIs & Services → OAuth consent screen** → External → fill in an
+     app name and your email → save (you can leave it in "Testing" mode).
+  3. **APIs & Services → Credentials → Create Credentials → OAuth client
+     ID** → Application type: **Desktop app** → Create.
+  4. Click the download icon next to the new client → save the file as
+     `drive_credentials.json` in your `~/.stocksage/` folder (Windows:
+     `C:\Users\<you>\.stocksage\drive_credentials.json` — create the
+     folder if it doesn't exist).
+  5. Run `./start.sh publish-drive` once by hand — it opens your browser
+     for a one-time "Sign in with Google" consent, then never asks again.
+
+  From then on `./start.sh autopilot publish-drive` schedules the exact
+  same capture → grade → publish cycle, just delivered straight to Drive's
+  API instead of a synced folder. Everything lands in one "StockSage"
+  folder in your Drive, in three files that get updated in place each
+  run (no dated duplicates to clean up, no ambiguity about which is
+  current).
+
+  **Running independent of any personal device (no computer needs to be
+  on):** `publish-drive` has no dependency on a locally-mounted folder, so
+  it can run from any machine that can reach the internet — including a
+  scheduled cloud session (a Claude Code Routine, a CI runner, any
+  headless box) that has no browser and no local `~/.stocksage/` history
+  of its own. Two things make that work, both already built in:
+
+  - **No browser needed there.** After doing the one-time browser consent
+    above on *any* device, copy that device's `~/.stocksage/drive_token.json`
+    contents into a `STOCKSAGE_DRIVE_TOKEN` environment variable on the
+    headless machine. `get_service()` seeds the token file from it on
+    first use and refreshes silently forever after — `drive_credentials.json`
+    is never needed there at all. (There's no dedicated secrets store on
+    most cloud-session platforms — env vars there are typically visible to
+    anyone who can edit that environment/session, so treat this token with
+    the same care as a password, and remember its `drive.file` scope means
+    it can only ever see files it created itself, nothing else in your Drive.)
+  - **No local brain history needed there either.** Every `publish-drive`
+    run first calls `brain pull-drive` internally — pulling whatever the
+    brain last learned anywhere (this device, another device, an earlier
+    cloud run) from Drive and merging it in before grading or scanning —
+    then re-publishes the merged, newly-updated brain back to Drive when
+    it's done. A totally fresh machine with an empty database starts smart
+    on its very first run, and every run anywhere keeps the one shared
+    brain moving forward together.
+
+  Robinhood credentials are **not** required on a headless publish-drive
+  machine — without them it just degrades to percentage-based position
+  sizing in the brief (the trading routine already knows to compute a
+  dollar amount itself from its own live buying power when that happens;
+  see `ROUTINE.md`). Only the Drive token needs to travel.
 
 ### The learning loop (the point of the whole tool)
 
@@ -333,26 +419,13 @@ money have done better just sitting in SPY?** Every graded call stores the
 market's return over the same window, and the Profit tab shows the model's
 edge (or deficit) against that do-nothing alternative.
 
-### The published brief (what an automated routine reads)
+### The published brief (what the trading routine reads)
 
-`./start.sh brief --out <path>` writes a single JSON file describing the
-day: candidates with stops, targets, sizing and earnings status; names to
-avoid; sector mood; and the model's track record. It's the handoff between
-StockSage (which learns) and any routine that acts on it.
-
-Two fields lead the file, both there so you're never misled by it:
-
-- **`headline`** — one sentence: *"Following these calls has earned $X more
-  (or less) than putting the same money in SPY."* That is the only number
-  that answers "is this worth doing instead of an index fund." Raw P&L and
-  win rate flatter themselves in a rising market, so they never headline.
-- **`health`** — what was actually working when the file was built. If the
-  earnings calendar was down or the broker wasn't linked, `health.degraded`
-  says so in plain English. A half-broken run still produces confident-looking
-  suggestions, which is exactly the dangerous case; this makes it loud.
-
-The schema is versioned (`schema_version`) and covered by offline tests, so
-a change to what the brain knows can't silently break whatever reads it.
+`./start.sh brief` builds the research packet — candidates with stops,
+targets, sizing and earnings status; names to avoid; sector mood; the
+model's track record — and `./start.sh publish <folder>` writes it, the
+playbook, and the brain snapshot into a Drive-synced folder. That's the
+handoff between StockSage (which learns) and the routine that acts on it.
 
 ## The universe
 

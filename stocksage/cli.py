@@ -239,17 +239,254 @@ def cmd_brain(args) -> int:
                 f"weights kept from the {stats['weights_taken_from']} brain "
                 "(the one that learned most recently)."
             )
+    elif args.brain_action == "snapshot":
+        path = brain.write_snapshot()
+        print(f"Brain snapshot written to {path}")
+        print("Commit and push it — every environment that pulls the repo gets the knowledge:")
+        print('  git add brain/brain-snapshot.db && git commit -m "brain snapshot" && git push')
+    elif args.brain_action == "absorb":
+        stats = brain.absorb_snapshot()
+        if stats is None:
+            print("No snapshot in the repo (brain/brain-snapshot.db) — nothing to absorb.")
+        else:
+            print(
+                f"Snapshot absorbed: +{stats['suggestions_added']} suggestions, "
+                f"+{stats['move_events_added']} move events (merges only ever add)."
+            )
     elif args.brain_action == "sync":
         target = brain.sync_to_folder(args.path)
         print(f"Brain now lives at {target}")
         print("Run the same command with the same folder on your other devices —")
         print("they will all share this one brain.")
+    elif args.brain_action == "pull-drive":
+        from pathlib import Path
+
+        from .drive_api import DriveNotConfigured, pull_brain_snapshot
+
+        try:
+            pulled = pull_brain_snapshot(Path("~/.stocksage/drive-pull.db").expanduser())
+        except DriveNotConfigured as exc:
+            print(f"Not set up yet: {exc}")
+            return 1
+        if pulled is None:
+            print("No brain has been published to Drive yet — nothing to pull.")
+            return 0
+        stats = brain.import_brain(pulled)
+        print(
+            f"Pulled the shared brain from Drive and merged it in: "
+            f"+{stats['suggestions_added']} suggestions, "
+            f"+{stats['move_events_added']} move events, "
+            f"weights kept from the {stats['weights_taken_from']} brain "
+            "(the one that learned most recently). No Drive-for-Desktop "
+            "install needed — this is the same no-install API path as publish-drive."
+        )
     else:  # info
         info = brain.brain_info()
         print("\nBrain")
         print("-" * 40)
         for key, value in info.items():
             print(f"  {key:<18}{value}")
+    return 0
+
+
+def cmd_brief(args) -> int:
+    import json as _json
+
+    from .advisor import build_brief
+    from .robinhood import RobinhoodClient
+
+    engine = Engine()
+    buying_power = None
+    if RobinhoodClient.credentials_available():
+        portfolio = RobinhoodClient().portfolio()
+        if portfolio is not None:
+            buying_power = portfolio.buying_power
+    brief = build_brief(
+        engine, tickers=args.tickers or None, max_price=args.max_price, top=args.top,
+        buying_power=buying_power,
+    )
+    if args.json:
+        print(_json.dumps(brief, indent=2))
+        return 0
+    print(f"\nResearch brief — {brief['as_of']} "
+          f"(graded {brief['graded_this_call']} matured calls first)")
+    stats = brief["model_stats"]
+    print(
+        f"Model record: {stats['graded_calls']} graded calls"
+        + (f", {stats['hit_rate']:.0%} hit rate" if stats["hit_rate"] is not None else "")
+        + (f", paper profit factor {stats['paper_profit_factor']}"
+           if stats["paper_profit_factor"] is not None else "")
+    )
+    for section, entries in (("FOCUS", brief["focus"]), ("CANDIDATES", brief["candidates"])):
+        if not entries:
+            continue
+        print(f"\n{section}:")
+        for e in entries:
+            if e.get("data") == "unavailable":
+                print(f"  {e['ticker']:<7} (no data — brain context only)")
+                continue
+            rec = e["model_record"]
+            rec_txt = (
+                f"record {rec['hit_rate']:.0%} over {rec['graded_calls']}"
+                if rec["hit_rate"] is not None else "no record yet"
+            )
+            size_txt = (
+                f"  buy ~${e['size_hint_dollars']:,.2f} (~{e['est_shares']:g} sh)"
+                if e.get("size_hint_dollars")
+                else f"  size {e['size_hint_pct']}%"
+            )
+            print(
+                f"  {e['ticker']:<7}{e['verdict']:<12}score {e['score']:+.2f}  "
+                f"${e['price']:,.2f}  stop {e['stop']}  target {e['target']}  "
+                f"({rec_txt}){size_txt}"
+            )
+            if e["recent_shock"]:
+                sh = e["recent_shock"]
+                print(f"          shock {sh['date']}: {sh['return_pct']:+.1%} "
+                      f"[{', '.join(sh['reasons'])}]")
+            if e.get("earnings_blackout"):
+                print(f"          ⚠ earnings in {e['earnings_days']} day(s) — "
+                      "new entry on hold until after the print")
+    if brief["avoid"]:
+        print("\nAVOID: " + ", ".join(f"{a['ticker']} ({a['verdict']})" for a in brief["avoid"]))
+    if brief.get("congress_watch"):
+        cw = ", ".join(
+            f"{c['ticker']} ({c['members']} members)" for c in brief["congress_watch"][:6]
+        )
+        print(f"\nCONGRESS BUYING: {cw}")
+    print(DISCLAIMER)
+    return 0
+
+
+def cmd_sync(args) -> int:
+    from .advisor import desktop_sync_cycle
+
+    engine = Engine()
+    stats = desktop_sync_cycle(engine)
+    if stats.get("sync_error"):
+        print(f"Robinhood sync skipped: {stats['sync_error']}")
+    elif stats["synced"]:
+        print(
+            f"Mirrored {stats['synced']['orders_total']} orders "
+            f"({stats['synced']['orders_added']} new)."
+        )
+    else:
+        print("Robinhood not linked — grading recorded calls only.")
+    print(
+        f"Captured {stats['fills_ingested']} new trades as graded calls, "
+        f"graded {stats['graded']} matured calls. The brain just got smarter."
+    )
+    return 0
+
+
+def _sync_and_focus(engine, explicit_tickers):
+    """Capture+grade real trades, then build the ticker list the routine
+    cares about most: what it holds, plus the watchlist, plus anything
+    named explicitly. Shared by both publish paths."""
+    from .advisor import desktop_sync_cycle
+
+    sync = desktop_sync_cycle(engine)
+    if sync["fills_ingested"] or sync["graded"]:
+        print(
+            f"(Captured {sync['fills_ingested']} new trades, "
+            f"graded {sync['graded']} matured calls first.)"
+        )
+    focus = list(explicit_tickers or [])
+    for t in engine.db.watchlist() + sync.get("holdings", []):
+        if t not in focus:
+            focus.append(t)
+    return sync, focus or None
+
+
+def cmd_publish(args) -> int:
+    from .advisor import publish_brief
+
+    engine = Engine()
+    sync, focus = _sync_and_focus(engine, args.tickers)
+    result = publish_brief(
+        engine, args.drive_folder, tickers=focus, max_price=args.max_price,
+        holdings=sync.get("holdings"), buying_power=sync.get("buying_power"),
+    )
+    print(f"Published research to {result['folder']}:")
+    for path in result["written"]:
+        print(f"  · {path}")
+    print(
+        f"({result['candidates']} candidates in the brief.) "
+        "If this folder is synced by Google Drive for Desktop, your routine "
+        "can now read it. Schedule this alongside autopilot for fresh research each day."
+    )
+    return 0
+
+
+def _pull_drive_brain(engine) -> None:
+    """Best-effort catch-up before grading or scanning — see
+    advisor.catch_up_from_drive for the mechanics. Silent no-op if Drive
+    isn't configured or has nothing new; never blocks the run."""
+    from .advisor import catch_up_from_drive
+
+    stats = catch_up_from_drive(engine)
+    if stats and (stats.get("suggestions_added") or stats.get("move_events_added")):
+        print(
+            f"(Caught up from Drive: +{stats['suggestions_added']} suggestions, "
+            f"+{stats['move_events_added']} move events.)"
+        )
+
+
+def cmd_publish_drive(args) -> int:
+    from .advisor import publish_brief_via_api
+    from .drive_api import DriveNotConfigured
+
+    engine = Engine()
+    _pull_drive_brain(engine)
+    sync, focus = _sync_and_focus(engine, args.tickers)
+    try:
+        result = publish_brief_via_api(
+            engine, tickers=focus, max_price=args.max_price,
+            holdings=sync.get("holdings"), buying_power=sync.get("buying_power"),
+        )
+    except DriveNotConfigured as exc:
+        print(f"Not set up yet: {exc}")
+        return 1
+    print(f"Published directly to Google Drive ({result['candidates']} candidates):")
+    for name in result["files"]:
+        print(f"  · {name}  (in your Drive's StockSage folder)")
+    print("No desktop app or sync client involved — this went straight to Drive's API.")
+    return 0
+
+
+def cmd_log_call(args) -> int:
+    from .advisor import log_call
+
+    engine = Engine()
+    sid = log_call(engine, args.ticker, args.action, price=args.price, note=args.note)
+    print(
+        f"Logged call #{sid}: {args.action.upper()} {args.ticker.upper()}"
+        + (f" @ ${args.price:,.2f}" if args.price else "")
+        + " — it will be graded automatically and feed the model's learning."
+    )
+    return 0
+
+
+def cmd_congress(args) -> int:
+    from .congress import CongressData, notable_buys
+
+    summary = CongressData().summary()
+    if not summary:
+        print("Congress-buying tracking is currently disabled — no reliable free data "
+              "source is available (see stocksage/congress.py for details).")
+        return 0
+    tickers = notable_buys(summary, top=args.limit)
+    if not tickers:
+        print("No notable congressional buying in the recent window.")
+        return 0
+    print("\nWhere Congress is putting money (recent disclosed buys):")
+    print(f"{'TICKER':<8}{'MEMBERS':>8}{'NET BUYS':>10}{'~$ EST':>12}  LAST")
+    print("-" * 52)
+    for tk in tickers:
+        s = summary[tk]
+        print(f"{tk:<8}{s['members']:>8}{s['net_buys']:>10}{s['est_amount']:>12,}  "
+              f"{s['last_date']}")
+    print("\n(Context only — a tilt to weigh, not a mechanical signal.)\n")
     return 0
 
 
@@ -302,37 +539,6 @@ def cmd_profit(args) -> int:
     if stats["best"]:
         b, w = stats["best"], stats["worst"]
         print(f"Best / worst call : {b.ticker} ${b.pnl:+,.2f}  /  {w.ticker} ${w.pnl:+,.2f}")
-    print(DISCLAIMER)
-    return 0
-
-
-def cmd_brief(args) -> int:
-    """Publish the JSON brief the routine agent reads each run."""
-    from .brief import build_brief, write_brief
-
-    engine = Engine()
-    print("Scanning and publishing the brief ...")
-    result = engine.daily_run(with_robinhood=not args.no_robinhood)
-    brief = build_brief(result, engine)
-
-    if args.out:
-        path = write_brief(brief, args.out)
-        print(f"\nBrief written to {path}")
-    else:
-        print(json.dumps(brief, indent=1))
-        return 0
-
-    print(f"\n{brief['headline']}")
-    if brief["health"]["degraded"]:
-        print("\n⚠ This brief was built in a degraded state:")
-        for line in brief["health"]["degraded"]:
-            print(f"  · {line}")
-    else:
-        print("All inputs healthy.")
-    print(
-        f"\n{len(brief['candidates'])} candidates · {len(brief['avoid'])} to avoid · "
-        f"{brief['graded_this_call']} calls graded this run"
-    )
     print(DISCLAIMER)
     return 0
 
@@ -414,11 +620,68 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("path")
     b.add_argument("--replace", action="store_true", help="swap wholesale instead of merging")
     b.set_defaults(func=cmd_brain)
+    b = brain_sub.add_parser(
+        "snapshot", help="export the brain into the repo so git carries the knowledge"
+    )
+    b.set_defaults(func=cmd_brain)
+    b = brain_sub.add_parser(
+        "absorb", help="merge the repo's brain snapshot into this machine's brain"
+    )
+    b.set_defaults(func=cmd_brain)
     b = brain_sub.add_parser("sync", help="keep the brain in a cloud-synced folder")
     b.add_argument("path", help="folder synced by Dropbox/iCloud/OneDrive/...")
     b.set_defaults(func=cmd_brain)
+    b = brain_sub.add_parser(
+        "pull-drive",
+        help="pull the shared brain from Google Drive (no-install path) and merge it in",
+    )
+    b.set_defaults(func=cmd_brain)
     b = brain_sub.add_parser("info", help="where the brain lives and what it knows")
     b.set_defaults(func=cmd_brain)
+
+    p = sub.add_parser(
+        "brief", help="research packet for an agent/routine (use --json for machines)"
+    )
+    p.add_argument("tickers", nargs="*", help="tickers the routine holds or is eyeing")
+    p.add_argument("--max-price", type=float, help="only suggest candidates at/under this price")
+    p.add_argument("--top", type=int, default=5)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_brief)
+
+    p = sub.add_parser(
+        "publish", help="write a research packet + playbook into a Drive-synced folder"
+    )
+    p.add_argument("drive_folder", help="folder synced by Google Drive for Desktop")
+    p.add_argument("tickers", nargs="*", help="focus tickers (default: your watchlist)")
+    p.add_argument("--max-price", type=float)
+    p.set_defaults(func=cmd_publish)
+
+    p = sub.add_parser(
+        "publish-drive",
+        help="push research straight to Google Drive's API — no desktop app, "
+        "no admin rights needed (one-time browser sign-in instead)",
+    )
+    p.add_argument("tickers", nargs="*", help="focus tickers (default: your watchlist)")
+    p.add_argument("--max-price", type=float)
+    p.set_defaults(func=cmd_publish_drive)
+
+    p = sub.add_parser(
+        "sync", help="capture real trades as graded calls + grade matured ones"
+    )
+    p.set_defaults(func=cmd_sync)
+
+    p = sub.add_parser(
+        "log-call", help="record a trading decision so the brain grades it later"
+    )
+    p.add_argument("ticker")
+    p.add_argument("action", help="BUY / SELL / STRONG BUY / STRONG SELL")
+    p.add_argument("--price", type=float, help="executed or quoted price (else latest close)")
+    p.add_argument("--note", help="one-line reasoning, kept in the learning log")
+    p.set_defaults(func=cmd_log_call)
+
+    p = sub.add_parser("congress", help="where Congress is putting money lately")
+    p.add_argument("--limit", type=int, default=15)
+    p.set_defaults(func=cmd_congress)
 
     p = sub.add_parser("watch", help="manage the watchlist (extra tickers scanned daily)")
     p.add_argument("watch_action", choices=["add", "remove", "list"])
@@ -431,10 +694,6 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("performance", help="learning status and signal weights")
     p.set_defaults(func=cmd_performance)
 
-    p = sub.add_parser("brief", help="publish the JSON brief the routine agent reads")
-    p.add_argument("--out", help="write to this path (default: print to stdout)")
-    p.add_argument("--no-robinhood", action="store_true")
-    p.set_defaults(func=cmd_brief)
     return parser
 
 

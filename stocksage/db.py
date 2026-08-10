@@ -76,6 +76,12 @@ CREATE TABLE IF NOT EXISTS rh_dividends (
     paid_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS ingested_fills (
+    order_id TEXT PRIMARY KEY,        -- Robinhood order already turned into a graded call
+    suggestion_id INTEGER NOT NULL,
+    ingested_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -132,14 +138,31 @@ class Database:
         price: float,
         signals: dict[str, float],
         horizon_days: int,
+        created_at: str | None = None,
     ) -> int:
+        """Record a call. `created_at` may be backdated (e.g. an actual fill
+        time) so its grading horizon is measured from when it really happened."""
         cur = self.conn.execute(
             "INSERT INTO suggestions (created_at, ticker, action, score, price,"
             " signals, horizon_days) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (_now(), ticker, action, score, price, json.dumps(signals), horizon_days),
+            (created_at or _now(), ticker, action, score, price,
+             json.dumps(signals), horizon_days),
         )
         self.conn.commit()
         return int(cur.lastrowid)
+
+    def fill_ingested(self, order_id: str) -> bool:
+        return self.conn.execute(
+            "SELECT 1 FROM ingested_fills WHERE order_id = ?", (order_id,)
+        ).fetchone() is not None
+
+    def mark_fill_ingested(self, order_id: str, suggestion_id: int) -> None:
+        self.conn.execute(
+            "INSERT OR IGNORE INTO ingested_fills (order_id, suggestion_id, ingested_at)"
+            " VALUES (?, ?, ?)",
+            (order_id, suggestion_id, _now()),
+        )
+        self.conn.commit()
 
     def pending_evaluations(self, as_of: datetime) -> list[sqlite3.Row]:
         """Suggestions whose evaluation horizon has elapsed."""

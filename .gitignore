@@ -5,6 +5,8 @@
 *.db
 *.sqlite3
 .stocksage/
+# ...except the committed brain snapshot, which carries knowledge via git
+!brain/brain-snapshot.db
 
 # Python
 __pycache__/

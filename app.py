@@ -58,6 +58,18 @@ def get_engine() -> Engine:
     return Engine()
 
 
+@st.cache_data(ttl=86400)
+def _congress_top():
+    """Top tickers Congress is buying — cached daily, fully defensive."""
+    try:
+        from stocksage.congress import CongressData, notable_buys
+
+        summary = CongressData().summary()
+        return [(tk, summary[tk]["members"]) for tk in notable_buys(summary, top=6)]
+    except Exception:
+        return []
+
+
 def run_daily_cycle():
     engine = get_engine()
     first_run = engine.db.get_meta("bootstrap_done") is None
@@ -129,6 +141,13 @@ with st.sidebar:
     if st.button("Add to watchlist", use_container_width=True) and new_watch.strip():
         watch_db.watchlist_add(new_watch)
         st.rerun()
+
+    st.header("🏛 Congress buying")
+    st.caption("Where lawmakers are putting money lately — context, not a signal.")
+    for tk, members in _congress_top():
+        st.caption(f"· **{tk}** — {members} member(s) buying")
+    if not _congress_top():
+        st.caption("_Currently disabled — no reliable free data source is available._")
 
     if not binfo["shared"]:
         with st.expander("☁️ Share across your devices"):
@@ -232,6 +251,8 @@ with tab_sugg:
                     c3.caption(size_line)
                 if s.owned_shares:
                     c3.caption(f"You hold {s.owned_shares:g} shares")
+                if s.earnings_days is not None and 0 <= s.earnings_days <= 3:
+                    c3.caption(f"⚠ Earnings in {s.earnings_days}d")
                 with c4:
                     if s.why:
                         st.markdown(f"**{s.why}**")

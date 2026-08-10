@@ -30,6 +30,8 @@ SHOCK_LOOKBACK_DAYS = 5            # a big move this recent tempers conviction
 SHOCK_DAMPING = 0.75
 EVENT_PRONE_THRESHOLD = 10         # outsized moves in 12mo that flag a name jumpy
 EVENT_PRONE_SIZING = 0.75
+# A new entry this close to an earnings print risks gapping through the stop.
+EARNINGS_BLACKOUT_DAYS = 3
 
 # Risk budget per position: cap the suggested allocation of investable cash.
 MAX_POSITION_FRACTION = 0.10
@@ -52,7 +54,6 @@ class PastContext:
     hit_rate: float | None = None      # model's own accuracy on this name
     recent_event: dict | None = None   # {date, return_pct, reasons} within lookback
     events_12mo: int = 0               # outsized moves in the past year
-    days_to_earnings: int | None = None  # calendar days until the next report
 
 
 def reliability_multiplier(graded_calls: int, hit_rate: float | None) -> float:
@@ -81,6 +82,7 @@ class Suggestion:
     position_fraction: float = 0.0  # suggested fraction of investable cash
     stop_price: float | None = None
     owned_shares: float = 0.0
+    earnings_days: int | None = None  # calendar days to next earnings, if known
     notes: list[str] = field(default_factory=list)
     why: str = ""  # one plain-English sentence: what is driving this call
 
@@ -215,6 +217,7 @@ def build_suggestion(
     sector: str | None = None,
     owned_shares: float = 0.0,
     past: PastContext | None = None,
+    earnings_days: int | None = None,
 ) -> Suggestion:
     vol = risk.get("annualized_vol")
     vol_mult = risk_multiplier(vol)
@@ -263,26 +266,30 @@ def build_suggestion(
     if owned_shares == 0 and action in ("SELL", "STRONG SELL"):
         notes.append("You do not hold this — treat as an avoid, not a trade.")
 
+    earnings_soon = (
+        earnings_days is not None and 0 <= earnings_days <= EARNINGS_BLACKOUT_DAYS
+    )
+
     stop = None
     fraction = 0.0
     if action in ("BUY", "STRONG BUY"):
-        fraction = round(position_size(ras, atr_pct) * sizing_mult, 4)
-        days_to_earnings = past.days_to_earnings if past else None
-        if (
-            days_to_earnings is not None
-            and 0 <= days_to_earnings <= EARNINGS_BLACKOUT_DAYS
-        ):
-            # The signal may be right, but the print decides the week — a new
-            # entry now is a bet on the report, not on the setup.
-            fraction = 0.0
-            when = "today" if days_to_earnings == 0 else f"in {days_to_earnings} day{'s' if days_to_earnings != 1 else ''}"
+        if earnings_soon:
+            # Don't open a fresh position right before a print — a surprise
+            # can gap straight through the protective stop.
             notes.append(
-                f"Earnings expected {when} — wait for the report before opening "
-                "a new position; the setup can be re-judged after the print."
+                f"Earnings in {earnings_days} day(s) — new entry on hold; a "
+                "surprise can gap through the stop. Revisit after the print."
             )
-        if fraction and atr_pct is not None and math.isfinite(atr_pct) and math.isfinite(price):
-            stop = round(price * (1.0 - STOP_ATR_MULTIPLE * atr_pct), 2)
-            notes.append(f"Suggested protective stop near ${stop:,.2f} (2x ATR).")
+        else:
+            fraction = round(position_size(ras, atr_pct) * sizing_mult, 4)
+            if atr_pct is not None and math.isfinite(atr_pct) and math.isfinite(price):
+                stop = round(price * (1.0 - STOP_ATR_MULTIPLE * atr_pct), 2)
+                notes.append(f"Suggested protective stop near ${stop:,.2f} (2x ATR).")
+    elif earnings_soon and owned_shares > 0:
+        notes.append(
+            f"You hold this and earnings are in {earnings_days} day(s) — decide "
+            "before the print whether to hold through the risk or trim."
+        )
 
     return Suggestion(
         ticker=ticker,
@@ -296,6 +303,7 @@ def build_suggestion(
         position_fraction=fraction,
         stop_price=stop,
         owned_shares=owned_shares,
+        earnings_days=earnings_days,
         notes=notes,
         why=why_sentence(ticker, action, signals),
     )

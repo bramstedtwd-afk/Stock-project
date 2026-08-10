@@ -241,6 +241,37 @@ def sync_to_folder(folder: str | Path, db_path: str | Path | None = None) -> Pat
     return target
 
 
+# --- repo-carried snapshot: knowledge travels the same channel as code ------
+
+SNAPSHOT_PATH = Path(__file__).resolve().parent.parent / "brain" / "brain-snapshot.db"
+ROUTINE_PATH = Path(__file__).resolve().parent.parent / "ROUTINE.md"
+# Outside the repo tree on purpose: automated exports (publish/publish-drive)
+# must never write here — only SNAPSHOT_PATH (inside the repo) is meant to
+# be git-committed, and only via the deliberate `brain snapshot` command.
+STATE_DIR = Path("~/.stocksage").expanduser()
+
+
+def write_snapshot(db_path: str | Path | None = None) -> Path:
+    """Export the brain into the repo (brain/brain-snapshot.db).
+
+    Commit + push it and every environment that pulls the repo carries the
+    knowledge too. Contains no credentials by design.
+    """
+    return export_brain(SNAPSHOT_PATH, db_path=db_path)
+
+
+def absorb_snapshot(db_path: str | Path | None = None) -> dict | None:
+    """Merge the repo snapshot (if present) into the local brain.
+
+    Merging only ever adds and is idempotent, so this is safe to run on
+    every routine call — it's how a fresh environment starts smart.
+    Returns merge stats, or None when no snapshot file exists.
+    """
+    if not SNAPSHOT_PATH.exists():
+        return None
+    return import_brain(SNAPSHOT_PATH, db_path=db_path)
+
+
 def brain_info(db_path: str | Path | None = None) -> dict:
     db = Database(db_path)
     try:

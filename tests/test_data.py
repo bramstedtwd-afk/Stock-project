@@ -48,11 +48,12 @@ def test_prefetch_skips_fresh_cache(tmp_path):
     assert md.prefetch(["AAA", "BBB"]) == 0
 
 
-def test_next_earnings_date_uses_disk_cache(tmp_path):
+def test_earnings_date_uses_disk_cache(tmp_path):
     md = MarketData(cache_dir=tmp_path)
     cache_file = tmp_path / "earnings_dates.json"
+    # The empty string is a cached "no date found" — it must be honored as an
+    # answer, not treated as a miss, or every scan re-pays the network cost.
     cache_file.write_text(json.dumps({"AAPL": "2026-07-30", "NOPE": ""}))
-    # Fresh mtime -> served from cache, no network touched.
     assert time.time() - cache_file.stat().st_mtime < 60
-    assert md.next_earnings_date("AAPL") == "2026-07-30"
-    assert md.next_earnings_date("NOPE") is None
+    assert md.earnings_date("AAPL") == "2026-07-30"
+    assert md.earnings_date("NOPE") is None

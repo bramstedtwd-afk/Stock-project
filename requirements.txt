@@ -12,5 +12,10 @@ qrcode>=7.4            # scannable code for phone mode
 robin_stocks>=3.0
 pyotp>=2.9             # TOTP for Robinhood 2FA
 
+# Direct Google Drive API (publish-drive) — only used if you set up
+# ~/.stocksage/drive_credentials.json; harmless if you never do
+google-auth-oauthlib>=1.2
+google-api-python-client>=2.100
+
 # Development
 pytest>=8.0

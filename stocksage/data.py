@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -49,6 +49,13 @@ def drop_partial_bar(df: pd.DataFrame, now: datetime | None = None) -> pd.DataFr
     if last_day == now_et.date() and now_et.hour < MARKET_CLOSE_HOUR:
         return df.iloc[:-1]
     return df
+
+
+def next_future_earnings(dates: list[str], today: date | None = None) -> str | None:
+    """The soonest earnings date on/after today from a list of ISO dates."""
+    ref = (today or date.today()).isoformat()
+    future = sorted(d[:10] for d in dates if d and d[:10] >= ref)
+    return future[0] if future else None
 
 
 def parse_news_items(raw: list, limit: int) -> list[dict]:
@@ -173,6 +180,39 @@ class MarketData:
             return None
         return float(df["Close"].iloc[-1])
 
+    # --- earnings calendar ---
+
+    def earnings_date(self, ticker: str, today: date | None = None) -> str | None:
+        """Next scheduled earnings date (ISO) at or after today, or None.
+
+        Best-effort from yfinance; any failure returns None so a scan is
+        never blocked by a missing/renamed calendar field.
+
+        Answers are cached on disk for days, including the "no date found"
+        answer. Earnings dates move rarely, and an uncached lookup costs a
+        full network round trip per name — which on a machine where the
+        calendar endpoint is slow or unreachable is what turns a ten-second
+        scan into a ten-minute one.
+        """
+        cache = self._earnings_cache()
+        if ticker in cache:
+            return cache[ticker] or None
+        value = self._fetch_earnings_date(ticker, today)
+        cache[ticker] = value or ""
+        self._save_earnings_cache(cache)
+        return value
+
+    def _fetch_earnings_date(self, ticker: str, today: date | None = None) -> str | None:
+        try:
+            import yfinance as yf
+
+            df = yf.Ticker(ticker).get_earnings_dates(limit=12)
+            candidates = [str(idx.date()) for idx in df.index] if df is not None else []
+        except Exception as exc:
+            log.debug("earnings lookup failed for %s: %s", ticker, exc)
+            return None
+        return next_future_earnings(candidates, today)
+
     # --- news ---
 
     def news(self, ticker: str, limit: int = 8) -> list[dict]:
@@ -185,46 +225,6 @@ class MarketData:
             log.warning("news fetch failed for %s: %s", ticker, exc)
             return []
         return parse_news_items(raw, limit)
-
-    # --- earnings calendar ---
-
-    def next_earnings_date(self, ticker: str) -> str | None:
-        """The next scheduled earnings date as YYYY-MM-DD, or None.
-
-        Cached on disk for days — earnings dates move rarely, and this keeps
-        the scan from paying ~100 extra requests every run.
-        """
-        cache = self._earnings_cache()
-        if ticker in cache:
-            return cache[ticker] or None
-        value = self._fetch_earnings_date(ticker)
-        cache[ticker] = value or ""
-        self._save_earnings_cache(cache)
-        return value
-
-    def _fetch_earnings_date(self, ticker: str) -> str | None:
-        try:
-            import yfinance as yf
-
-            calendar = yf.Ticker(ticker).calendar
-        except Exception as exc:  # missing calendar must never block a scan
-            log.debug("earnings calendar fetch failed for %s: %s", ticker, exc)
-            return None
-        dates = None
-        if isinstance(calendar, dict):
-            dates = calendar.get("Earnings Date")
-        elif calendar is not None:  # older yfinance returned a DataFrame
-            try:
-                dates = list(calendar.loc["Earnings Date"])
-            except Exception:
-                dates = None
-        if not dates:
-            return None
-        try:
-            first = min(pd.Timestamp(d) for d in dates if d is not None)
-            return str(first.date())
-        except (TypeError, ValueError):
-            return None
 
     def _earnings_cache_path(self) -> Path:
         return self.cache_dir / "earnings_dates.json"

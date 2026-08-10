@@ -57,25 +57,32 @@ def test_high_volatility_downgrades_action():
 
 
 def test_earnings_blackout_zeroes_size_but_keeps_call():
-    from stocksage.scoring import PastContext
-
     risk = {"price": 100.0, "atr_pct": 0.015, "drawdown_52w": -0.05, "annualized_vol": 0.20}
-    past = PastContext(days_to_earnings=2)
-    s = build_suggestion("TEST", {"trend_long": 0.9}, score=0.8, risk=risk, past=past)
+    s = build_suggestion(
+        "TEST", {"trend_long": 0.9}, score=0.8, risk=risk, earnings_days=2
+    )
     assert s.action in ("BUY", "STRONG BUY")  # the read is unchanged...
     assert s.position_fraction == 0.0          # ...but no new entry into the print
     assert s.stop_price is None
-    assert any("Earnings expected" in n for n in s.notes)
+    assert any("Earnings in 2 day" in n for n in s.notes)
 
 
 def test_earnings_far_away_does_not_gate():
-    from stocksage.scoring import PastContext
-
     risk = {"price": 100.0, "atr_pct": 0.015, "drawdown_52w": -0.05, "annualized_vol": 0.20}
     s = build_suggestion(
-        "TEST", {"trend_long": 0.9}, score=0.8, risk=risk, past=PastContext(days_to_earnings=20)
+        "TEST", {"trend_long": 0.9}, score=0.8, risk=risk, earnings_days=20
     )
     assert s.position_fraction > 0
+
+
+def test_earnings_warns_when_you_already_hold_into_a_print():
+    """A print you're holding through is a decision, even with no buy signal."""
+    risk = {"price": 100.0, "atr_pct": 0.015, "drawdown_52w": -0.05, "annualized_vol": 0.20}
+    s = build_suggestion(
+        "TEST", {"trend_long": -0.9}, score=-0.5, risk=risk,
+        owned_shares=10.0, earnings_days=1,
+    )
+    assert any("earnings are in 1 day" in n for n in s.notes)
 
 
 def test_why_sentence_names_drivers_and_tension():

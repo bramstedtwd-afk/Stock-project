@@ -173,7 +173,7 @@ class Engine:
             log.info("evaluated %d matured suggestions; weights updated", count)
         return count
 
-    def _past_context(self, ticker: str, days_to_earnings: int | None = None) -> PastContext:
+    def _past_context(self, ticker: str) -> PastContext:
         """What the brain remembers about this name, for the scoring model."""
         graded, hit_rate, _ = self.db.ticker_track_record(ticker)
         today = datetime.now(timezone.utc).date()
@@ -198,31 +198,25 @@ class Engine:
             hit_rate=hit_rate,
             recent_event=recent,
             events_12mo=events_12mo,
-            days_to_earnings=days_to_earnings,
         )
 
     def _days_to_earnings(self, ticker: str) -> int | None:
-        """Calendar days until the next scheduled report; None when unknown.
-
-        Optional market capability (getattr): fakes and older data layers
-        simply don't gate on earnings.
-        """
-        fetch = getattr(self.market, "next_earnings_date", None)
-        if not callable(fetch):
+        """Calendar days until the next earnings print, if the data source
+        exposes it. Never raises — earnings info is a bonus, not a dependency."""
+        getter = getattr(self.market, "earnings_date", None)
+        if getter is None:
             return None
         try:
-            when = fetch(ticker)
-        except Exception as exc:  # never let calendar trouble kill a scan
-            log.debug("earnings date lookup failed for %s: %s", ticker, exc)
+            iso = getter(ticker)
+        except Exception:
             return None
-        if not when:
+        if not iso:
             return None
         try:
-            report = datetime.strptime(when, "%Y-%m-%d").date()
+            edate = datetime.strptime(iso[:10], "%Y-%m-%d").date()
         except ValueError:
             return None
-        delta = (report - datetime.now(timezone.utc).date()).days
-        return delta if delta >= 0 else None
+        return max(0, (edate - datetime.now(timezone.utc).date()).days)
 
     def weights_for(self, ticker: str, global_weights: dict[str, float]) -> dict[str, float]:
         """Effective weights for one name: global blended with its sector's."""
@@ -312,14 +306,14 @@ class Engine:
                 owned_shares=owned,
                 past=past,
             )
-            # The earnings gate only ever changes buy-side sizing, so the
-            # calendar is consulted only for names that actually earned a buy.
-            # On a cold cache that is ~10 lookups per scan instead of one per
+            # The earnings gate only changes buy-side sizing and the warning on
+            # names already held, so the calendar is consulted only for those.
+            # On a cold cache that is ~15 lookups per scan instead of one per
             # name in the universe — the difference between a fast scan and a
             # slow one when the calendar endpoint is unreachable.
-            if suggestion.action in ("BUY", "STRONG BUY"):
-                past.days_to_earnings = self._days_to_earnings(ticker)
-                if past.days_to_earnings is not None:
+            if suggestion.action in ("BUY", "STRONG BUY") or owned > 0:
+                earnings_days = self._days_to_earnings(ticker)
+                if earnings_days is not None:
                     suggestion = build_suggestion(
                         ticker,
                         feats,
@@ -328,6 +322,7 @@ class Engine:
                         sector=sector.name if sector else None,
                         owned_shares=owned,
                         past=past,
+                        earnings_days=earnings_days,
                     )
             result.suggestions.append(suggestion)
 
