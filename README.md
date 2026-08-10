@@ -142,6 +142,8 @@ Anything you pass to the launcher goes to the CLI instead of the dashboard:
 ./start.sh portfolio      # your holdings + live signals
 ./start.sh moves          # "why it moved" memory
 ./start.sh performance    # learning status & signal weights
+./start.sh profit         # paper ledger, incl. edge vs just holding SPY
+./start.sh brief --out Brief.json   # publish the JSON your routine agent reads
 ```
 
 (Windows: `start.bat daily`, etc.)
@@ -330,6 +332,27 @@ It also answers the question every honest meter must face: **would the same
 money have done better just sitting in SPY?** Every graded call stores the
 market's return over the same window, and the Profit tab shows the model's
 edge (or deficit) against that do-nothing alternative.
+
+### The published brief (what an automated routine reads)
+
+`./start.sh brief --out <path>` writes a single JSON file describing the
+day: candidates with stops, targets, sizing and earnings status; names to
+avoid; sector mood; and the model's track record. It's the handoff between
+StockSage (which learns) and any routine that acts on it.
+
+Two fields lead the file, both there so you're never misled by it:
+
+- **`headline`** — one sentence: *"Following these calls has earned $X more
+  (or less) than putting the same money in SPY."* That is the only number
+  that answers "is this worth doing instead of an index fund." Raw P&L and
+  win rate flatter themselves in a rising market, so they never headline.
+- **`health`** — what was actually working when the file was built. If the
+  earnings calendar was down or the broker wasn't linked, `health.degraded`
+  says so in plain English. A half-broken run still produces confident-looking
+  suggestions, which is exactly the dangerous case; this makes it loud.
+
+The schema is versioned (`schema_version`) and covered by offline tests, so
+a change to what the brain knows can't silently break whatever reads it.
 
 ## The universe
 

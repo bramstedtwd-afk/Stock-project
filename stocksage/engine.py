@@ -302,6 +302,7 @@ class Engine:
                 if event:
                     result.move_events.append(event)
 
+            past = self._past_context(ticker)
             suggestion = build_suggestion(
                 ticker,
                 feats,
@@ -309,8 +310,25 @@ class Engine:
                 risk,
                 sector=sector.name if sector else None,
                 owned_shares=owned,
-                past=self._past_context(ticker, self._days_to_earnings(ticker)),
+                past=past,
             )
+            # The earnings gate only ever changes buy-side sizing, so the
+            # calendar is consulted only for names that actually earned a buy.
+            # On a cold cache that is ~10 lookups per scan instead of one per
+            # name in the universe — the difference between a fast scan and a
+            # slow one when the calendar endpoint is unreachable.
+            if suggestion.action in ("BUY", "STRONG BUY"):
+                past.days_to_earnings = self._days_to_earnings(ticker)
+                if past.days_to_earnings is not None:
+                    suggestion = build_suggestion(
+                        ticker,
+                        feats,
+                        score,
+                        risk,
+                        sector=sector.name if sector else None,
+                        owned_shares=owned,
+                        past=past,
+                    )
             result.suggestions.append(suggestion)
 
             if record and abs(suggestion.risk_adjusted_score) >= RECORD_THRESHOLD:

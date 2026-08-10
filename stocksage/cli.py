@@ -306,6 +306,37 @@ def cmd_profit(args) -> int:
     return 0
 
 
+def cmd_brief(args) -> int:
+    """Publish the JSON brief the routine agent reads each run."""
+    from .brief import build_brief, write_brief
+
+    engine = Engine()
+    print("Scanning and publishing the brief ...")
+    result = engine.daily_run(with_robinhood=not args.no_robinhood)
+    brief = build_brief(result, engine)
+
+    if args.out:
+        path = write_brief(brief, args.out)
+        print(f"\nBrief written to {path}")
+    else:
+        print(json.dumps(brief, indent=1))
+        return 0
+
+    print(f"\n{brief['headline']}")
+    if brief["health"]["degraded"]:
+        print("\n⚠ This brief was built in a degraded state:")
+        for line in brief["health"]["degraded"]:
+            print(f"  · {line}")
+    else:
+        print("All inputs healthy.")
+    print(
+        f"\n{len(brief['candidates'])} candidates · {len(brief['avoid'])} to avoid · "
+        f"{brief['graded_this_call']} calls graded this run"
+    )
+    print(DISCLAIMER)
+    return 0
+
+
 def cmd_performance(args) -> int:
     db = Database()
     summary = db.performance_summary()
@@ -399,6 +430,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("performance", help="learning status and signal weights")
     p.set_defaults(func=cmd_performance)
+
+    p = sub.add_parser("brief", help="publish the JSON brief the routine agent reads")
+    p.add_argument("--out", help="write to this path (default: print to stdout)")
+    p.add_argument("--no-robinhood", action="store_true")
+    p.set_defaults(func=cmd_brief)
     return parser
 
 

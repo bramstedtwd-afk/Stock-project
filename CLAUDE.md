@@ -28,6 +28,7 @@ rather than giving them instructions.
 - `stocksage/insights.py` — FIFO round trips, realized P&L, owner win rate, model-agreement analysis
 - `stocksage/profit.py` — fixed-stake paper ledger from graded calls (the honesty meter)
 - `stocksage/briefing.py` — the morning briefing synthesis
+- `stocksage/brief.py` — the published JSON brief the routine agent reads (`headline` = edge vs SPY, `health.degraded` = what was broken); schema is versioned + tested here, not hand-rolled on the desktop
 - `stocksage/db.py` — SQLite "brain" (default `~/.stocksage/stocksage.db`, `STOCKSAGE_DB` overrides)
 - `stocksage/brain.py` — brain export / merging import / cloud-folder sync (merges only ever add)
 - `stocksage/data.py` — yfinance with parquet cache + stale fallback
@@ -41,7 +42,7 @@ rather than giving them instructions.
 
 `(none)`=app window · `web` · `phone` · `install` · `autopilot [off|status]` ·
 `update` · `doctor` · `daily` · `suggest [TICKERS]` · `sectors` · `portfolio` ·
-`moves` · `performance` · `profit` · `watch add|remove|list` ·
+`moves` · `performance` · `profit` · `brief [--out PATH]` · `watch add|remove|list` ·
 `bootstrap` · `brain export|import|sync|info`
 
 ## Development conventions
@@ -52,6 +53,21 @@ rather than giving them instructions.
 - Signal names are stable identifiers (learned weights key on them) — renaming one resets its learned weight.
 - DB schema changes must be additive (`CREATE TABLE IF NOT EXISTS`) — existing brains migrate automatically; brain merges must tolerate older-schema files.
 - Credentials live only in `.env` (gitignored, 0600). Never move them into the brain, logs, or commits.
+
+## ⚠️ Unmerged work — read this first (as of 2026-08-10)
+
+**This branch (`claude/stock-analyzer-features-x2q2o3`) has never been merged
+into the default branch `claude/stock-trend-analyzer-robinhood-67iqou`.** The
+default branch is still at `d60e448` (2026-07-11), so the owner's desktop —
+and therefore the published brief and the routine agent that reads it — has
+been running the pre-7/13 build for a month. Everything under "Recently
+built" and "Brief publishing" below is live only here.
+
+Consequences visible in the wild: the published `StockSage Brief.json` shows
+`earnings_days: null` on every candidate (the blackout code is not in the
+build the desktop runs) and no edge-vs-SPY figure in `model_stats`. Merging
+is the precondition for any of it mattering. Do not merge without the
+owner's explicit go-ahead.
 
 ## Current state & first jobs on the owner's machine (2026-07-11)
 
@@ -84,6 +100,25 @@ So, in order:
   (`watchlist_tickers`), and suggestion sizes show real dollars from
   buying power. Profit tab/briefing show the edge vs parking the same
   stakes in SPY.
+
+## Brief publishing (2026-08-10 session)
+
+- `stocksage brief --out <path>` publishes the JSON the routine agent reads.
+  The schema lives in `stocksage/brief.py` (`SCHEMA_VERSION`), is additive,
+  and is covered by `tests/test_brief.py` — previously it was hand-rolled in
+  an unseen desktop script, which is how it drifted from the repo.
+- Two fields exist so the owner is never misled: `headline` (edge over SPY,
+  in one sentence — never raw P&L, which flatters in a rising market) and
+  `health.degraded` (plain-English list of what was broken during the run,
+  e.g. earnings calendar down, broker unlinked). The agent leads with both.
+- The earnings calendar is now consulted **only for buy candidates** (~10
+  lookups/scan instead of ~110). On a machine where the calendar endpoint is
+  slow or blocked this is the difference between a usable and an unusable scan.
+- `docs/agent-playbook-amendments.md` holds proposed playbook v8 rules
+  (notification budget, concentration measured on equity not buying power,
+  splitting the risk check from the research sweep, one rolling log). The
+  Drive playbook must be edited **in place** — a second playbook document
+  reintroduces the v5/v6 loader bug.
 
 ## Roadmap the owner has seen (build on request)
 
