@@ -33,6 +33,7 @@ from pathlib import Path
 
 from . import universe
 from .profit import paper_trades, profit_stats
+from .scoring import EARNINGS_BLACKOUT_DAYS
 
 SCHEMA_VERSION = 2
 
@@ -94,8 +95,6 @@ def _candidate(suggestion, engine, buying_power: float | None) -> dict:
         suggestion.ticker, engine._days_to_earnings(suggestion.ticker)
     )
     days = past.days_to_earnings
-    from .scoring import EARNINGS_BLACKOUT_DAYS
-
     blackout = days is not None and 0 <= days <= EARNINGS_BLACKOUT_DAYS
 
     stop = suggestion.stop_price
