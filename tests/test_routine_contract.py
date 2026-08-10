@@ -147,3 +147,55 @@ def test_sell_actionability_depends_on_holdings(monkeypatch):
     assert e_held["verdict"] in ("SELL", "STRONG SELL")
     assert e_held["actionable"] is True     # you hold it -> selling is a real action
     assert e_unheld["actionable"] is False  # you don't -> it's only an avoid
+
+
+# --- the honest scoreboard the routine leads with ---
+
+
+def _graded(rows):
+    """Brain with (realized, benchmark) pairs already graded."""
+    from stocksage.db import Database
+
+    db = Database(":memory:")
+    for i, (realized, bench) in enumerate(rows):
+        sid = db.record_suggestion(f"T{i}", "BUY", 0.5, 100.0, {"x": 0.5}, 5)
+        db.mark_evaluated(sid, realized, realized > 0, benchmark_return=bench)
+    return db
+
+
+def _scoreboard(db):
+    from stocksage.advisor import scoreboard_headline
+    from stocksage.profit import paper_trades, profit_stats
+
+    buys, avoided = paper_trades(db.evaluated_suggestions())
+    return scoreboard_headline(db.performance_summary(), profit_stats(buys, avoided), buys)
+
+
+def test_headline_never_calls_a_loss_a_gain():
+    """Beating a falling market is still a loss — the sentence must say so."""
+    line = _scoreboard(_graded([(-0.01, -0.05)] * 12))
+    assert "lost 1.00% per call" in line
+    assert "beating the market by" in line
+
+
+def test_headline_states_trailing_plainly():
+    line = _scoreboard(_graded([(0.01, 0.05)] * 12))
+    assert "trailing the market by" in line
+
+
+def test_headline_refuses_a_verdict_on_a_thin_sample():
+    """One lucky call must not read as proof of an edge."""
+    line = _scoreboard(_graded([(0.06, 0.02)]))
+    assert "Too early to judge" in line
+    assert "beating the market" not in line
+
+
+def test_headline_when_nothing_measured_against_the_market():
+    from stocksage.db import Database
+
+    db = Database(":memory:")
+    sid = db.record_suggestion("AAA", "BUY", 0.5, 100.0, {"x": 0.5}, 5)
+    db.mark_evaluated(sid, 0.06, True)  # graded, but no benchmark
+    line = _scoreboard(db)
+    assert "none measured against the market yet" in line
+    assert _scoreboard(Database(":memory:")).startswith("No calls graded yet")

@@ -51,6 +51,66 @@ SIGNAL_GLOSS = {
 }
 
 
+# Calls graded against the benchmark before the headline states a verdict.
+# Below this an "edge" is a coin flip dressed up as evidence — and right
+# after benchmark grading is switched on the covered count restarts near
+# zero while graded_calls is already in the hundreds, which is exactly when
+# a confident sentence would mislead most.
+MIN_COVERED_FOR_VERDICT = 10
+
+
+def market_edge(ledger: dict, buys: list) -> dict:
+    """Per-call edge over simply holding SPY, expressed scale-free.
+
+    Reported per call rather than in dollars for the same reason the rest of
+    model_stats is: a fixed $1,000 paper stake means nothing next to a
+    hundred-dollar account, but "beat the market by 0.8 points a call" holds
+    at any size.
+    """
+    covered = ledger.get("covered_trades") or 0
+    stake = buys[0].stake if buys else 0.0
+    if not covered or not stake:
+        return {"covered_trades": covered, "edge_vs_market_per_call": None,
+                "benchmark_return_per_call": None}
+    basis = covered * stake
+    return {
+        "covered_trades": covered,
+        "edge_vs_market_per_call": round(ledger["edge_vs_market"] / basis, 4),
+        "benchmark_return_per_call": round(ledger["benchmark_pnl"] / basis, 4),
+        "own_return_per_call": round(ledger["covered_pnl"] / basis, 4),
+    }
+
+
+def scoreboard_headline(summary: dict, ledger: dict, buys: list) -> str:
+    """The one sentence worth putting in front of the owner.
+
+    Two traps this avoids. Beating the market while *losing* money is a real
+    outcome — both fell, this fell less — and must never be phrased as a
+    gain. And an edge from a handful of calls is noise, so below a minimum
+    sample it reports the running figure without claiming a verdict.
+    """
+    graded = summary.get("evaluated") or 0
+    if not graded:
+        return ("No calls graded yet — nothing to judge this on. "
+                "Check back after a week of daily runs.")
+    edge = market_edge(ledger, buys)
+    covered = edge["covered_trades"]
+    per_call = edge["edge_vs_market_per_call"]
+    if not covered or per_call is None:
+        return (f"{graded} calls graded, but none measured against the market yet — "
+                "no honest read on whether this beats an index fund.")
+    if covered < MIN_COVERED_FOR_VERDICT:
+        return (f"Too early to judge: {covered} of {graded} graded calls measured "
+                f"against the market (running edge {per_call:+.2%} per call). "
+                f"{MIN_COVERED_FOR_VERDICT} are needed before that means anything.")
+    own, bench = edge["own_return_per_call"], edge["benchmark_return_per_call"]
+    made = f"returned {own:+.2%} per call" if own >= 0 else f"lost {abs(own):.2%} per call"
+    spy_did = f"returned {bench:+.2%}" if bench >= 0 else f"lost {abs(bench):.2%}"
+    verdict = "beating the market by" if per_call >= 0 else "trailing the market by"
+    return (f"Across {covered} graded calls these {made}, while SPY over the same "
+            f"windows {spy_did} — {verdict} {abs(per_call):.2%} per call.")
+
+
 def _congress_watch(summary: dict, top: int = 8) -> list[dict]:
     """Top tickers Congress is buying lately — brief-level context."""
     from .congress import notable_buys
@@ -260,6 +320,7 @@ def build_brief(
             {"ticker": s.ticker, "verdict": s.action, "score": s.risk_adjusted_score}
             for s in avoid
         ],
+        "headline": scoreboard_headline(summary, ledger, buys),
         "model_stats": {
             "graded_calls": summary["evaluated"],
             "hit_rate": round(summary["hit_rate"], 3)
@@ -273,6 +334,7 @@ def build_brief(
             "avg_return_per_call": round(ledger["return_per_trade"], 4)
             if ledger.get("return_per_trade") is not None
             else None,
+            **market_edge(ledger, buys),
         },
         "scan_errors": len(result.errors),
     }
