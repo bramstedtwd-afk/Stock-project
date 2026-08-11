@@ -179,3 +179,9 @@ def test_portfolio_tab_renders_one_tab_per_account(monkeypatch, tmp_path):
     # Every account is offered by name, including the Roth.
     for label in ("Individual ••••1111", "Individual ••••6789", "Roth IRA ••••9999"):
         assert label in text, f"missing account tab: {label}"
+    # The agentic account leads and is starred — it is the only one the
+    # routine acts on, so burying it in Robinhood's own ordering is wrong.
+    labels = [str(t.label) for t in at.tabs if getattr(t, "label", None)]
+    account_tabs = [x for x in labels if "••••" in x]
+    assert account_tabs, "expected account tabs to be rendered"
+    assert account_tabs[0] == "⭐ Individual ••••6789"

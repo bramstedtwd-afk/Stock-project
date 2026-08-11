@@ -7,6 +7,7 @@ your Robinhood portfolio, the move-context memory, and the learning status.
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -410,7 +411,14 @@ with tab_portfolio:
                 accounts = []
 
         if len(accounts) > 1:
-            names = [a.label for a in accounts]
+            # The agentic account leads: it is the only one the routine acts
+            # on, so it is the one you check first. Robinhood's own ordering
+            # buries it among accounts you never trade from here.
+            agentic = (os.environ.get("STOCKSAGE_AGENTIC_ACCOUNT") or "123456789").strip()
+            accounts.sort(key=lambda a: (a.number != agentic, a.kind, a.number))
+            names = [
+                f"⭐ {a.label}" if a.number == agentic else a.label for a in accounts
+            ]
             for tab, acct in zip(st.tabs(names), accounts):
                 with tab:
                     if (

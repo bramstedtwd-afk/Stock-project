@@ -46,6 +46,8 @@ TOKEN_ENV_VAR = "STOCKSAGE_DRIVE_TOKEN"
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 FOLDER_NAME = "StockSage"
 FOLDER_MIME = "application/vnd.google-apps.folder"
+BRIEF_NAME = "StockSage Brief.json"
+PLAYBOOK_NAME = "StockSage Routine Playbook.md"
 
 
 class DriveNotConfigured(RuntimeError):
@@ -233,6 +235,49 @@ def _escape(name: str) -> str:
     return name.replace("\\", "\\\\").replace("'", "\\'")
 
 
+def playbook_version(text: str) -> int | None:
+    """The version number from a playbook's own header line, or None.
+
+    Header looks like: `# Agentic Trading Routine — Playbook (v11, 2026-08-10)`
+    """
+    import re
+
+    if not text:
+        return None
+    head = text.lstrip().splitlines()[0] if text.strip() else ""
+    m = re.search(r"\(v(\d+)\b", head)
+    return int(m.group(1)) if m else None
+
+
+def would_downgrade_playbook(service, folder_id, local_text: str):
+    """(True, remote_v, local_v) when uploading would replace the playbook in
+    Drive with an OLDER version.
+
+    The playbook calls itself "always current by construction", but nothing
+    enforced that: any machine running publish-drive from a stale checkout
+    silently overwrote the canonical file with its own older copy. That
+    happened — a v7-era playbook landed on top of v10 overnight, and the
+    routine woke up operating under superseded risk rules while its log
+    still showed the newer ones. A publish must never be able to move the
+    playbook backwards.
+    """
+    local_v = playbook_version(local_text)
+    if local_v is None:
+        return False, None, None  # unversioned: nothing to compare, allow
+    try:
+        raw = download_file(service, PLAYBOOK_NAME, folder_id)
+        if not raw:
+            return False, None, local_v
+        remote_text = raw.decode("utf-8", "replace")
+    except Exception as exc:  # a check that fails must not block publishing
+        log.debug("playbook version check skipped: %s", exc)
+        return False, None, local_v
+    remote_v = playbook_version(remote_text)
+    if remote_v is None:
+        return False, None, local_v
+    return local_v < remote_v, remote_v, local_v
+
+
 def publish_via_api(brief_json: str, playbook_text: str, snapshot_path: Path) -> dict:
     """Push the research brief, playbook, and brain snapshot straight to
     Drive via the API — the no-install alternative to a locally-synced
@@ -241,15 +286,28 @@ def publish_via_api(brief_json: str, playbook_text: str, snapshot_path: Path) ->
     service = get_service()
     folder_id = ensure_folder(service)
     written = {
-        "StockSage Brief.json": upload_or_update(
-            service, "StockSage Brief.json", brief_json,
-            "application/json", folder_id,
-        ),
-        "StockSage Routine Playbook.md": upload_or_update(
-            service, "StockSage Routine Playbook.md", playbook_text,
-            "text/markdown", folder_id,
+        BRIEF_NAME: upload_or_update(
+            service, BRIEF_NAME, brief_json, "application/json", folder_id,
         ),
     }
+    # The brief is always safe to refresh — it describes right now. The
+    # playbook is not: publishing it from a stale checkout is how a v7 copy
+    # landed on top of v10 and the routine ran a superseded ruleset.
+    downgrade, remote_v, local_v = would_downgrade_playbook(
+        service, folder_id, playbook_text
+    )
+    skipped = None
+    if downgrade:
+        skipped = (
+            f"Drive already has playbook v{remote_v}; this machine has only "
+            f"v{local_v}. Left Drive's copy alone rather than moving the "
+            f"routine's rules backwards. Update this checkout, then publish."
+        )
+        log.warning("%s", skipped)
+    else:
+        written[PLAYBOOK_NAME] = upload_or_update(
+            service, PLAYBOOK_NAME, playbook_text, "text/markdown", folder_id,
+        )
     if snapshot_path.exists():
         from googleapiclient.http import MediaFileUpload
 
@@ -266,4 +324,7 @@ def publish_via_api(brief_json: str, playbook_text: str, snapshot_path: Path) ->
                 .execute()
             )
             written["brain-snapshot.db"] = created["id"]
-    return {"folder_id": folder_id, "files": written}
+    out = {"folder_id": folder_id, "files": written}
+    if skipped:
+        out["playbook_skipped"] = skipped
+    return out

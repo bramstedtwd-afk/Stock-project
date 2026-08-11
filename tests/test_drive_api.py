@@ -315,3 +315,76 @@ def test_expired_token_is_distinguishable_from_never_configured():
     assert issubclass(drive_api.DriveAuthExpired, drive_api.DriveNotConfigured)
     assert drive_api._is_dead_refresh_token(Exception("invalid_grant: Bad Request"))
     assert not drive_api._is_dead_refresh_token(Exception("connection reset by peer"))
+
+
+# --- the playbook must never move backwards ---
+
+
+def test_playbook_version_parses_the_header():
+    assert drive_api.playbook_version(
+        "# Agentic Trading Routine — Playbook (v11, 2026-08-10)\n\nbody"
+    ) == 11
+    assert drive_api.playbook_version("# Playbook (v7, 2026-07-17)") == 7
+    assert drive_api.playbook_version("# no version here") is None
+    assert drive_api.playbook_version("") is None
+
+
+def _drive_with_playbook(text):
+    """A fake Drive already holding a playbook of the given text."""
+    service = FakeDriveService()
+    folder = drive_api.ensure_folder(service)
+    drive_api.upload_or_update(
+        service, drive_api.PLAYBOOK_NAME, text, "text/markdown", folder
+    )
+    return service, folder
+
+
+def test_publishing_an_older_playbook_is_refused():
+    """A stale checkout published a v7 playbook over v10 overnight and the
+    routine woke up running superseded risk rules. Publishing must never be
+    able to move the playbook backwards."""
+    service, folder = _drive_with_playbook("# Playbook (v10, 2026-08-10)\nnew rules")
+    downgrade, remote_v, local_v = drive_api.would_downgrade_playbook(
+        service, folder, "# Playbook (v7, 2026-07-17)\nold rules"
+    )
+    assert downgrade is True
+    assert (remote_v, local_v) == (10, 7)
+
+
+def test_publishing_the_same_or_newer_playbook_is_allowed():
+    service, folder = _drive_with_playbook("# Playbook (v10, 2026-08-10)\nrules")
+    for text, expected_local in (
+        ("# Playbook (v10, 2026-08-11)\nrules", 10),
+        ("# Playbook (v11, 2026-08-11)\nrules", 11),
+    ):
+        downgrade, _, local_v = drive_api.would_downgrade_playbook(service, folder, text)
+        assert downgrade is False
+        assert local_v == expected_local
+
+
+def test_first_ever_publish_is_allowed():
+    service = FakeDriveService()
+    folder = drive_api.ensure_folder(service)
+    downgrade, remote_v, _ = drive_api.would_downgrade_playbook(
+        service, folder, "# Playbook (v11, 2026-08-11)\nrules"
+    )
+    assert downgrade is False and remote_v is None
+
+
+def test_publish_skips_the_playbook_but_still_refreshes_the_brief(tmp_path, monkeypatch):
+    """The brief describes right now and is always safe to refresh; only the
+    playbook is held back."""
+    service, folder = _drive_with_playbook("# Playbook (v10, 2026-08-10)\nnew rules")
+    monkeypatch.setattr(drive_api, "get_service", lambda: service)
+    monkeypatch.setattr(drive_api, "ensure_folder", lambda svc, name=drive_api.FOLDER_NAME: folder)
+
+    out = drive_api.publish_via_api(
+        '{"as_of": "now"}', "# Playbook (v7, 2026-07-17)\nold rules", tmp_path / "none.db"
+    )
+    assert drive_api.BRIEF_NAME in out["files"]          # brief refreshed
+    assert drive_api.PLAYBOOK_NAME not in out["files"]   # playbook untouched
+    assert "playbook_skipped" in out
+    assert "v10" in out["playbook_skipped"] and "v7" in out["playbook_skipped"]
+    # And Drive still holds the newer text.
+    still = drive_api.download_file(service, drive_api.PLAYBOOK_NAME, folder)
+    assert b"v10" in still
