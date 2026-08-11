@@ -353,29 +353,86 @@ with tab_sectors:
         st.bar_chart(trend_df, horizontal=True)
         st.caption("Composite trend score per sector ETF: -1 bearish … +1 bullish.")
 
+def render_account(p, by_ticker, label=None):
+    """One account's holdings against the model's current signals."""
+    if label:
+        st.caption(f"Account: **{label}**")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Holdings", len(p.holdings))
+    m2.metric("Equity", f"${p.total_equity:,.2f}")
+    m3.metric("Buying power", f"${p.buying_power:,.2f}")
+    if not p.holdings:
+        st.caption("No open positions in this account.")
+        return
+    equity = p.total_equity or 0.0
+    rows = []
+    for h in p.holdings:
+        sig = by_ticker.get(h.ticker)
+        pl = (h.current_price / h.avg_buy_price - 1.0) if h.avg_buy_price else None
+        rows.append(
+            {
+                "Ticker": h.ticker,
+                "Shares": h.shares,
+                "Avg cost": h.avg_buy_price,
+                "Price": h.current_price,
+                "Value": round(h.equity, 2),
+                # Concentration is the number the playbook's 25% cap acts on,
+                # so it belongs where you can see it, per account.
+                "% of account": round(h.equity / equity * 100, 1) if equity else None,
+                "P/L %": round(pl * 100, 1) if pl is not None else None,
+                "Signal": sig.action if sig else "n/a",
+            }
+        )
+    rows.sort(key=lambda r: -(r["% of account"] or 0))
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    over = [r for r in rows if (r["% of account"] or 0) > 25]
+    if over:
+        names = ", ".join(f"{r['Ticker']} ({r['% of account']:.0f}%)" for r in over)
+        st.warning(
+            f"Over the 25%-of-equity concentration cap: {names}. "
+            "The playbook bars new buys in these until they're trimmed."
+        )
+
+
 with tab_portfolio:
     if result is not None and result.portfolio:
-        p = result.portfolio
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Holdings", len(p.holdings))
-        m2.metric("Equity", f"${p.total_equity:,.2f}")
-        m3.metric("Buying power", f"${p.buying_power:,.2f}")
         by_ticker = {s.ticker: s for s in result.suggestions}
-        rows = []
-        for h in p.holdings:
-            sig = by_ticker.get(h.ticker)
-            pl = (h.current_price / h.avg_buy_price - 1.0) if h.avg_buy_price else None
-            rows.append(
-                {
-                    "Ticker": h.ticker,
-                    "Shares": h.shares,
-                    "Avg cost": h.avg_buy_price,
-                    "Price": h.current_price,
-                    "P/L %": round(pl * 100, 1) if pl is not None else None,
-                    "Signal": sig.action if sig else "n/a",
-                }
-            )
-        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+        # One tab per account under the login. Without this the dashboard
+        # shows only the default account and says nothing about which — the
+        # exact ambiguity that let a personal account's buying power end up
+        # in the brief the agentic routine reads.
+        accounts = []
+        if RobinhoodClient.credentials_available():
+            try:
+                accounts = RobinhoodClient().accounts()
+            except Exception:
+                accounts = []
+
+        if len(accounts) > 1:
+            names = [a.label for a in accounts]
+            for tab, acct in zip(st.tabs(names), accounts):
+                with tab:
+                    if (
+                        result.portfolio.account_number
+                        and acct.number == result.portfolio.account_number
+                    ):
+                        render_account(result.portfolio, by_ticker, acct.label)
+                    else:
+                        with st.spinner(f"Loading {acct.label}…"):
+                            other = RobinhoodClient().portfolio_for(acct.number)
+                        if other is None:
+                            st.warning("Couldn't load this account just now.")
+                        else:
+                            render_account(other, by_ticker, acct.label)
+            st.divider()
+
+        p = result.portfolio
+        if len(accounts) <= 1:
+            # Single account (or enumeration unavailable) — no tabs to draw,
+            # just the one view.
+            label = accounts[0].label if accounts else None
+            render_account(p, by_ticker, label)
 
         # --- background insight from your full trading history ---
         from stocksage.insights import model_alignment, trading_insights

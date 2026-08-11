@@ -31,9 +31,32 @@ class Holding:
 
 
 @dataclass
+class Account:
+    """One brokerage account under the login (individual, Roth IRA, ...)."""
+
+    number: str
+    kind: str            # e.g. "individual", "roth", as Robinhood labels it
+    buying_power: float
+    portfolio_cash: float
+
+    @property
+    def label(self) -> str:
+        """Human-facing name: 'Roth IRA ••••6789'."""
+        pretty = {
+            "individual": "Individual",
+            "roth": "Roth IRA",
+            "traditional": "Traditional IRA",
+            "joint": "Joint",
+        }.get((self.kind or "").lower(), (self.kind or "Account").title())
+        tail = self.number[-4:] if self.number else "????"
+        return f"{pretty} ••••{tail}"
+
+
+@dataclass
 class Portfolio:
     holdings: list[Holding]
     buying_power: float
+    account_number: str | None = None
 
     def shares_of(self, ticker: str) -> float:
         for h in self.holdings:
@@ -142,7 +165,127 @@ class RobinhoodClient:
             buying_power = float(profile.get("buying_power", 0) or 0)
         except (TypeError, ValueError):
             buying_power = 0.0
-        return Portfolio(holdings=holdings, buying_power=buying_power)
+        # Record WHICH account this described. build_holdings() reports the
+        # default account without saying so, which is how the brief came to
+        # carry a personal account's buying power while the routine traded
+        # the agentic one.
+        return Portfolio(
+            holdings=holdings,
+            buying_power=buying_power,
+            account_number=str(profile.get("account_number") or "") or None,
+        )
+
+    # --- accounts (read-only) ---
+
+    def accounts(self) -> list[Account]:
+        """Every brokerage account under this login.
+
+        `build_holdings()` — what the single-account path uses — takes no
+        account argument and silently reports only the default one. That is
+        how the published brief ended up describing a personal account while
+        the routine traded the agentic one. Enumerating them makes which is
+        which explicit instead of implied.
+        """
+        if not self.login():
+            return []
+        import robin_stocks.robinhood as rh
+
+        try:
+            raw = rh.profiles.load_account_profile(dataType="results") or []
+        except Exception as exc:
+            log.error("failed to list Robinhood accounts: %s", exc)
+            return []
+        if isinstance(raw, dict):  # single-account logins may return one dict
+            raw = [raw]
+        out = []
+        for a in raw:
+            if not isinstance(a, dict):
+                continue
+            try:
+                out.append(
+                    Account(
+                        number=str(a.get("account_number") or ""),
+                        kind=str(a.get("type") or a.get("brokerage_account_type") or ""),
+                        buying_power=float(a.get("buying_power") or 0),
+                        portfolio_cash=float(a.get("portfolio_cash") or 0),
+                    )
+                )
+            except (TypeError, ValueError):
+                log.warning("skipping malformed account entry")
+        return [a for a in out if a.number]
+
+    def portfolio_for(self, account_number: str) -> Portfolio | None:
+        """Holdings and buying power for ONE named account.
+
+        Built from get_open_stock_positions (which is account-scoped) rather
+        than build_holdings (which is not), then priced from live quotes.
+        """
+        if not self.login():
+            return None
+        import robin_stocks.robinhood as rh
+
+        try:
+            raw = rh.account.get_open_stock_positions(account_number=account_number) or []
+            profile = rh.profiles.load_account_profile(
+                account_number=account_number
+            ) or {}
+        except Exception as exc:
+            log.error("failed to fetch account %s: %s", account_number, exc)
+            return None
+
+        rows = []
+        for p in raw:
+            if not isinstance(p, dict):
+                continue
+            try:
+                shares = float(p.get("quantity") or 0)
+                if shares <= 0:
+                    continue  # closed position still listed
+                ticker = self._symbol_for_instrument(p.get("instrument", ""))
+                if not ticker:
+                    continue
+                rows.append((ticker, shares, float(p.get("average_buy_price") or 0)))
+            except (TypeError, ValueError):
+                log.warning("skipping malformed position in %s", account_number)
+
+        prices = self._latest_prices([t for t, _, _ in rows])
+        holdings = [
+            Holding(
+                ticker=t,
+                shares=sh,
+                avg_buy_price=avg,
+                current_price=prices.get(t, 0.0),
+                equity=sh * prices.get(t, 0.0),
+            )
+            for t, sh, avg in rows
+        ]
+        try:
+            buying_power = float(profile.get("buying_power") or 0)
+        except (TypeError, ValueError):
+            buying_power = 0.0
+        return Portfolio(
+            holdings=holdings, buying_power=buying_power, account_number=account_number
+        )
+
+    def _latest_prices(self, tickers: list[str]) -> dict[str, float]:
+        """Live prices for a batch of symbols; missing ones simply absent."""
+        if not tickers:
+            return {}
+        import robin_stocks.robinhood as rh
+
+        try:
+            quoted = rh.stocks.get_latest_price(tickers) or []
+        except Exception as exc:
+            log.warning("price lookup failed: %s", exc)
+            return {}
+        out = {}
+        for ticker, price in zip(tickers, quoted):
+            try:
+                if price is not None:
+                    out[ticker] = float(price)
+            except (TypeError, ValueError):
+                continue
+        return out
 
     # --- watchlists (read-only) ---
 

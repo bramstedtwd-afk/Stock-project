@@ -116,3 +116,66 @@ def test_empty_brain_renders_cleanly(tmp_path, monkeypatch):
     at = AppTest.from_file(APP)
     at.run(timeout=RUN_TIMEOUT)
     assert not at.exception, f"fresh-install dashboard raised: {at.exception}"
+
+
+def test_portfolio_tab_renders_one_tab_per_account(monkeypatch, tmp_path):
+    """Drives the real dashboard with a multi-account login: the tabs must
+    appear and each must show its OWN holdings, not the default account's."""
+    from stocksage.robinhood import Account, Holding, Portfolio
+
+    accounts = [
+        Account("111111111", "individual", 2500.00, 2500.00),
+        Account("123456789", "individual", 0.89, 0.89),
+        Account("999999999", "roth", 250.0, 250.0),
+    ]
+    per_account = {
+        "123456789": Portfolio(
+            [Holding("GE", 0.250000, 100.00, 110.00, 27.50)], 0.89, "123456789"
+        ),
+        "999999999": Portfolio(
+            [Holding("VTI", 2.5, 300.0, 310.10, 775.25)], 250.0, "999999999"
+        ),
+    }
+    default = Portfolio(
+        [Holding("NVDA", 1.0, 100.0, 217.55, 217.55)], 2500.00, "111111111"
+    )
+
+    class FakeClient:
+        @staticmethod
+        def credentials_available():
+            return True
+
+        def accounts(self):
+            return accounts
+
+        def portfolio(self):
+            return default
+
+        def portfolio_for(self, number):
+            return per_account.get(number)
+
+        def sync_history(self, db):
+            return None
+
+    monkeypatch.setattr("stocksage.robinhood.RobinhoodClient", FakeClient)
+    monkeypatch.setenv("STOCKSAGE_DB", str(tmp_path / "brain.db"))
+
+    from stocksage.engine import ScanResult
+
+    db = Database(tmp_path / "brain.db")
+    db.set_meta("last_daily_run", date.today().isoformat())
+    db.close()
+
+    at = AppTest.from_file(APP)
+    at.session_state["scan_result"] = ScanResult(
+        suggestions=[], portfolio=default, sector_trends={}
+    )
+    at.run(timeout=RUN_TIMEOUT)
+    assert not at.exception, f"dashboard raised: {at.exception}"
+
+    text = " ".join(str(e.value) for e in at.markdown) + " ".join(
+        str(getattr(e, "label", "")) for e in at.tabs
+    )
+    # Every account is offered by name, including the Roth.
+    for label in ("Individual ••••1111", "Individual ••••6789", "Roth IRA ••••9999"):
+        assert label in text, f"missing account tab: {label}"
