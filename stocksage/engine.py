@@ -45,6 +45,14 @@ STALE_GRADE_MULTIPLE = 3
 # available history). Distinct from None, which means "not due yet".
 UNGRADEABLE = "ungradeable"
 
+# A move this large over a five-day horizon is far more likely a corporate
+# action or a bad print than a real return. Splits are normally cancelled
+# out by grading within one adjusted series, but a feed that stops adjusting
+# would otherwise teach the model that every bullish signal preceded a 50%
+# collapse — and a poisoned weight vector is silent and permanent. Refusing
+# to grade costs one data point; believing it costs the model.
+IMPLAUSIBLE_RETURN = 0.60
+
 
 @dataclass
 class ScanResult:
@@ -100,8 +108,36 @@ class Engine:
             exit_pos = entry_pos + horizon
             if entry_pos >= 0 and exit_pos < len(df):
                 exit_close = float(df["Close"].iloc[exit_pos])
-                if exit_close > 0:
-                    return exit_close / row["price"] - 1.0, str(df.index[exit_pos].date())
+                entry_close = float(df["Close"].iloc[entry_pos])
+                if exit_close > 0 and entry_close > 0:
+                    # Both endpoints come from the SAME price series, never
+                    # from the price stored at call time. History is
+                    # retroactively split- and dividend-adjusted; the stored
+                    # price is not. Mixing the two turns an ordinary 2-for-1
+                    # split into a -50% "call" and teaches the model that
+                    # every signal pointing up was catastrophically wrong.
+                    # Same-series division makes any adjustment cancel out.
+                    if row["price"] > 0:
+                        drift = abs(entry_close / row["price"] - 1.0)
+                        if drift > 0.20:
+                            log.info(
+                                "%s: entry price %.2f vs adjusted close %.2f on %s "
+                                "(%.0f%% apart) — corporate action; grading from "
+                                "adjusted history so it cancels out",
+                                row["ticker"], row["price"], entry_close,
+                                created_date, drift * 100,
+                            )
+                    realized = exit_close / entry_close - 1.0
+                    if abs(realized) > IMPLAUSIBLE_RETURN:
+                        log.warning(
+                            "%s: %.0f%% over %d trading days from %s is not a "
+                            "plausible return — treating as a corporate action "
+                            "or bad data and refusing to grade it, rather than "
+                            "training the model on it",
+                            row["ticker"], realized * 100, horizon, created_date,
+                        )
+                        return UNGRADEABLE
+                    return realized, str(df.index[exit_pos].date())
             if entry_pos < 0:
                 # The call predates every bar we have — typically a real
                 # broker fill from years ago, backdated on ingest. Its true

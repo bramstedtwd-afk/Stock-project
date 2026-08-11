@@ -155,12 +155,17 @@ def merge_brains(dest_path: str | Path, src_path: str | Path) -> dict:
         bench_expr = (
             "s.benchmark_return" if "benchmark_return" in src_sugg_cols else "NULL"
         )
+        # Whose call it was must travel with the call. Without this every
+        # device sync quietly re-labelled the owner's real trades as the
+        # model's own, undoing the separation the track record depends on.
+        source_expr = "s.source" if "source" in src_sugg_cols else "'model'"
         conn.execute(
             "INSERT INTO suggestions"
             " (created_at, ticker, action, score, price, signals, horizon_days,"
-            "  evaluated, realized_return, hit, benchmark_return)"
+            "  evaluated, realized_return, hit, benchmark_return, source)"
             " SELECT s.created_at, s.ticker, s.action, s.score, s.price, s.signals,"
-            f"        s.horizon_days, s.evaluated, s.realized_return, s.hit, {bench_expr}"
+            f"        s.horizon_days, s.evaluated, s.realized_return, s.hit,"
+            f"        {bench_expr}, {source_expr}"
             " FROM src.suggestions s"
             " WHERE NOT EXISTS (SELECT 1 FROM suggestions d"
             "   WHERE d.created_at = s.created_at AND d.ticker = s.ticker"
