@@ -24,7 +24,9 @@ class SimMarket(FakeMarket):
 
 
 @pytest.fixture
-def brief(monkeypatch):
+def brief_env(monkeypatch):
+    """(engine, build_brief kwargs) — so tests can change brain state and
+    rebuild the brief, not just inspect one snapshot of it."""
     from stocksage import universe
 
     frames = {
@@ -47,9 +49,20 @@ def brief(monkeypatch):
     eng.evaluate_pending()
     congress = {"GOOD": {"buys": 3, "sells": 0, "net_buys": 3, "members": 2,
                          "est_amount": 40000, "last_date": date.today().isoformat()}}
-    return build_brief(
-        eng, tickers=["F", "GOOD", "SOON", "WEAK"], max_price=50.0, congress_summary=congress
-    )
+    return eng, {
+        "tickers": ["F", "GOOD", "SOON", "WEAK"],
+        # Above GOOD's grown price (~$51). At the old $50 cap GOOD fell out of
+        # `candidates`, the list was empty, and every test that looped over it
+        # passed while asserting nothing.
+        "max_price": 100.0,
+        "congress_summary": congress,
+    }
+
+
+@pytest.fixture
+def brief(brief_env):
+    eng, kwargs = brief_env
+    return build_brief(eng, **kwargs)
 
 
 TOP_LEVEL = {
@@ -109,6 +122,10 @@ def test_reliability_and_congress_surface_for_the_routine(brief):
 
 
 def test_candidates_are_all_actionable(brief):
+    # Guard against the vacuous pass: an empty list satisfies every loop
+    # assertion below, which is exactly how this test silently stopped
+    # testing anything once the fixture's prices drifted past max_price.
+    assert brief["candidates"], "fixture must actually produce candidates"
     for c in brief["candidates"]:
         assert c["actionable"] is True
         assert c["verdict"] in ("BUY", "STRONG BUY")
@@ -204,3 +221,45 @@ def test_headline_when_nothing_measured_against_the_market():
     line = _scoreboard(db)
     assert "none measured against the market yet" in line
     assert _scoreboard(Database(":memory:")).startswith("No calls graded yet")
+
+
+# --- the model-suggestions on/off switch ---
+
+
+def test_suggestions_off_keeps_the_research_but_forbids_acting_on_it(brief_env):
+    """Off must not blind the routine: it still sees every pick, its score
+    and its stop, so it can weigh them against its own read. What changes is
+    `actionable` — the flag the playbook calls the real go/no-go — which
+    goes false on every buy, so nothing is offered to place."""
+    eng, kwargs = brief_env
+
+    eng.db.set_model_suggestions(False)
+    off = build_brief(eng, **kwargs)
+    assert off["model_suggestions_enabled"] is False
+    assert off["candidates"], "the picks stay visible as research"
+    assert all(c["actionable"] is False for c in off["candidates"])
+    # Still fully reasoned-about, not blanked out.
+    assert all(c["score"] is not None and c["stop"] is not None
+               for c in off["candidates"])
+
+    eng.db.set_model_suggestions(True)
+    on = build_brief(eng, **kwargs)
+    assert on["model_suggestions_enabled"] is True
+    assert on["candidates"], "turning it back on restores the offers"
+    assert all(c["actionable"] for c in on["candidates"])
+
+
+def test_suggestions_off_never_traps_you_in_a_position(brief_env):
+    """The switch governs what you may BUY, never what you may exit: a sell
+    on a name you hold must stay actionable even when suggestions are off."""
+    eng, kwargs = brief_env
+    eng.db.set_model_suggestions(False)
+    off = build_brief(eng, **kwargs)
+    sells = [e for e in off["focus"] if e.get("verdict") in ("SELL", "STRONG SELL")]
+    for e in sells:
+        if e.get("owned_shares", 0) or e["actionable"]:
+            assert e["actionable"] is True
+
+
+def test_suggestions_default_to_on():
+    assert Database(":memory:").model_suggestions_enabled() is True

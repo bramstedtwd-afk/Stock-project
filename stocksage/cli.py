@@ -543,6 +543,24 @@ def cmd_profit(args) -> int:
     return 0
 
 
+def cmd_suggestions(args) -> int:
+    """Turn the model's picks on or off as actionable for the routine."""
+    db = Database()
+    if args.state in ("on", "off"):
+        db.set_model_suggestions(args.state == "on")
+    on = db.model_suggestions_enabled()
+    print(f"\nModel suggestions: {'ON' if on else 'OFF'}")
+    if on:
+        print("  The routine may act on the engine's picks (still confirm-gated).")
+    else:
+        print("  The engine keeps scanning, grading and learning, but the routine")
+        print("  treats its picks as research only and trades its own analysis.")
+        print("  Sells on names you hold stay actionable — turning suggestions")
+        print("  off must never trap you in a position.")
+    print(DISCLAIMER)
+    return 0
+
+
 def cmd_performance(args) -> int:
     db = Database()
     summary = db.performance_summary()
@@ -693,6 +711,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("performance", help="learning status and signal weights")
     p.set_defaults(func=cmd_performance)
+
+    p = sub.add_parser(
+        "suggestions", help="turn the model's picks on/off for the routine"
+    )
+    p.add_argument("state", nargs="?", choices=["on", "off", "status"], default="status")
+    p.set_defaults(func=cmd_suggestions)
 
     return parser
 

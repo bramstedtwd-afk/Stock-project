@@ -182,7 +182,11 @@ def _entry_from_suggestion(
     earnings_blackout = s.earnings_days is not None and 0 <= s.earnings_days <= 3
     # One unambiguous flag: can the routine act on this name right now?
     if s.action in BUYISH:
-        actionable = s.position_fraction > 0 and not earnings_blackout
+        actionable = (
+            s.position_fraction > 0
+            and not earnings_blackout
+            and engine.db.model_suggestions_enabled()
+        )
     elif s.action in SELLISH:
         actionable = s.owned_shares > 0  # you can only sell what you hold
     else:
@@ -345,6 +349,12 @@ def build_brief(
             for s in avoid
         ],
         "headline": scoreboard_headline(summary, ledger, buys),
+        # When off, the engine still scans, grades and learns, but nothing it
+        # picks is offered as actionable — the routine trades on its own live
+        # analysis and treats these as research. Buy-side `actionable` is
+        # forced false to match, so a single flag cannot disagree with the
+        # cards beneath it.
+        "model_suggestions_enabled": engine.db.model_suggestions_enabled(),
         "model_stats": {
             "graded_calls": summary["evaluated"],
             "hit_rate": round(summary["hit_rate"], 3)

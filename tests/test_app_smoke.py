@@ -7,6 +7,7 @@ auto-run-on-open path is skipped (no network in tests).
 """
 
 from datetime import date, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -15,7 +16,10 @@ from streamlit.testing.v1 import AppTest  # noqa: E402
 
 from stocksage.db import Database  # noqa: E402
 
-APP = "app.py"
+# Absolute, because Streamlit >=1.61 resolves a relative AppTest path against
+# the file that calls it (so "app.py" became tests/app.py and every dashboard
+# test died with FileNotFoundError). An absolute path is correct on both.
+APP = str(Path(__file__).resolve().parent.parent / "app.py")
 RUN_TIMEOUT = 30
 
 

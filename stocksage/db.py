@@ -323,6 +323,22 @@ class Database:
         self.set_meta("watchlist", json.dumps(items))
         return items
 
+    # --- model suggestions on/off ---
+
+    def model_suggestions_enabled(self) -> bool:
+        """Whether the model's picks are offered to the routine as actionable.
+
+        Off is a real, useful state: the engine keeps scanning, grading and
+        learning, but the routine treats its candidates as research only and
+        trades on its own live analysis. That is the honest thing to do while
+        the model's measured edge is negative — it keeps building a track
+        record without acting on one that hasn't earned trust yet.
+        """
+        return (self.get_meta("model_suggestions", "on") or "on").lower() != "off"
+
+    def set_model_suggestions(self, enabled: bool) -> None:
+        self.set_meta("model_suggestions", "on" if enabled else "off")
+
     # --- learned weights ---
 
     def load_weights(self) -> dict[str, float]:

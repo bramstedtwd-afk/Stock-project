@@ -155,6 +155,15 @@ have Google Drive + Robinhood, but no terminal/repo).**
   and `model_stats` (graded_calls, hit_rate, paper_profit_factor,
   avg_return_per_call — all scale-free; there is no dollar P&L because a
   fixed-stake figure would mislead next to a small account).
+- **Respect `model_suggestions_enabled`.** When it is `false` the owner has
+  switched the engine's picks off as *offers*: every buy comes back with
+  `actionable: false` and you must not propose an entry from the brief. The
+  research is still there — scores, stops, reliability — and you should
+  still weigh it and say when your own read agrees or disagrees. Managing
+  and exiting existing positions is unaffected; the switch governs what you
+  may BUY, never what you may sell. Say once, plainly, that the engine's
+  suggestions are currently switched off, so a quiet run is never mistaken
+  for the engine having no opinion.
 - **Report the engine's record using `headline`, never the raw stats.** The
   brief carries a one-sentence `headline` stating the engine's edge over
   simply holding SPY, plus `edge_vs_market_per_call`, `covered_trades` and
@@ -396,7 +405,7 @@ opposite — smaller or passed.
    zero suggested size, or a sell on a name you don't hold) means Watch or
    Pass, never a proposal — state the reason from its `notes`. Names on the
    brief's `avoid` list likewise need an explicit stated reason to touch.
-9. Propose up to 2–3 new orders per run toward the 2–3-name target:
+9. Propose up to 3–4 new orders per run toward the 3–4-name target:
    review_equity_order first, sanity-check simulated fill vs. live quote,
    then the order card and wait for "confirm" / "pass" on each. Placing an
    order is the only step that waits for the user. When you have more than
