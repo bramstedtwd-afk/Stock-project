@@ -86,12 +86,35 @@ def run_update(root: Path = PROJECT_ROOT) -> int:
         say(f"Already up to date (version {version}).")
         return 0
     if ahead > 0:
+        # Two very different situations produce "ahead and behind", and the
+        # advice for one is actively harmful in the other. If every local
+        # commit already exists upstream as an equivalent patch, the history
+        # was rewritten (a privacy scrub, a squash) and these are stale twins
+        # — telling the owner to push them would restore exactly what the
+        # rewrite removed. git cherry marks a commit '+' only when its patch
+        # is genuinely absent upstream.
+        cherry = _git(root, "cherry", upstream, "HEAD").stdout.splitlines()
+        unique = [line for line in cherry if line.startswith("+")]
         say(
             f"This device has {ahead} local commit(s) the repository doesn't, and the "
             f"repository has {behind} this device doesn't."
         )
-        say("Push your local commits first (git push), or reconcile manually — "
-            "update won't guess for you.")
+        if not unique:
+            say(
+                "All of them already exist in the repository under different ids, so "
+                "the repository's history was rewritten and this device is holding the "
+                "old copy. Nothing of yours is lost by taking the new one:"
+            )
+            say(f"    git fetch origin && git reset --hard {upstream}")
+            say(
+                "Do NOT push these commits — that would restore the history the "
+                "rewrite removed."
+            )
+        else:
+            say(
+                f"{len(unique)} of them are genuinely new work that exists only here. "
+                "Push it first (git push), then run update again."
+            )
         return 1
 
     old = _git(root, "rev-parse", "HEAD").stdout.strip()

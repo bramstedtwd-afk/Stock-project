@@ -62,13 +62,45 @@ def test_update_refuses_dirty_tree(repos, capsys):
 
 
 def test_update_refuses_diverged_history(repos, capsys):
+    """Genuine local work: pushing it is the right advice."""
     _, clone = repos
     (clone / "local.py").write_text("x\n")
     git(clone, "add", "-A")
     git(clone, "commit", "-m", "local-only work")
     assert run_update(root=clone) == 1
     out = capsys.readouterr().out
-    assert "local commit" in out and "Push" in out
+    assert "local commit" in out
+    assert "genuinely new work" in out and "git push" in out
+    assert "reset --hard" not in out, "must not offer to discard real work"
+
+
+def test_rewritten_history_says_reset_not_push(repos, capsys):
+    """After a history rewrite upstream (here: the privacy scrub that
+    rewrote every commit), the device's commits are stale twins of commits
+    that already exist upstream. Telling the owner to push them would put
+    the removed content straight back — the one thing the rewrite existed
+    to prevent."""
+    origin, clone = repos
+    # The clone holds the pre-rewrite copy of v1; origin rewrites it so the
+    # same patch lives under a different commit id, then moves on.
+    git(clone, "fetch", "origin")
+    git(origin, "commit", "--amend", "-m", "v2: improvement (rewritten)")
+    (origin / "more.py").write_text("later\n")
+    git(origin, "add", "-A")
+    git(origin, "commit", "-m", "v3")
+    git(clone, "fetch", "origin")
+    git(clone, "reset", "--hard", "origin/main")
+    # Now put the clone back on the OLD commit id, as a real device would be.
+    git(clone, "reset", "--hard", "HEAD~2")
+    (clone / "code.py").write_text("v2\n")
+    git(clone, "add", "-A")
+    git(clone, "commit", "-m", "v2: improvement")
+
+    assert run_update(root=clone) == 1
+    out = capsys.readouterr().out
+    assert "rewritten" in out
+    assert "reset --hard" in out
+    assert "Do NOT push" in out
 
 
 def test_update_requirements_change_clears_stamps(repos, capsys):
