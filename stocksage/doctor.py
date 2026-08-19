@@ -175,6 +175,40 @@ def check_account_security() -> dict:
     )
 
 
+def check_routine_account() -> dict:
+    """The published playbook needs an account number that only .env has.
+
+    ROUTINE.md carries a placeholder rather than the owner's account number,
+    because the repository is public. If .env does not supply the real value,
+    publish-drive uploads a playbook the routine cannot act on — it is built
+    to stop and ask rather than guess, so the failure is safe but it blocks
+    the next run, silently, until someone notices.
+    """
+    from .advisor import AGENTIC_PLACEHOLDER, playbook_for_publishing
+
+    account = (os.environ.get("STOCKSAGE_AGENTIC_ACCOUNT") or "").strip()
+    if account:
+        if AGENTIC_PLACEHOLDER in playbook_for_publishing():
+            return _check(
+                "Routine account", WARN,
+                "the account is set but the playbook still has a placeholder",
+                "The playbook and the substitution have drifted apart — report "
+                "this line; it is advisor.playbook_for_publishing",
+            )
+        return _check(
+            "Routine account", PASS, f"published briefs name account ••••{account[-4:]}"
+        )
+    return _check(
+        "Routine account", WARN,
+        "STOCKSAGE_AGENTIC_ACCOUNT is not set, so the published playbook "
+        "cannot name the account your routine trades",
+        "Add a line 'STOCKSAGE_AGENTIC_ACCOUNT=<your account number>' to the "
+        ".env file in this folder, then run '.\\start.bat publish-drive' "
+        "again. Until then the routine will stop and ask which account to "
+        "use rather than guessing.",
+    )
+
+
 def check_update_channel() -> dict:
     import subprocess
 
@@ -258,6 +292,7 @@ ALL_CHECKS = (
     check_earnings_calendar,
     check_robinhood,
     check_account_security,
+    check_routine_account,
     check_update_channel,
     check_autopilot,
 )

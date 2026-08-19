@@ -94,3 +94,27 @@ def test_earnings_check_is_registered_with_the_others():
     from stocksage import doctor
 
     assert doctor.check_earnings_calendar in doctor.ALL_CHECKS
+
+
+def test_routine_account_warns_when_unset(monkeypatch):
+    """An unset account is a silent blocker: publish succeeds, the playbook
+    looks fine, and the routine refuses to trade the next morning."""
+    from stocksage.doctor import WARN, check_routine_account
+
+    monkeypatch.delenv("STOCKSAGE_AGENTIC_ACCOUNT", raising=False)
+    result = check_routine_account()
+    assert result["status"] == WARN
+    assert "STOCKSAGE_AGENTIC_ACCOUNT" in result["detail"]
+    assert ".env" in result["fix"]
+
+
+def test_routine_account_passes_and_shows_only_the_last_four(monkeypatch):
+    """Doctor output gets pasted into chats and screenshots — it must not
+    print the whole account number back out."""
+    from stocksage.doctor import PASS, check_routine_account
+
+    monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "555000111")
+    result = check_routine_account()
+    assert result["status"] == PASS
+    assert "0111" in result["detail"]
+    assert "555000111" not in result["detail"]

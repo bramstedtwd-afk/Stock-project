@@ -35,7 +35,7 @@ rather than giving them instructions.
 - `stocksage/desktop.py` — app-window/web/phone launch modes + desktop icon install
 - `stocksage/autopilot.py` — OS-scheduler registration (launchd/cron/Task Scheduler)
 - `stocksage/update.py` — safe self-update (ff-only, refuses dirty tree)
-- `stocksage/doctor.py` — 9-point self-diagnosis with fixes
+- `stocksage/doctor.py` — 10-point self-diagnosis with fixes
 - `stocksage/security.py` — broker access log (fresh sign-in vs reused token) + exposure audit; answers "was that Robinhood sign-in alert us?"
 - `stocksage/cli.py` — all terminal commands; `stocksage/envfile.py` — .env load/save
 
