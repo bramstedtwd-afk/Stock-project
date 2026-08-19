@@ -16,7 +16,7 @@ ACCOUNTS = [
     {"account_number": "111111111", "type": "individual",
      "buying_power": "2500.00", "portfolio_cash": "2500.00"},
     {"account_number": "123456789", "type": "individual",
-     "buying_power": "0.89", "portfolio_cash": "0.89"},
+     "buying_power": "0.42", "portfolio_cash": "0.42"},
     {"account_number": "999999999", "type": "roth",
      "buying_power": "250.00", "portfolio_cash": "250.00"},
 ]
@@ -91,7 +91,7 @@ def test_every_account_under_the_login_is_listed(fake_rh):
     assert [a.number for a in accounts] == ["111111111", "123456789", "999999999"]
     assert all(isinstance(a, Account) for a in accounts)
     agentic = next(a for a in accounts if a.number == "123456789")
-    assert agentic.buying_power == pytest.approx(0.89)
+    assert agentic.buying_power == pytest.approx(0.42)
 
 
 def test_account_labels_are_human_readable(fake_rh):
@@ -129,10 +129,10 @@ def test_closed_positions_are_dropped(fake_rh):
 
 
 def test_buying_power_comes_from_the_same_account(fake_rh):
-    """The v11 hazard: the brief once carried $3,100 of a personal account's
-    buying power while the routine traded an account holding $0.89."""
+    """The v11 hazard: the brief once carried $2,500 of a personal account's
+    buying power while the routine traded an account holding $0.42."""
     client, _ = fake_rh
-    assert client.portfolio_for("123456789").buying_power == pytest.approx(0.89)
+    assert client.portfolio_for("123456789").buying_power == pytest.approx(0.42)
     assert client.portfolio_for("111111111").buying_power == pytest.approx(2500.00)
 
 

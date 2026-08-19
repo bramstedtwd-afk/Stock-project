@@ -23,6 +23,7 @@ combines them with its own live quotes.
 
 from __future__ import annotations
 
+import os
 import logging
 from datetime import datetime, timezone
 
@@ -454,6 +455,28 @@ def catch_up_from_drive(engine: Engine) -> dict | None:
     return import_brain(pulled, db_path=engine.db.path)
 
 
+AGENTIC_PLACEHOLDER = "{{AGENTIC_ACCOUNT}}"
+
+
+def playbook_for_publishing() -> str:
+    """The playbook with the owner's account number filled in.
+
+    The repository copy carries a placeholder, not an account number: it is
+    a public repo, and a brokerage account number is the owner's, not the
+    project's. The real value lives in .env and is substituted only here, on
+    the way to the owner's own private Drive folder.
+    """
+    from .brain import ROUTINE_PATH
+
+    if not ROUTINE_PATH.exists():
+        return ""
+    text = ROUTINE_PATH.read_text(encoding="utf-8")
+    account = (os.environ.get("STOCKSAGE_AGENTIC_ACCOUNT") or "").strip()
+    if account:
+        text = text.replace(AGENTIC_PLACEHOLDER, account)
+    return text
+
+
 def desktop_sync_cycle(engine: Engine, client=None, broker: bool = True) -> dict:
     """The full desktop-side heartbeat that keeps the brain current.
 
@@ -517,7 +540,6 @@ def publish_brief(
     dated filename means one file per day, overwritten on re-publish.
     """
     import json
-    import shutil
     from datetime import date
     from pathlib import Path as _Path
 
@@ -538,7 +560,7 @@ def publish_brief(
 
     if include_playbook and ROUTINE_PATH.exists():
         dest = out_dir / "StockSage Routine Playbook.md"
-        shutil.copyfile(ROUTINE_PATH, dest)
+        dest.write_text(playbook_for_publishing(), encoding="utf-8")
         written.append(str(dest))
     if include_snapshot:
         # Export straight to the Drive folder — NOT via write_snapshot(),
@@ -572,7 +594,7 @@ def publish_brief_via_api(
     import json
     from pathlib import Path as _Path
 
-    from .brain import ROUTINE_PATH, STATE_DIR, export_brain
+    from .brain import STATE_DIR, export_brain
     from .drive_api import publish_via_api
 
     focus = tickers if tickers is not None else engine.db.watchlist()
@@ -580,7 +602,7 @@ def publish_brief_via_api(
         engine, tickers=focus, max_price=max_price, top=top, holdings=holdings,
         buying_power=buying_power,
     )
-    playbook_text = ROUTINE_PATH.read_text(encoding="utf-8") if ROUTINE_PATH.exists() else ""
+    playbook_text = playbook_for_publishing()
     # Same reasoning as publish_brief: export outside the repo tree so an
     # automated run never leaves the git working directory dirty.
     snap = export_brain(

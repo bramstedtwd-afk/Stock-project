@@ -463,7 +463,10 @@ with tab_portfolio:
             # The agentic account leads: it is the only one the routine acts
             # on, so it is the one you check first. Robinhood's own ordering
             # buries it among accounts you never trade from here.
-            agentic = (os.environ.get("STOCKSAGE_AGENTIC_ACCOUNT") or "123456789").strip()
+            # Which account the routine trades is personal configuration, so
+            # it lives in .env and has no default baked into the source — a
+            # real account number does not belong in a public repository.
+            agentic = (os.environ.get("STOCKSAGE_AGENTIC_ACCOUNT") or "").strip()
             accounts.sort(key=lambda a: (a.number != agentic, a.kind, a.number))
             names = [
                 f"⭐ {a.label}" if a.number == agentic else a.label for a in accounts

@@ -12,8 +12,8 @@ which playbook version it loaded, straight from this file's own header.
 The desktop that builds the brief signs in to Robinhood separately from
 this routine, and on 2026-08-10 it was linked to a personal account, not
 the agentic one: the brief's `focus` list showed personal holdings and its
-`size_hint_dollars` were built from ~$3,100 of buying power while the
-agentic account held $0.89. Sizing now always comes from your own live
+`size_hint_dollars` were built from ~$2,500 of buying power while the
+agentic account held $0.42. Sizing now always comes from your own live
 pull, and `focus`/"you currently hold this" notes must be cross-checked
 against your own positions before they mean anything (Capital). No change
 to the confirm gate or any hard safety rule.
@@ -83,8 +83,11 @@ found in this repo. The one-line safety floor in the routine's stored
 loader mirrors rules 1–2; if this file and the loader ever disagree, the
 loader's floor wins and the conflict is reported to the user.
 
-1. **Account scope:** trade ONLY the agentic account (••••6789 /
-   #123456789). Verify the account number before every review/order call.
+1. **Account scope:** trade ONLY the agentic account
+   (#{{AGENTIC_ACCOUNT}}). Verify the account number before every
+   review/order call. If that placeholder is still literal text rather than
+   a number, the playbook was not published from the owner's desktop —
+   stop and ask which account to use rather than guessing.
    The personal brokerage and Roth IRA are strictly read-only — never
    place, modify, or cancel anything in them, ever.
 2. **The confirm gate:** never place, modify, or cancel a live order
@@ -317,8 +320,8 @@ a downgrade.
 this run for the agentic account, never from `size_hint_dollars`.** The
 desktop that builds the brief may be signed in to a different Robinhood
 account than the one you trade — on 2026-08-10 it was, and the brief
-carried size hints of $110–$147 built from roughly $3,100 of buying power
-in a personal account, while the agentic account held $0.89. Following
+carried size hints of $110–$147 built from roughly $2,500 of buying power
+in a personal account, while the agentic account held $0.42. Following
 those hints would have proposed orders more than a hundred times what the
 account could fund. Treat `size_hint_dollars` and `est_shares` as
 *context* about relative conviction, and `size_hint_pct` as the shape of
@@ -486,7 +489,7 @@ with the recommendation, and must state what happens if the owner does
 nothing:
 
 ```
-GE breached its stop ($109.90). Recommend: SELL all 0.250000 shares
+XYZ breached its stop ($109.90). Recommend: SELL all 0.250000 shares
 (~$27.50) at market.
 If you do nothing: the position stays open and keeps falling with the stock.
 → Reply "confirm" to sell, or "pass" to hold.
@@ -530,13 +533,13 @@ Uses: $25.68 of $80 available to trade today
 Exit / sell card (stop breach, time-based exit, rotation, or trim):
 
 ```
-SELL all 0.250000 of GE (~$27.50 @ $110.06) — market order
+SELL all 0.250000 of XYZ (~$27.50 @ $110.06) — market order
 Reason: hit its stop at $109.90. The stop was set at twice the stock's
 normal daily swing below its recent high, so falling through it means this
 has moved further against us than its usual noise explains.
 Held: 14 trading days · Result: about -$1.10 (-2.8%) on the position
-Research engine: rates it a sell; it has read GE right 4 of 6 times.
-Frees: $27.50 back to buying power (currently $0.89)
+Research engine: rates it a sell; it has read XYZ right 4 of 6 times.
+Frees: $27.50 back to buying power (currently $0.42)
 Selling never needs buying power, so this is executable regardless of cash.
 → Reply "confirm" to sell, or "pass" to hold
 ```

@@ -125,12 +125,12 @@ def test_portfolio_tab_renders_one_tab_per_account(monkeypatch, tmp_path):
 
     accounts = [
         Account("111111111", "individual", 2500.00, 2500.00),
-        Account("123456789", "individual", 0.89, 0.89),
+        Account("123456789", "individual", 0.42, 0.42),
         Account("999999999", "roth", 250.0, 250.0),
     ]
     per_account = {
         "123456789": Portfolio(
-            [Holding("GE", 0.250000, 100.00, 110.00, 27.50)], 0.89, "123456789"
+            [Holding("GE", 0.250000, 100.00, 110.00, 27.50)], 0.42, "123456789"
         ),
         "999999999": Portfolio(
             [Holding("VTI", 2.5, 300.0, 310.10, 775.25)], 250.0, "999999999"
@@ -159,6 +159,9 @@ def test_portfolio_tab_renders_one_tab_per_account(monkeypatch, tmp_path):
 
     monkeypatch.setattr("stocksage.robinhood.RobinhoodClient", FakeClient)
     monkeypatch.setenv("STOCKSAGE_DB", str(tmp_path / "brain.db"))
+    # Which account is the agentic one is .env configuration, never a default
+    # in the source, so the test has to say which one it means.
+    monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "123456789")
 
     from stocksage.engine import ScanResult
 
