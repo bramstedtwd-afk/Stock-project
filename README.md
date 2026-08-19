@@ -1,181 +1,24 @@
 # 📈 StockSage
 
 A personal, continuously-learning stock market intelligence engine. It scans
-the **top 10 industries × their top 10 stocks**, scores every name with an
-**adaptive signal model that learns from its own track record**, remembers
-**why** big moves happened, and gives you **portfolio-aware daily buy/sell
-suggestions** through a friendly dashboard — with your **Robinhood** account
-linked read-only.
+the **top 10 sectors × their top 10 stocks**, scores every name with an
+**adaptive signal model that learns from its own graded track record**,
+remembers **why** big moves happened, and produces **portfolio-aware daily
+buy/sell suggestions** through a Streamlit dashboard and a CLI — with a
+**read-only** Robinhood link.
 
-> **This is decision support, not financial advice.** StockSage suggests;
-> you decide. It deliberately cannot place trades.
+> **Decision support, not financial advice.** StockSage suggests; you
+> decide. It deliberately cannot place trades.
+
+**Stack:** Python · SQLite · yfinance · pandas · Streamlit · robin_stocks ·
+scheduled pipeline (launchd / cron / Task Scheduler) · pytest (345 tests,
+fully offline)
+
+**Setup, device transfer, autopilot and troubleshooting live in
+[SETUP.md](SETUP.md).** To run it right now: `./start.sh` (Windows:
+`.\start.bat`).
 
 ---
-
-## Quick start — one command
-
-**Mac / Linux:**
-
-```bash
-./start.sh
-```
-
-**Windows:**
-
-```bat
-.\start.bat
-```
-
-That's it. The first run sets up everything automatically (virtual
-environment, dependencies, settings file — allow a few minutes), then
-**StockSage opens in its own app window** — no browser tabs, no terminal
-juggling. Close the window and everything shuts down cleanly. Press
-**Run daily cycle** to get your first suggestions, and link Robinhood right
-from the **Portfolio tab** — no file editing needed.
-
-The only prerequisite is [Python 3.10+](https://www.python.org/downloads/)
-(on Windows, tick *"Add python.exe to PATH"* during install).
-
-### Install it like a real app (recommended)
-
-```bash
-./start.sh install        # Windows: .\start.bat install
-```
-
-- **macOS** — creates **StockSage.app** in `~/Applications`: launch it from
-  Spotlight or drag it to your Dock.
-- **Windows** — puts a **StockSage** shortcut on your Desktop.
-- **Linux** — adds StockSage to your applications menu and Desktop.
-
-From then on it's double-click → app window. (The app window uses
-Chrome/Edge/Brave under the hood; if none is installed it opens in your
-default browser instead. `./start.sh web` forces browser mode.)
-
-### Take it to any device — the brain travels with you
-
-Everything StockSage has learned — signal weights, graded track record, move
-memory — lives in **one file: the brain**. Three ways to move it, easiest
-first:
-
-**Shared brain across all your devices (set-and-forget):** open the
-dashboard sidebar → **🧠 Brain → Share across your devices**. StockSage
-detects your Dropbox / iCloud / OneDrive / Google Drive folder — pick it,
-press **Share my brain**, done. Repeat on each device and they all read and
-write the *same* brain — what one learns, all know. The sidebar always shows
-where the brain lives, what it knows, and which device learned last. (Use
-one device at a time; let the folder finish syncing before switching.)
-
-Terminal equivalent:
-
-```bash
-./start.sh brain sync ~/Dropbox/StockSage     # or iCloud Drive / OneDrive / ...
-```
-
-**One-off transfer:** press **⬇️ Export brain** on the Learning tab (or
-`./start.sh brain export`), move the file however you like, then **Import →
-Merge** on the other device. Merging *compounds* knowledge — suggestions and
-move history are unioned, and the most recently trained weights win — so
-nothing is ever lost, no matter which direction you merge.
-
-**New computer from scratch:**
-
-```bash
-git clone <your-repo-url> && cd Stock-project
-./start.sh                        # sets itself up, opens the app
-./start.sh brain import <file>    # or brain sync <folder>
-```
-
-**No admin rights / can't install Dropbox, iCloud, OneDrive, or Google
-Drive for Desktop on this machine?** If you've already set up the [no-install
-Google Drive API path](#the-learning-loop-the-point-of-the-whole-tool) (see
-`publish-drive` below) on another device, the brain travels the exact same
-way, with nothing to install here either:
-
-```bash
-git clone <your-repo-url> && cd Stock-project
-./start.sh                        # sets itself up
-./start.sh brain pull-drive       # pulls the whole shared brain straight from Drive
-```
-
-One-time OAuth consent (the same browser popup as `publish-drive`'s setup)
-if this machine hasn't signed in before — after that it's one command, no
-installer, ever, on this machine.
-
-Robinhood credentials are deliberately **never** part of the brain — link
-Robinhood fresh on each device. `./start.sh brain info` shows where the
-brain lives and what it knows.
-
-**Code improvements travel too:**
-
-```bash
-./start.sh update                 # Windows: .\start.bat update
-```
-
-Pull the latest StockSage code from your repository on any device — so when
-we improve the tool on one machine (or merge a change on GitHub), every
-other device catches up with one command. It's deliberately safe: it only
-fast-forwards, refuses to touch uncommitted local edits, tells you exactly
-what came in, and refreshes dependencies automatically when they changed.
-Brain + code together mean a device is never more than two commands from
-fully current: `./start.sh update` for the code, the shared brain (or
-`brain import`) for the knowledge.
-
-### Use it on your phone
-
-```bash
-./start.sh phone          # Windows: .\start.bat phone
-```
-
-This runs StockSage on your computer and shares it to your home Wi-Fi,
-printing a **QR code** — scan it with your phone's camera and the dashboard
-opens in your phone browser. Then use **Add to Home Screen** (Share menu on
-iPhone, ⋮ menu on Android) and StockSage gets its own icon on your phone,
-opening full-screen like a native app.
-
-How it works and what to know:
-
-- **Your credentials never leave your computer.** The engine (and your
-  Robinhood link) runs on the computer; the phone is just a screen for it.
-- The computer must be **on and running phone mode** while you use it, and
-  the phone must be on the **same Wi-Fi**.
-- While phone mode runs, anyone on your Wi-Fi network could open the
-  dashboard — fine at home, skip it on public networks.
-- Want it from anywhere (cellular, work, travel)? Install
-  [Tailscale](https://tailscale.com) (free for personal use) on both your
-  computer and phone, run phone mode, and use the computer's Tailscale
-  address instead — a private encrypted tunnel, no ports exposed to the
-  internet.
-
-### Terminal mode
-
-Anything you pass to the launcher goes to the CLI instead of the dashboard:
-
-```bash
-./start.sh daily          # the once-a-day heartbeat (learn -> scan -> suggest)
-./start.sh suggest        # quick ranked scan (nothing recorded)
-./start.sh suggest NVDA   # look at specific tickers
-./start.sh sectors        # sector trend scoreboard
-./start.sh portfolio      # your holdings + live signals
-./start.sh moves          # "why it moved" memory
-./start.sh performance    # learning status & signal weights
-./start.sh profit         # paper ledger, incl. edge vs just holding SPY
-./start.sh brief          # research packet for the trading routine
-./start.sh publish <dir>  # publish brief + playbook + brain to a Drive folder
-```
-
-(Windows: `.\start.bat daily`, etc.)
-
-## Your day with StockSage
-
-Open the app. It learns by itself, then opens with **☀️ Today's briefing** —
-the whole situation in 15 seconds: market mood, the top ideas, alerts on
-names you own, what just got graded, your week's paper P&L, and any big
-moves with their reasons. Everything below it is detail.
-
-Beyond the built-in universe, add any name to your **⭐ Watchlist**
-(sidebar, or `./start.sh watch add PLTR`) — and anything you hold on
-Robinhood is **always** scanned automatically, whether or not it's in the
-universe. A stock you own is never unwatched.
 
 ## How it works
 
@@ -196,6 +39,13 @@ universe. A stock you own is never unwatched.
                                  → weights updated → smarter tomorrow
 ```
 
+
+The pipeline runs end to end on a schedule: **source** (yfinance, with a
+parquet cache and stale-fallback) → **transform** (technical signals, each
+normalized to [-1, 1]) → **score** (learned weights) → **persist** (SQLite)
+→ **grade** (outcomes read back at a fixed horizon) → **re-weight**. The
+last two steps are what make it a learning system rather than a screener.
+
 ### It arrives already educated
 
 The very first daily cycle **bootstraps from two years of history** before
@@ -213,90 +63,8 @@ doing anything else:
 Re-run it anytime with `./start.sh bootstrap` to train further on the
 freshest history.
 
-### It keeps learning by itself
-
-- **On open** — the dashboard automatically runs the learn+scan cycle the
-  first time you open it each day.
-- **On autopilot** — schedule it with your operating system so it learns
-  every weekday at 5:30pm even when nothing is open:
-
-  ```bash
-  ./start.sh autopilot                       # learn every weekday 17:30
-  ./start.sh autopilot publish "<folder>"    # + supply the trading routine
-  ./start.sh autopilot status                # check both
-  ./start.sh autopilot off                   # stop everything
-  ```
-
-  Uses launchd on macOS, cron on Linux, Task Scheduler on Windows; output
-  goes to `~/.stocksage/daily.log` and `~/.stocksage/publish.log`. The
-  computer must be awake at run time.
-
-  **`autopilot publish "<folder>"`** is the hands-off trading bridge: every
-  weekday (5 times, timed just ahead of a typical trading routine's runs)
-  it mirrors your Robinhood fills into graded calls, grades matured ones,
-  and writes a fresh research brief into a Google-Drive-synced folder — so
-  your trading routine reads freshly-graded research on every run with
-  zero manual steps. Point `<folder>` at a directory synced by Google
-  Drive for Desktop (e.g. `"G:\My Drive\StockSage"`).
-
-  **No admin rights / can't install Google Drive for Desktop?** Use
-  `./start.sh autopilot publish-drive` instead — it talks to Google
-  Drive's API directly from Python, with nothing installed beyond two
-  packages already in StockSage's own virtual environment. One-time
-  setup (all in a browser, no downloads):
-
-  1. Go to [console.cloud.google.com](https://console.cloud.google.com/),
-     create a project (free), then **APIs & Services → Library** →
-     enable the **Google Drive API**.
-  2. **APIs & Services → OAuth consent screen** → External → fill in an
-     app name and your email → save (you can leave it in "Testing" mode).
-  3. **APIs & Services → Credentials → Create Credentials → OAuth client
-     ID** → Application type: **Desktop app** → Create.
-  4. Click the download icon next to the new client → save the file as
-     `drive_credentials.json` in your `~/.stocksage/` folder (Windows:
-     `C:\Users\<you>\.stocksage\drive_credentials.json` — create the
-     folder if it doesn't exist).
-  5. Run `./start.sh publish-drive` once by hand — it opens your browser
-     for a one-time "Sign in with Google" consent, then never asks again.
-
-  From then on `./start.sh autopilot publish-drive` schedules the exact
-  same capture → grade → publish cycle, just delivered straight to Drive's
-  API instead of a synced folder. Everything lands in one "StockSage"
-  folder in your Drive, in three files that get updated in place each
-  run (no dated duplicates to clean up, no ambiguity about which is
-  current).
-
-  **Running independent of any personal device (no computer needs to be
-  on):** `publish-drive` has no dependency on a locally-mounted folder, so
-  it can run from any machine that can reach the internet — including a
-  scheduled cloud session (a Claude Code Routine, a CI runner, any
-  headless box) that has no browser and no local `~/.stocksage/` history
-  of its own. Two things make that work, both already built in:
-
-  - **No browser needed there.** After doing the one-time browser consent
-    above on *any* device, copy that device's `~/.stocksage/drive_token.json`
-    contents into a `STOCKSAGE_DRIVE_TOKEN` environment variable on the
-    headless machine. `get_service()` seeds the token file from it on
-    first use and refreshes silently forever after — `drive_credentials.json`
-    is never needed there at all. (There's no dedicated secrets store on
-    most cloud-session platforms — env vars there are typically visible to
-    anyone who can edit that environment/session, so treat this token with
-    the same care as a password, and remember its `drive.file` scope means
-    it can only ever see files it created itself, nothing else in your Drive.)
-  - **No local brain history needed there either.** Every `publish-drive`
-    run first calls `brain pull-drive` internally — pulling whatever the
-    brain last learned anywhere (this device, another device, an earlier
-    cloud run) from Drive and merging it in before grading or scanning —
-    then re-publishes the merged, newly-updated brain back to Drive when
-    it's done. A totally fresh machine with an empty database starts smart
-    on its very first run, and every run anywhere keeps the one shared
-    brain moving forward together.
-
-  Robinhood credentials are **not** required on a headless publish-drive
-  machine — without them it just degrades to percentage-based position
-  sizing in the brief (the trading routine already knows to compute a
-  dollar amount itself from its own live buying power when that happens;
-  see `ROUTINE.md`). Only the Drive token needs to travel.
+It keeps learning by itself — on open, and on autopilot via
+your OS scheduler. See [SETUP.md](SETUP.md#running-it-unattended-autopilot).
 
 ### The learning loop (the point of the whole tool)
 
@@ -370,15 +138,19 @@ this becomes your private research notebook of what actually drives each name.
   and volume.
 - **Protective stops** — every buy suggestion includes a 2×ATR stop level.
 - **Read-only broker link** — architecture prevents auto-trading; your
-  Robinhood credentials live only in your local `.env` (gitignored) and are
-  never written to disk by the app.
+  Robinhood credentials live only in your local `.env` on that one machine
+  (gitignored, `0600`) — never in the brain, the repo, or Drive. See
+  [Security model](#security-model).
 - **Honest self-grading** — the hit rate on the Learning tab is computed from
   real recorded calls, not backtests.
 
 ### Your Robinhood account, fully mirrored
 
-Link once (Portfolio tab form — with your TOTP secret saved, the session
-persists and every future connection is automatic). From then on, **every
+Link once from the Portfolio tab form. The broker session is cached in
+`~/.tokens/robinhood.pickle` and reused until it expires, so most runs
+reconnect without a new sign-in; storing your TOTP seed additionally lets
+unattended scheduled runs re-authenticate on their own when it does expire
+(read the tradeoff in [Security model](#security-model) before you do). From then on, **every
 daily cycle silently mirrors your complete account history into the brain**:
 all filled orders and all dividends, incrementally and idempotently — only
 new activity is added, no matter how often it runs.
@@ -427,6 +199,41 @@ model's track record — and `./start.sh publish <folder>` writes it, the
 playbook, and the brain snapshot into a Drive-synced folder. That's the
 handoff between StockSage (which learns) and the routine that acts on it.
 
+## Security model
+
+What is stored, and where — stated precisely, because a vague version of
+this is worse than none.
+
+| Thing | Where it lives | Travels? |
+|---|---|---|
+| Robinhood username / password | `.env` on that machine, `0600`, gitignored | Never |
+| TOTP seed (optional) | same `.env`, if you choose to store it | Never |
+| Broker session token | `~/.tokens/robinhood.pickle`, owner-only | Never |
+| Google Drive OAuth token | `~/.stocksage/drive_token.json` | Only if you move it deliberately |
+| Broker access log | `~/.stocksage/access.log` | Never |
+| The brain (weights, move memory, calls) | `~/.stocksage/stocksage.db` | Yes — that's the point |
+
+Credentials are written to disk, on that one machine, and nowhere else.
+They are **never** part of the brain, so they do not travel when the brain
+syncs between your devices, publishes to Drive, or is committed as a repo
+snapshot. Link Robinhood separately on each device.
+
+- **The broker link is read-only by architecture.** There is no order-placing
+  code path to disable.
+- **The repo snapshot is scrubbed.** `brain/brain-snapshot.db` is committed to
+  this public repository, and the brain mirrors real Robinhood fills — so
+  `brain snapshot` strips the account mirror and owner-sourced calls, then
+  `VACUUM`s so deleted rows don't survive in the file's free pages. Knowledge
+  travels; the trade history does not.
+- **Storing the TOTP seed is a real tradeoff, not a free win.** Beside the
+  password in the same file, it means one file compromise yields both
+  factors. It buys unattended scheduled runs. `security` reports which way
+  yours is set; `.env.example` states the tradeoff at the point of decision.
+- **Every broker session is logged** — `security` shows when StockSage opened
+  your account and whether it was a fresh sign-in (which Robinhood alerts on)
+  or a silent token reuse, so an unexpected alert is answerable instead of
+  guessed at.
+
 ## The universe
 
 10 sectors, 10 leaders each (100 stocks) plus SPDR sector ETFs for trend:
@@ -434,22 +241,21 @@ Technology, Healthcare, Financials, Consumer Discretionary, Communication
 Services, Industrials, Consumer Staples, Energy, Utilities, Real Estate.
 Edit `stocksage/universe.py` to change it — nothing else hardcodes tickers.
 
-## If anything seems off
-
-```bash
-./start.sh doctor             # Windows: .\start.bat doctor
-```
-
-Checks everything that can go wrong — Python, dependencies, settings,
-brain integrity, market-data access, Robinhood login, update channel,
-autopilot — and prints a plain-language fix for anything that isn't right.
-Safe to run anytime; changes nothing.
-
 ## Testing
 
 ```bash
-.venv/bin/python -m pytest    # fully offline — synthetic data, in-memory DB
+.venv/bin/python -m pytest        # 345 tests, fully offline
 ```
+
+No test touches the network: synthetic OHLCV fixtures, in-memory databases,
+an injected `FakeMarket`, and Streamlit's `AppTest` for the dashboard. The
+suite includes an adversarial layer (`tests/test_edge_cases.py`) covering
+splits, delistings, clock skew, corrupted brains, future-schema merges and a
+simulated 600-call year — the failure modes that would quietly corrupt the
+learning system rather than crash it.
+
+Something not right? `./start.sh doctor` checks nine things and prints a
+plain-language fix for each. See [SETUP.md](SETUP.md).
 
 ## Roadmap (evolves with use)
 

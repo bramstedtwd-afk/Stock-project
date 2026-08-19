@@ -21,7 +21,11 @@ Merge semantics (chosen so a merge can only add knowledge, never lose it):
                   the larger value; timestamps take the later one
 
 Robinhood credentials are deliberately NOT part of the brain — they never
-leave the device they were entered on.
+leave the device they were entered on. The brain DOES mirror the owner's
+real trade history, which is why the repo-carried snapshot is scrubbed of it
+before it is written (scrub_personal_data): a merge between the owner's own
+devices should carry everything, but a file committed to a public repository
+must carry knowledge only.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ import sqlite3
 from datetime import date
 from pathlib import Path
 
-from .db import Database, default_db_path
+from .db import SOURCE_OWNER, Database, default_db_path
 from .envfile import save_env
 
 BRAIN_FILENAME = "stocksage.db"
@@ -256,13 +260,63 @@ ROUTINE_PATH = Path(__file__).resolve().parent.parent / "ROUTINE.md"
 STATE_DIR = Path("~/.stocksage").expanduser()
 
 
+# What the repo snapshot must never carry. The brain holds a full mirror of
+# the owner's Robinhood account — every fill with its ticker, share count,
+# execution price and timestamp — and the calls derived from those fills.
+# That is a personal financial record, and this one file is committed to a
+# public repository. Learned knowledge travels; the account does not.
+PRIVATE_TABLES = ("rh_orders", "rh_dividends", "ingested_fills")
+
+
+def scrub_personal_data(path: str | Path) -> dict:
+    """Strip the owner's real account activity out of a brain file.
+
+    Keeps everything that is knowledge — learned weights, move memory, the
+    model's own graded calls — and drops everything that is a record of what
+    this person actually traded. VACUUM afterwards is not tidiness: deleted
+    rows survive in the file's free pages, and a snapshot with recoverable
+    trade history in its slack space is not scrubbed.
+    """
+    path = Path(path).expanduser()
+    conn = sqlite3.connect(str(path))
+    removed: dict[str, int] = {}
+    try:
+        present = {
+            r[0]
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        for table in PRIVATE_TABLES:
+            if table in present:
+                before = conn.total_changes
+                conn.execute(f"DELETE FROM {table}")
+                removed[table] = conn.total_changes - before
+        if "suggestions" in present:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(suggestions)")}
+            if "source" in cols:
+                # Owner-sourced calls ARE the real fills, re-shaped: same
+                # ticker, price and date. Dropping the mirror but keeping
+                # these would publish the trade history anyway.
+                before = conn.total_changes
+                conn.execute("DELETE FROM suggestions WHERE source = ?", (SOURCE_OWNER,))
+                removed["suggestions"] = conn.total_changes - before
+        conn.commit()
+        conn.execute("VACUUM")
+        conn.commit()
+    finally:
+        conn.close()
+    return removed
+
+
 def write_snapshot(db_path: str | Path | None = None) -> Path:
     """Export the brain into the repo (brain/brain-snapshot.db).
 
     Commit + push it and every environment that pulls the repo carries the
-    knowledge too. Contains no credentials by design.
+    knowledge too. Credentials were never in the brain; the owner's real
+    trade history is, so it is scrubbed out here — see scrub_personal_data.
     """
-    return export_brain(SNAPSHOT_PATH, db_path=db_path)
+    path = export_brain(SNAPSHOT_PATH, db_path=db_path)
+    scrub_personal_data(path)
+    return path
 
 
 def absorb_snapshot(db_path: str | Path | None = None) -> dict | None:

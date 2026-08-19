@@ -199,3 +199,119 @@ def test_merge_preserves_benchmark_between_current_brains(tmp_path):
     row = db.conn.execute("SELECT * FROM suggestions").fetchone()
     assert row["benchmark_return"] == 0.02
     db.close()
+
+
+# --- the repo snapshot is published; the account behind it is not -----------
+
+
+def _seeded_brain(tmp_path):
+    """A brain holding both kinds of thing: knowledge, and account activity."""
+    from stocksage.db import SOURCE_MODEL, SOURCE_OWNER, Database
+
+    db = Database(tmp_path / "brain.db")
+    db.save_weights({"trend_long": 0.6, "macd": 0.4})
+    db.record_move_event("NVDA", "2026-08-01", 0.06, 2.4, ["earnings"], [])
+    db.record_suggestion("AAPL", "BUY", 0.4, 210.0, {"trend_long": 0.4}, 5)
+    db.record_suggestion(
+        "GE", "BUY", 0.3, 100.00, {"trend_long": 0.3}, 5, source=SOURCE_OWNER
+    )
+    db.upsert_rh_orders(
+        [{"order_id": "o1", "ticker": "GE", "side": "buy", "quantity": 0.250000,
+          "price": 100.00, "executed_at": "2026-08-01T15:00:00Z"}]
+    )
+    db.upsert_rh_dividends(
+        [{"dividend_id": "d1", "ticker": "GE", "amount": 0.12, "paid_at": "2026-08-05"}]
+    )
+    assert db.record_suggestion.__name__  # sanity: fixture built something
+    db.close()
+    return tmp_path / "brain.db", SOURCE_MODEL
+
+
+def _counts(path):
+    import sqlite3
+
+    conn = sqlite3.connect(str(path))
+    try:
+        present = {
+            r[0]
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        # A table an older brain never had counts as zero rows, not a crash.
+        return {
+            t: (conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                if t in present else 0)
+            for t in ("rh_orders", "rh_dividends", "ingested_fills",
+                      "suggestions", "move_events", "weights")
+        }
+    finally:
+        conn.close()
+
+
+def test_snapshot_keeps_knowledge_and_drops_the_account(tmp_path, monkeypatch):
+    """brain/brain-snapshot.db is committed to a PUBLIC repo. Learned weights
+    and move memory are the point of it; a mirror of the owner's real fills —
+    ticker, share count, execution price, timestamp — must not ride along."""
+    from stocksage import brain
+
+    db_path, _ = _seeded_brain(tmp_path)
+    snapshot = tmp_path / "snapshot.db"
+    monkeypatch.setattr(brain, "SNAPSHOT_PATH", snapshot)
+
+    brain.write_snapshot(db_path=db_path)
+    counts = _counts(snapshot)
+
+    assert counts["rh_orders"] == 0, "real Robinhood fills were published"
+    assert counts["rh_dividends"] == 0
+    assert counts["ingested_fills"] == 0
+    # The owner's own trades, re-shaped as calls, are the same data.
+    assert counts["suggestions"] == 1, "owner-sourced calls were published"
+    # Knowledge survives — otherwise the snapshot has no reason to exist.
+    assert counts["move_events"] == 1
+    assert counts["weights"] == 2
+    # The original brain is untouched: scrubbing is for the copy only.
+    assert _counts(db_path)["rh_orders"] == 1
+
+
+def test_scrubbed_rows_are_not_recoverable_from_the_file(tmp_path, monkeypatch):
+    """A DELETE leaves the old rows in the file's free pages. Anyone who
+    downloads the repo can read them back, so the scrub must VACUUM."""
+    from stocksage import brain
+
+    db_path, _ = _seeded_brain(tmp_path)
+    snapshot = tmp_path / "snapshot.db"
+    monkeypatch.setattr(brain, "SNAPSHOT_PATH", snapshot)
+    brain.write_snapshot(db_path=db_path)
+
+    raw = snapshot.read_bytes()
+    assert b"100.00" not in raw, "an execution price survived in the file's slack space"
+    assert raw.count(b"o1") == 0, "a Robinhood order id survived in the file"
+
+
+def test_scrub_is_idempotent_and_safe_on_an_older_brain(tmp_path):
+    """Snapshots written by older versions predate some tables entirely."""
+    import sqlite3
+
+    from stocksage import brain
+
+    db_path, _ = _seeded_brain(tmp_path)
+    snapshot = tmp_path / "snap.db"
+    brain.export_brain(snapshot, db_path=db_path)
+    conn = sqlite3.connect(str(snapshot))
+    conn.execute("DROP TABLE rh_dividends")
+    conn.commit()
+    conn.close()
+
+    brain.scrub_personal_data(snapshot)
+    assert brain.scrub_personal_data(snapshot)["rh_orders"] == 0  # nothing left to remove
+    assert _counts(snapshot)["weights"] == 2
+
+
+def test_the_committed_snapshot_in_this_repo_is_clean():
+    """Guards the file that is actually published, not just the code path."""
+    from stocksage.brain import PRIVATE_TABLES, SNAPSHOT_PATH
+
+    if not SNAPSHOT_PATH.exists():
+        pytest.skip("no snapshot committed")
+    counts = _counts(SNAPSHOT_PATH)
+    for table in PRIVATE_TABLES:
+        assert counts[table] == 0, f"{table} in the committed snapshot has real data"
