@@ -1,6 +1,6 @@
 """Doctor: one command that checks everything that can go wrong.
 
-    ./start.sh doctor   (Windows: start.bat doctor)
+    ./start.sh doctor   (Windows: .\\start.bat doctor)
 
 Runs every health check StockSage depends on and reports PASS/WARN/FAIL
 with a plain-language fix for anything that isn't right. Safe to run any
@@ -117,7 +117,7 @@ def check_earnings_calendar(tickers: tuple[str, ...] = ("AAPL", "MSFT", "JPM")) 
         "Earnings calendar", WARN, detail,
         "Suggestions still work, but the earnings blackout is switched off, "
         "so a buy can land right before a print. Usually Yahoo rate-limiting "
-        "or a yfinance version change: try 'start.bat update', and if it "
+        "or a yfinance version change: try '.\\start.bat update', and if it "
         "persists report this line — the lookup is data.MarketData."
         "_fetch_earnings_date",
     )
@@ -171,7 +171,7 @@ def check_account_security() -> dict:
     return _check(
         "Account security", status, worst["detail"],
         (worst["fix"] + " " if worst["fix"] else "")
-        + "Full report: start.bat security",
+        + "Full report: .\\start.bat security",
     )
 
 
@@ -233,19 +233,19 @@ def check_autopilot() -> dict:
             "Autopilot", WARN,
             "learns every weekday, but does NOT publish — the trading routine "
             "will read older and older research",
-            "Run 'start.bat autopilot publish-drive' so the brief refreshes "
+            "Run '.\\start.bat autopilot publish-drive' so the brief refreshes "
             "automatically. Without it the brief only updates when you run "
             "publish-drive by hand.",
         )
     if publishes and not learns:
         return _check(
             "Autopilot", WARN, "publishes on schedule, but does not learn",
-            "Run 'start.bat autopilot' so the model grades its calls daily",
+            "Run '.\\start.bat autopilot' so the model grades its calls daily",
         )
     return _check(
         "Autopilot", WARN, "off — learning only happens when you open the app",
-        "Run 'start.bat autopilot' to learn every weekday, then "
-        "'start.bat autopilot publish-drive' to keep the routine's research fresh",
+        "Run '.\\start.bat autopilot' to learn every weekday, then "
+        "'.\\start.bat autopilot publish-drive' to keep the routine's research fresh",
     )
 
 

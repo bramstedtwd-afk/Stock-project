@@ -682,7 +682,7 @@ def cmd_security(args) -> int:
 
     print(
         "\nTo check a sign-in alert you got:\n"
-        "  start.bat security --signin 8:30am\n"
+        "  .\\start.bat security --signin 8:30am\n"
         "\nTo see it from Robinhood's side (the only place a sign-in StockSage\n"
         "did NOT make will show up):\n" + _INTRUDER_STEPS
     )

@@ -136,7 +136,7 @@ def get_service():
                     "needed; you just click through the 'unverified app' "
                     "warning once.\n\n"
                     "Either way, re-authorize now. In the StockSage folder run:\n"
-                    "    start.bat publish-drive        (Windows)\n"
+                    "    .\\start.bat publish-drive        (Windows)\n"
                     "    ./start.sh publish-drive       (Mac/Linux)\n"
                     "The expired token has been cleared, so this will prompt a "
                     "fresh sign-in."

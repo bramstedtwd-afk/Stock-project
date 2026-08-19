@@ -180,7 +180,7 @@ have Google Drive + Robinhood, but no terminal/repo).**
   publishing, and the most common cause is the Google Drive sign-in
   expiring (Google kills refresh tokens after 7 days while the OAuth
   consent screen sits in "Testing" mode). Tell the owner to run
-  `start.bat publish-drive` (Windows) or `./start.sh publish-drive` in the
+  `.\start.bat publish-drive` (Windows) or `./start.sh publish-drive` in the
   StockSage folder on the desktop to re-authorize, and to publish the OAuth
   app once so it stops recurring. Always give the owner the launcher form —
   `stocksage` is not on PATH, it only exists inside the project's virtualenv. Do not silently keep running

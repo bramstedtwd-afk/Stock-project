@@ -23,7 +23,7 @@ linked read-only.
 **Windows:**
 
 ```bat
-start.bat
+.\start.bat
 ```
 
 That's it. The first run sets up everything automatically (virtual
@@ -39,7 +39,7 @@ The only prerequisite is [Python 3.10+](https://www.python.org/downloads/)
 ### Install it like a real app (recommended)
 
 ```bash
-./start.sh install        # Windows: start.bat install
+./start.sh install        # Windows: .\start.bat install
 ```
 
 - **macOS** — creates **StockSage.app** in `~/Applications`: launch it from
@@ -108,7 +108,7 @@ brain lives and what it knows.
 **Code improvements travel too:**
 
 ```bash
-./start.sh update                 # Windows: start.bat update
+./start.sh update                 # Windows: .\start.bat update
 ```
 
 Pull the latest StockSage code from your repository on any device — so when
@@ -123,7 +123,7 @@ fully current: `./start.sh update` for the code, the shared brain (or
 ### Use it on your phone
 
 ```bash
-./start.sh phone          # Windows: start.bat phone
+./start.sh phone          # Windows: .\start.bat phone
 ```
 
 This runs StockSage on your computer and shares it to your home Wi-Fi,
@@ -163,7 +163,7 @@ Anything you pass to the launcher goes to the CLI instead of the dashboard:
 ./start.sh publish <dir>  # publish brief + playbook + brain to a Drive folder
 ```
 
-(Windows: `start.bat daily`, etc.)
+(Windows: `.\start.bat daily`, etc.)
 
 ## Your day with StockSage
 
@@ -437,7 +437,7 @@ Edit `stocksage/universe.py` to change it — nothing else hardcodes tickers.
 ## If anything seems off
 
 ```bash
-./start.sh doctor             # Windows: start.bat doctor
+./start.sh doctor             # Windows: .\start.bat doctor
 ```
 
 Checks everything that can go wrong — Python, dependencies, settings,

@@ -11,7 +11,7 @@ dashboard and CLI. **It is decision support only — it must never place
 trades.** The Robinhood link is deliberately read-only.
 
 The owner is non-technical: prioritize things working out of the box,
-plain-language errors, and the `start.bat` / `start.sh` launcher flow over
+plain-language errors, and the `.\start.bat` / `start.sh` launcher flow over
 developer conveniences. When they report a problem, fix it end-to-end
 rather than giving them instructions.
 
@@ -39,7 +39,7 @@ rather than giving them instructions.
 - `stocksage/security.py` — broker access log (fresh sign-in vs reused token) + exposure audit; answers "was that Robinhood sign-in alert us?"
 - `stocksage/cli.py` — all terminal commands; `stocksage/envfile.py` — .env load/save
 
-## Commands (via ./start.sh or start.bat)
+## Commands (via ./start.sh or .\start.bat)
 
 `(none)`=app window · `web` · `phone` · `install` · `autopilot [off|status]` ·
 `update` · `doctor` · `daily` · `suggest [TICKERS]` · `sectors` · `portfolio` ·
@@ -90,12 +90,22 @@ live technical analysis (degraded run, never a halt).
   uploaded to Drive, and a real account's sign-in history must not ride along.
   It records timestamps and command names only — never a credential.
 
+## ⚠️ On Windows the launcher is `.\start.bat`, never `start.bat`
+
+PowerShell does not run programs from the current directory — it refuses
+`start.bat update` with CommandNotFoundException even while standing in the
+project folder, and helpfully points at `.\start.bat` in a suggestion the
+owner should never have needed to read. Every Windows command in chat, in an
+error string, in README/ROUTINE, must carry the `.\` prefix. In Python
+sources write it `".\\start.bat"` so the escape stays valid.
+`tests/test_owner_commands.py` fails the build on a bare one.
+
 ## ⚠️ Never hand the owner a bare `stocksage …` command
 
 `stocksage` is not on PATH — it lives only inside the project's virtualenv.
 Every command given to the owner (in chat, in an error message, in
 ROUTINE.md) must use the launcher and assume a fresh terminal:
-`cd C:\Users\<you>\Stock-project` then `start.bat <cmd>` on Windows,
+`cd C:\Users\<you>\Stock-project` then `.\start.bat <cmd>` on Windows,
 `./start.sh <cmd>` elsewhere. A bare `stocksage publish-drive` was shipped
 inside a user-facing error string and failed with CommandNotFoundException
 the moment they tried it.
@@ -118,10 +128,10 @@ Finance and Robinhood traffic** — those paths are written against
 documented behavior and covered by offline tests, but have never run live.
 So, in order:
 
-1. `start.bat update` (get latest), then `start.bat doctor` — fix whatever it flags.
+1. `.\start.bat update` (get latest), then `.\start.bat doctor` — fix whatever it flags.
 2. Confirm the first real daily cycle: bootstrap completes (~1-2 min), briefing populates with real suggestions. Watch `~/.stocksage/server.log` and the terminal for yfinance errors; fix and push fixes.
 3. When the owner links Robinhood (they type credentials into the Portfolio tab themselves — never ask for them in chat), verify holdings, the history mirror, and the insights panel against what their Robinhood app shows.
-4. Offer: `start.bat install` (desktop icon) and `start.bat autopilot` (weekday auto-learning; requires machine awake at 17:30).
+4. Offer: `.\start.bat install` (desktop icon) and `.\start.bat autopilot` (weekday auto-learning; requires machine awake at 17:30).
 
 ## Recently built (2026-07-11 session)
 

@@ -1,6 +1,6 @@
 """Self-update: pull the latest StockSage code from your own repository.
 
-    ./start.sh update   (Windows: start.bat update)
+    ./start.sh update   (Windows: .\\start.bat update)
 
 Improvements flow between devices the same way the brain does: push code
 from one machine (or merge a pull request on GitHub), run `update`

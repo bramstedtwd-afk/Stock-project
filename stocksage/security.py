@@ -251,7 +251,7 @@ def audit() -> list[dict]:
                     "the second factor is not adding protection",
                     "Decide deliberately: keep it (unattended runs work, one file "
                     "protects everything) or remove ROBINHOOD_MFA_SECRET and sign "
-                    "in by hand. See 'start.bat security' for the trade-off.",
+                    "in by hand. See '.\\start.bat security' for the trade-off.",
                 )
             )
         elif has_secret:
