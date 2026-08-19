@@ -81,7 +81,9 @@ live technical analysis (degraded run, never a halt).
 
 - Tests: `python -m pytest` — 317 tests, **fully offline** (synthetic OHLCV via `tests/conftest.make_ohlcv`, in-memory DBs, `FakeMarket` injection, Streamlit AppTest for the dashboard). Keep it that way: no test may need network.
 - Lint: `ruff check stocksage/ app.py tests/` must stay clean.
-- Push to branch `claude/stock-trend-analyzer-robinhood-67iqou` (the repo's only/default branch).
+- Push to `main` (the repo's default branch). The repository is **public** —
+  it doubles as a portfolio piece, so nothing personal may enter a tracked
+  file. `tests/test_privacy.py` enforces that; read it before adding fixtures.
 - Signal names are stable identifiers (learned weights key on them) — renaming one resets its learned weight.
 - DB schema changes must be additive (`CREATE TABLE IF NOT EXISTS`) — existing brains migrate automatically; brain merges must tolerate older-schema files.
 - Credentials live only in `.env` (gitignored, 0600). Never move them into the brain, logs, or commits.
