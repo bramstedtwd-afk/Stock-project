@@ -6,6 +6,8 @@ rem   start.bat phone      -> share to your phone over home Wi-Fi (QR code)
 rem   start.bat web        -> open in a normal browser tab instead
 rem   start.bat update     -> pull the latest code improvements from your repo
 rem   start.bat doctor     -> check everything that can go wrong, with fixes
+rem   start.bat security   -> who has signed in to your broker account, and how
+rem                           exposed the stored login is (--signin 8:30am)
 rem   start.bat autopilot  -> learn automatically every weekday (off|status)
 rem   start.bat daily      -> run the daily learn+scan cycle in the terminal
 rem   start.bat <anything> -> passed through to the CLI (suggest, sectors, ...)

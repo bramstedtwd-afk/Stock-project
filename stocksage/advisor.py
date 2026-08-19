@@ -454,7 +454,7 @@ def catch_up_from_drive(engine: Engine) -> dict | None:
     return import_brain(pulled, db_path=engine.db.path)
 
 
-def desktop_sync_cycle(engine: Engine, client=None) -> dict:
+def desktop_sync_cycle(engine: Engine, client=None, broker: bool = True) -> dict:
     """The full desktop-side heartbeat that keeps the brain current.
 
     Pull the live Robinhood order/dividend history, turn any new fills into
@@ -462,6 +462,10 @@ def desktop_sync_cycle(engine: Engine, client=None) -> dict:
     publish (and it's safe to run anytime) so the brain captures every real
     trade automatically — "grading every single run". Robinhood being absent
     degrades to just grading what's already recorded.
+
+    broker=False skips the account entirely and only grades what is already
+    recorded — for the extra scheduled publishes of the day, so the app opens
+    one broker session instead of five (see stocksage/security.py).
     """
     from .robinhood import RobinhoodClient
 
@@ -470,6 +474,14 @@ def desktop_sync_cycle(engine: Engine, client=None) -> dict:
         "synced": None, "fills_ingested": 0, "graded": 0,
         "holdings": [], "buying_power": None,
     }
+    if not broker:
+        # Publishing several times a day means several broker sessions a day,
+        # each a potential Robinhood sign-in alert. Letting the extra runs
+        # publish without touching the account keeps the alert pattern
+        # legible: one expected sign-in, and anything else is worth a look.
+        stats["broker_skipped"] = True
+        stats["graded"] = engine.evaluate_pending()
+        return stats
     try:
         sync = client.sync_history(engine.db)
         if sync is not None:

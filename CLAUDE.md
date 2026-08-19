@@ -35,7 +35,8 @@ rather than giving them instructions.
 - `stocksage/desktop.py` — app-window/web/phone launch modes + desktop icon install
 - `stocksage/autopilot.py` — OS-scheduler registration (launchd/cron/Task Scheduler)
 - `stocksage/update.py` — safe self-update (ff-only, refuses dirty tree)
-- `stocksage/doctor.py` — 8-point self-diagnosis with fixes
+- `stocksage/doctor.py` — 9-point self-diagnosis with fixes
+- `stocksage/security.py` — broker access log (fresh sign-in vs reused token) + exposure audit; answers "was that Robinhood sign-in alert us?"
 - `stocksage/cli.py` — all terminal commands; `stocksage/envfile.py` — .env load/save
 
 ## Commands (via ./start.sh or start.bat)
@@ -43,7 +44,8 @@ rather than giving them instructions.
 `(none)`=app window · `web` · `phone` · `install` · `autopilot [off|status]` ·
 `update` · `doctor` · `daily` · `suggest [TICKERS]` · `sectors` · `portfolio` ·
 `moves` · `performance` · `profit` · `watch add|remove|list` ·
-`congress` · `bootstrap` · `brain export|import|sync|info`
+`congress` · `bootstrap` · `brain export|import|sync|info` ·
+`security [--signin TIME]`
 
 ## Trading-routine integration (stocksage/advisor.py)
 
@@ -77,12 +79,16 @@ live technical analysis (degraded run, never a halt).
 
 ## Development conventions
 
-- Tests: `python -m pytest` — 215 tests, **fully offline** (synthetic OHLCV via `tests/conftest.make_ohlcv`, in-memory DBs, `FakeMarket` injection, Streamlit AppTest for the dashboard). Keep it that way: no test may need network.
+- Tests: `python -m pytest` — 317 tests, **fully offline** (synthetic OHLCV via `tests/conftest.make_ohlcv`, in-memory DBs, `FakeMarket` injection, Streamlit AppTest for the dashboard). Keep it that way: no test may need network.
 - Lint: `ruff check stocksage/ app.py tests/` must stay clean.
 - Push to branch `claude/stock-trend-analyzer-robinhood-67iqou` (the repo's only/default branch).
 - Signal names are stable identifiers (learned weights key on them) — renaming one resets its learned weight.
 - DB schema changes must be additive (`CREATE TABLE IF NOT EXISTS`) — existing brains migrate automatically; brain merges must tolerate older-schema files.
 - Credentials live only in `.env` (gitignored, 0600). Never move them into the brain, logs, or commits.
+- The broker access log (`~/.stocksage/access.log`) is deliberately **not** in
+  the brain: brains get exported, merged, committed as a repo snapshot and
+  uploaded to Drive, and a real account's sign-in history must not ride along.
+  It records timestamps and command names only — never a credential.
 
 ## ⚠️ Never hand the owner a bare `stocksage …` command
 

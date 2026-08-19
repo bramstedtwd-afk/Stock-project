@@ -185,3 +185,28 @@ def test_portfolio_tab_renders_one_tab_per_account(monkeypatch, tmp_path):
     account_tabs = [x for x in labels if "••••" in x]
     assert account_tabs, "expected account tabs to be rendered"
     assert account_tabs[0] == "⭐ Individual ••••6789"
+
+
+def test_sidebar_reports_broker_sessions_and_exposure(seeded_brain, tmp_path, monkeypatch):
+    """The security panel is how the owner answers 'was that sign-in me?' on
+    a phone, where there is no terminal to run 'security' in."""
+    from stocksage import security
+
+    monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path))
+    env = tmp_path / ".env"
+    env.write_text(
+        "ROBINHOOD_PASSWORD=pw\nROBINHOOD_MFA_SECRET=JBSWY3DPEHPK3PXP\n",
+        encoding="utf-8",
+    )
+    env.chmod(0o600)
+    monkeypatch.setattr("stocksage.envfile.ENV_PATH", env)
+    security.record_access(security.FRESH_LOGIN, "publish-drive")
+
+    at = AppTest.from_file(APP)
+    at.run(timeout=RUN_TIMEOUT)
+    assert not at.exception, f"dashboard raised: {at.exception}"
+    sidebar = " ".join(c.value for c in at.sidebar.caption)
+    sidebar += " ".join(str(e.value) for e in at.sidebar.error)
+    assert "publish-drive" in sidebar
+    # The password-plus-TOTP-seed exposure must be stated, not buried.
+    assert "two-factor" in sidebar.lower()

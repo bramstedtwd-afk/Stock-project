@@ -109,6 +109,17 @@ st.caption(
 )
 
 # --- Sidebar: the brain, always visible ---------------------------------------
+
+def _fmt_local(iso: str) -> str:
+    """A UTC timestamp as the owner's own clock reads it."""
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(iso).astimezone().strftime("%a %d %b %H:%M")
+    except ValueError:
+        return iso
+
+
 with st.sidebar:
     from stocksage.brain import brain_info, detect_cloud_folders, sync_to_folder
 
@@ -149,6 +160,44 @@ with st.sidebar:
         st.caption(f"· **{tk}** — {members} member(s) buying")
     if not _congress_top():
         st.caption("_Currently disabled — no reliable free data source is available._")
+
+    st.header("🔒 Account security")
+    from stocksage import security as _sec
+
+    _findings = _sec.audit()
+    _worst = next((f for f in _findings if f["level"] != _sec.OK), None)
+    if _worst is None:
+        st.success("Stored login is locked down")
+    elif _worst["level"] == _sec.CRITICAL:
+        st.error(_worst["detail"])
+    else:
+        st.warning(_worst["detail"])
+    _sessions = _sec.recent_access(limit=5)
+    if _sessions:
+        _last = _sessions[0]
+        _label = {
+            _sec.FRESH_LOGIN: "signed in (Robinhood alerts you)",
+            _sec.SESSION_REUSED: "reused its token (silent)",
+            _sec.LOGIN_FAILED: "login FAILED",
+        }.get(_last["event"], _last["event"])
+        st.caption(f"Last broker session: **{_label}** — {_fmt_local(_last['at'])}")
+    with st.expander("Recent broker sessions"):
+        st.caption(
+            "Every time StockSage opened your Robinhood account. Only a "
+            "**sign-in** makes Robinhood alert you — a reused token is silent. "
+            "If you got an alert with nothing here to match it, it was not "
+            "StockSage: check Robinhood → Settings → Security and privacy → "
+            "Devices, and sign out anything you do not recognise."
+        )
+        if not _sessions:
+            st.caption("_Nothing recorded yet — this log starts from the next run._")
+        for _e in _sessions:
+            st.caption(
+                f"· {_fmt_local(_e['at'])} — {_e['event']} (via {_e.get('trigger', '?')})"
+            )
+        for _f in _findings:
+            if _f["level"] != _sec.OK and _f["fix"]:
+                st.caption(f"**{_f['name']}** — {_f['fix']}")
 
     if not binfo["shared"]:
         with st.expander("☁️ Share across your devices"):

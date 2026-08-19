@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 
 from . import universe
@@ -379,13 +380,15 @@ def cmd_sync(args) -> int:
     return 0
 
 
-def _sync_and_focus(engine, explicit_tickers):
+def _sync_and_focus(engine, explicit_tickers, broker: bool = True):
     """Capture+grade real trades, then build the ticker list the routine
     cares about most: what it holds, plus the watchlist, plus anything
     named explicitly. Shared by both publish paths."""
     from .advisor import desktop_sync_cycle
 
-    sync = desktop_sync_cycle(engine)
+    sync = desktop_sync_cycle(engine, broker=broker)
+    if sync.get("broker_skipped"):
+        print("(Publishing without opening a Robinhood session — --no-broker.)")
     if sync["fills_ingested"] or sync["graded"]:
         print(
             f"(Captured {sync['fills_ingested']} new trades, "
@@ -402,7 +405,7 @@ def cmd_publish(args) -> int:
     from .advisor import publish_brief
 
     engine = Engine()
-    sync, focus = _sync_and_focus(engine, args.tickers)
+    sync, focus = _sync_and_focus(engine, args.tickers, broker=not args.no_broker)
     result = publish_brief(
         engine, args.drive_folder, tickers=focus, max_price=args.max_price,
         holdings=sync.get("holdings"), buying_power=sync.get("buying_power"),
@@ -438,7 +441,7 @@ def cmd_publish_drive(args) -> int:
 
     engine = Engine()
     _pull_drive_brain(engine)
-    sync, focus = _sync_and_focus(engine, args.tickers)
+    sync, focus = _sync_and_focus(engine, args.tickers, broker=not args.no_broker)
     try:
         result = publish_brief_via_api(
             engine, tickers=focus, max_price=args.max_price,
@@ -594,6 +597,118 @@ def cmd_performance(args) -> int:
     return 0
 
 
+def _parse_when(text: str):
+    """Turn what the owner types into a timestamp: '8:30am', '08:30',
+    '2026-08-19 08:30', or a full ISO string. Bare times mean today, local."""
+    from datetime import datetime
+
+    raw = text.strip().lower().replace(".", "")
+    for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d %I:%M%p", "%Y-%m-%dt%H:%M"):
+        try:
+            return datetime.strptime(raw, fmt).astimezone()
+        except ValueError:
+            pass
+    for fmt in ("%H:%M", "%I:%M%p", "%I%p"):
+        try:
+            parsed = datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+        today = datetime.now().astimezone()
+        return today.replace(
+            hour=parsed.hour, minute=parsed.minute, second=0, microsecond=0
+        )
+    try:
+        return datetime.fromisoformat(text.strip()).astimezone()
+    except ValueError:
+        return None
+
+
+def _local(iso: str) -> str:
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(iso).astimezone().strftime("%a %d %b %H:%M")
+    except ValueError:
+        return iso
+
+
+def cmd_security(args) -> int:
+    from . import security
+
+    if args.signin:
+        when = _parse_when(args.signin)
+        if when is None:
+            print(
+                f"Could not read the time {args.signin!r}. Try 8:30am, 08:30, "
+                "or 2026-08-19 08:30."
+            )
+            return 1
+        verdict = security.explain_signin(when.isoformat())
+        headline = (
+            "THAT SIGN-IN WAS STOCKSAGE."
+            if verdict["ours"]
+            else "THAT SIGN-IN WAS NOT STOCKSAGE."
+        )
+        print(f"\n{headline}\n{verdict['note']}\n")
+        if not verdict["ours"]:
+            print(_INTRUDER_STEPS)
+        return 0
+
+    print("\nACCOUNT SECURITY\n" + "-" * 60)
+    worst = "ok"
+    for finding in security.audit():
+        mark = {"ok": "OK  ", "risk": "RISK", "critical": "!!  "}[finding["level"]]
+        print(f"{mark} {finding['name']}: {finding['detail']}")
+        if finding["fix"]:
+            print(f"       fix: {finding['fix']}")
+        if finding["level"] != "ok" and worst == "ok":
+            worst = finding["level"]
+
+    events = security.recent_access(limit=args.limit)
+    print("\nBROKER SESSIONS THIS APP OPENED (newest first, your local time)")
+    if not events:
+        print(
+            "  (none recorded yet — this log starts from the next run. Until it "
+            "has a few days in it, Robinhood's own device list is the source of truth.)"
+        )
+    else:
+        for e in events:
+            label = {
+                security.FRESH_LOGIN: "signed in   (Robinhood alerts you)",
+                security.SESSION_REUSED: "reused token (silent, no alert)",
+                security.LOGIN_FAILED: "login FAILED",
+            }.get(e.get("event"), e.get("event", "?"))
+            print(f"  {_local(e['at']):<18} {label:<36} via {e.get('trigger', '?')}")
+
+    print(
+        "\nTo check a sign-in alert you got:\n"
+        "  start.bat security --signin 8:30am\n"
+        "\nTo see it from Robinhood's side (the only place a sign-in StockSage\n"
+        "did NOT make will show up):\n" + _INTRUDER_STEPS
+    )
+    return 0 if worst != "critical" else 1
+
+
+_INTRUDER_STEPS = """  1. Open the Robinhood app -> Account -> Menu (three bars) -> Settings
+     -> Security and privacy -> Devices. Every device with an active session
+     is listed. Log out anything you do not recognise.
+  2. Same screen: 'Login history' / 'Recent activity' shows time, device and
+     location for each sign-in. Compare against the list above.
+  3. If anything is unrecognised, in this order: change your Robinhood
+     password, re-enrol two-factor (this invalidates the old TOTP seed), then
+     re-link StockSage from the dashboard's Portfolio tab.
+  4. StockSage can only read your account — it cannot place, change or cancel
+     an order, so nothing it does can move money."""
+
+
+def _add_no_broker(parser) -> None:
+    parser.add_argument(
+        "--no-broker", action="store_true",
+        help="publish without opening a Robinhood session (fewer sign-in "
+        "alerts when you publish several times a day)",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="stocksage", description="Personal learning market intelligence engine."
@@ -672,6 +787,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("drive_folder", help="folder synced by Google Drive for Desktop")
     p.add_argument("tickers", nargs="*", help="focus tickers (default: your watchlist)")
     p.add_argument("--max-price", type=float)
+    _add_no_broker(p)
     p.set_defaults(func=cmd_publish)
 
     p = sub.add_parser(
@@ -681,6 +797,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("tickers", nargs="*", help="focus tickers (default: your watchlist)")
     p.add_argument("--max-price", type=float)
+    _add_no_broker(p)
     p.set_defaults(func=cmd_publish_drive)
 
     p = sub.add_parser(
@@ -718,12 +835,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("state", nargs="?", choices=["on", "off", "status"], default="status")
     p.set_defaults(func=cmd_suggestions)
 
+    p = sub.add_parser(
+        "security",
+        help="who has been signing in to your broker account, and how exposed "
+        "your stored login is",
+    )
+    p.add_argument(
+        "--signin", metavar="TIME",
+        help="was the Robinhood sign-in alert at this time StockSage? e.g. 8:30am",
+    )
+    p.add_argument("--limit", type=int, default=25)
+    p.set_defaults(func=cmd_security)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     load_env()  # pick up .env automatically; real environment still wins
     args = build_parser().parse_args(argv)
+    # Name the command in the environment so any broker session opened during
+    # it is attributable in the access log — "was that 8:30 sign-in me?" needs
+    # an answer, not a guess (stocksage/security.py).
+    os.environ.setdefault("STOCKSAGE_TRIGGER", getattr(args, "command", None) or "cli")
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",

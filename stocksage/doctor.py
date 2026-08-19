@@ -132,7 +132,7 @@ def check_robinhood() -> dict:
             "Link it from the dashboard's Portfolio tab for portfolio-aware suggestions",
         )
     client = RobinhoodClient()
-    if client.login():
+    if client.login(trigger="doctor"):
         client.logout()
         return _check("Robinhood", PASS, "credentials work, login OK")
     return _check(
@@ -157,6 +157,22 @@ def check_env_file() -> dict:
             f"Run: chmod 600 {ENV_PATH}",
         )
     return _check("Settings (.env)", PASS, "present and private")
+
+
+def check_account_security() -> dict:
+    """Standing exposure of the stored broker login (see stocksage/security.py)."""
+    from . import security
+
+    findings = security.audit()
+    worst = next((f for f in findings if f["level"] != security.OK), None)
+    if worst is None:
+        return _check("Account security", PASS, "stored login is as locked down as it gets")
+    status = FAIL if worst["level"] == security.CRITICAL else WARN
+    return _check(
+        "Account security", status, worst["detail"],
+        (worst["fix"] + " " if worst["fix"] else "")
+        + "Full report: start.bat security",
+    )
 
 
 def check_update_channel() -> dict:
@@ -241,6 +257,7 @@ ALL_CHECKS = (
     check_market_data,
     check_earnings_calendar,
     check_robinhood,
+    check_account_security,
     check_update_channel,
     check_autopilot,
 )

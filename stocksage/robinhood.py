@@ -20,6 +20,15 @@ from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
+# Ask for a longer-lived session token. Every time the cached token expires
+# the next run signs in from scratch, which is both a Robinhood alert and a
+# brand-new device fingerprint; a longer token means fewer of those.
+SESSION_SECONDS = 7 * 24 * 60 * 60
+
+# robin_stocks says this in the response when it reused the cached session
+# instead of authenticating. Version-tolerant substring, not an exact match.
+REUSE_MARKER = "logged in using authentication"
+
 
 @dataclass
 class Holding:
@@ -102,7 +111,16 @@ class RobinhoodClient:
     def credentials_available() -> bool:
         return bool(os.environ.get("ROBINHOOD_USERNAME") and os.environ.get("ROBINHOOD_PASSWORD"))
 
-    def login(self) -> bool:
+    def login(self, trigger: str | None = None) -> bool:
+        """Open a broker session. Read-only scope; never places orders.
+
+        `trigger` names what asked for the session (a CLI command, the
+        dashboard). It goes into the local access log so a Robinhood
+        sign-in alert can be matched against something concrete instead of
+        guessed at — see stocksage/security.py.
+        """
+        from . import security
+
         if self._logged_in:
             return True
         if not self.credentials_available():
@@ -113,6 +131,7 @@ class RobinhoodClient:
         except ImportError:
             log.warning("robin_stocks not installed — run: pip install robin_stocks pyotp")
             return False
+        trigger = trigger or os.environ.get("STOCKSAGE_TRIGGER") or "unknown"
         mfa_code = None
         secret = os.environ.get("ROBINHOOD_MFA_SECRET")
         if secret:
@@ -123,16 +142,31 @@ class RobinhoodClient:
             except ImportError:
                 log.warning("pyotp not installed; attempting login without TOTP code")
         try:
-            rh.login(
+            result = rh.login(
                 os.environ["ROBINHOOD_USERNAME"],
                 os.environ["ROBINHOOD_PASSWORD"],
                 mfa_code=mfa_code,
+                expiresIn=SESSION_SECONDS,
                 store_session=True,
             )
             self._logged_in = True
+            # A reused token is silent at Robinhood's end; a fresh sign-in is
+            # what sends the owner an alert and can raise a new-device
+            # challenge. Logging which one happened is the whole point.
+            reused = REUSE_MARKER in str((result or {}).get("detail", ""))
+            security.record_access(
+                security.SESSION_REUSED if reused else security.FRESH_LOGIN, trigger
+            )
+            # The cached token is a bearer credential: whoever can read the
+            # file is logged in as the owner. robin_stocks writes it with
+            # default permissions, so tighten it every time it is refreshed.
+            security.harden_file(security.token_pickle_path())
             return True
         except Exception as exc:
             log.error("Robinhood login failed: %s", exc)
+            security.record_access(
+                security.LOGIN_FAILED, trigger, type(exc).__name__
+            )
             return False
 
     def portfolio(self) -> Portfolio | None:
