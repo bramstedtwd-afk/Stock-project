@@ -28,7 +28,11 @@ def _tracked_text_files() -> list[Path]:
     return [
         PROJECT_ROOT / f
         for f in out
-        if (PROJECT_ROOT / f).suffix in keep and (PROJECT_ROOT / f).is_file()
+        # This file is the scanner: it necessarily contains the patterns it
+        # looks for, and matching itself would make every test fail forever.
+        if f != "tests/test_privacy.py"
+        and (PROJECT_ROOT / f).suffix in keep
+        and (PROJECT_ROOT / f).is_file()
     ]
 
 
@@ -52,7 +56,7 @@ def _scan(pattern: re.Pattern, allow=()) -> list[str]:
 def test_no_real_brokerage_account_number():
     """The agentic account number is .env configuration. The synthetic
     123456789 / 111111111 / 999999999 used in tests are deliberately fake."""
-    synthetic = {"123456789", "111111111", "999999999", "000000000"}
+    synthetic = {"123456789", "111111111", "999999999", "000000000", "555000111"}
     hits = []
     for path in TRACKED:
         try:
@@ -93,9 +97,34 @@ def test_an_unset_account_leaves_the_placeholder_visible(monkeypatch):
     assert AGENTIC_PLACEHOLDER in playbook_for_publishing()
 
 
-def test_no_personal_name_or_home_directory():
-    hits = _scan(re.compile(r"<you>|bramstedt|wisc\.edu", re.I))
-    assert not hits, "the owner's identity is in a public file:\n" + "\n".join(hits)
+def _git_identity() -> list[str]:
+    """The committer's real name/email, read from local config at run time.
+
+    Deliberately not written into this file: a test that guards against the
+    owner's name appearing in the repo must not be the thing that puts it
+    there.
+    """
+    parts: list[str] = []
+    for key in ("user.name", "user.email"):
+        result = subprocess.run(
+            ["git", "config", "--get", key], cwd=PROJECT_ROOT,
+            capture_output=True, text=True,
+        )
+        value = result.stdout.strip()
+        if value and value.lower() not in {"claude", "noreply@anthropic.com"}:
+            parts.append(value)
+            if "@" in value:
+                parts.extend(p for p in value.split("@") if len(p) > 3)
+    return parts
+
+
+def test_no_committer_identity_in_tracked_files():
+    identity = _git_identity()
+    if not identity:
+        pytest.skip("no personal git identity configured here")
+    pattern = re.compile("|".join(re.escape(p) for p in identity), re.I)
+    hits = _scan(pattern)
+    assert not hits, "the committer's identity is in a public file:\n" + "\n".join(hits)
 
 
 def test_no_hardcoded_windows_user_directory():
