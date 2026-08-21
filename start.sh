@@ -9,6 +9,8 @@
 #   ./start.sh doctor       -> check everything that can go wrong, with fixes
 #   ./start.sh security     -> who has signed in to your broker account, and how
 #                              exposed the stored login is (--signin 8:30am)
+#   ./start.sh leave        -> done with this computer: remove every scheduled
+#                              job, credential, token and log stored on it
 #   ./start.sh autopilot    -> learn automatically every weekday (off|status)
 #   ./start.sh daily        -> run the daily learn+scan cycle in the terminal
 #   ./start.sh <anything>   -> passed through to the CLI (suggest, sectors, ...)

@@ -701,6 +701,68 @@ _INTRUDER_STEPS = """  1. Open the Robinhood app -> Account -> Menu (three bars)
      an order, so nothing it does can move money."""
 
 
+def cmd_leave(args) -> int:
+    from . import offboard
+
+    targets = [t for t in offboard.sensitive_targets() + offboard.shortcut_targets()
+               if t.exists]
+    print("\nLEAVING THIS MACHINE\n" + "-" * 62)
+    if not targets:
+        print("StockSage has nothing stored on this computer.")
+    else:
+        print("This will delete, from this computer only:\n")
+        for t in targets:
+            print(f"  · {t.what}")
+            print(f"      {t.path}")
+            print(f"      {t.why}")
+    print("\nIt will also remove every StockSage scheduled job here, so nothing")
+    print("runs or signs in to your account again on this machine.\n")
+
+    brain = next(t for t in offboard.sensitive_targets() if t.what == "the brain")
+    if brain.exists and offboard.brain_is_shared():
+        print("Your brain lives in a cloud-synced folder, so it is not stored on")
+        print("this computer and will follow you to the next one. It is left alone.\n")
+    elif brain.exists and not args.keep_brain and not args.forget_brain:
+        print("Your brain is on this machine — every graded call it has learned.")
+        print("That took months and cannot be rebuilt. Choose one:\n")
+        print("  --keep-brain <file>   save it somewhere first (a USB stick, OneDrive)")
+        print("  --forget-brain        delete it; you accept losing what it learned")
+        print("\nNothing has been changed.")
+        return 1
+
+    if not args.yes:
+        print("Nothing has been changed. Re-run with --yes to do it:\n")
+        keep = f" --keep-brain {args.keep_brain}" if args.keep_brain else (
+            " --forget-brain" if args.forget_brain else "")
+        print(f"  .\\start.bat leave{keep} --yes      (Windows)")
+        print(f"  ./start.sh leave{keep} --yes        (Mac/Linux)")
+        return 1
+
+    result = offboard.offboard(keep_brain_at=args.keep_brain)
+    if result.brain_saved_to:
+        print(f"Brain saved to {result.brain_saved_to} — take that file with you.\n")
+    if result.brain_left_in_sync_folder:
+        print(f"Brain left in your synced folder ({result.brain_left_in_sync_folder}) —")
+        print("it follows you; deleting it here would delete it everywhere.\n")
+    elif args.keep_brain and result.failed:
+        print("Could NOT save the brain, so nothing was deleted:")
+        for f in result.failed:
+            print(f"  · {f}")
+        return 1
+    for item in result.unscheduled:
+        print(f"  removed  {item}")
+    for item in result.removed:
+        print(f"  deleted  {item}")
+    for item in result.failed:
+        print(f"  FAILED   {item}")
+    print("\n" + offboard.REVOCATION_STEPS)
+    if result.failed:
+        print("\nSome items could not be removed — delete them by hand, then do "
+              "the revocations above regardless.")
+        return 1
+    return 0
+
+
 def _add_no_broker(parser) -> None:
     parser.add_argument(
         "--no-broker", action="store_true",
@@ -846,6 +908,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--limit", type=int, default=25)
     p.set_defaults(func=cmd_security)
+
+    p = sub.add_parser(
+        "leave",
+        help="you are done with this computer: remove every scheduled job, "
+        "credential, token and log StockSage stored on it",
+    )
+    p.add_argument("--keep-brain", metavar="FILE",
+                   help="save the brain here before deleting it")
+    p.add_argument("--forget-brain", action="store_true",
+                   help="delete the brain too, accepting the loss")
+    p.add_argument("--yes", action="store_true", help="actually do it")
+    p.set_defaults(func=cmd_leave)
 
     return parser
 

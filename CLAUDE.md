@@ -45,7 +45,7 @@ rather than giving them instructions.
 `update` · `doctor` · `daily` · `suggest [TICKERS]` · `sectors` · `portfolio` ·
 `moves` · `performance` · `profit` · `watch add|remove|list` ·
 `congress` · `bootstrap` · `brain export|import|sync|info` ·
-`security [--signin TIME]`
+`security [--signin TIME]` · `leave [--keep-brain FILE|--forget-brain] --yes`
 
 ## Trading-routine integration (stocksage/advisor.py)
 
