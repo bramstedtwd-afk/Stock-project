@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import sys
+from pathlib import Path
 
 from . import universe
 from .db import Database
@@ -763,6 +764,92 @@ def cmd_leave(args) -> int:
     return 0
 
 
+def _ask(prompt: str, default: str = "") -> str:
+    try:
+        answer = input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return default
+    return answer or default
+
+
+def cmd_setup(args) -> int:
+    """Guided first run on a new machine."""
+    from . import firstrun
+
+    print("\nSETTING UP STOCKSAGE ON THIS MACHINE\n" + "-" * 62)
+
+    # 1. The brain — the only thing that cannot be recreated from scratch.
+    if firstrun.brain_is_populated():
+        print("Brain: already carries what it learned. Nothing to import.\n")
+    else:
+        print("This machine's brain is empty. If you exported one from your old")
+        print("computer, or downloaded brain-snapshot.db from your Drive, it can")
+        print("be brought in now — otherwise StockSage relearns from scratch.\n")
+        candidates = firstrun.find_brain_files()
+        chosen = None
+        if candidates:
+            print("Found:")
+            for i, path in enumerate(candidates[:5], 1):
+                size = path.stat().st_size / 1024
+                print(f"  {i}. {path}  ({size:,.0f} KB)")
+            pick = _ask("\nNumber to import, a full path, or Enter to skip: ")
+            if pick.isdigit() and 1 <= int(pick) <= len(candidates[:5]):
+                chosen = candidates[int(pick) - 1]
+            elif pick:
+                chosen = Path(pick.strip('"'))
+        else:
+            pick = _ask("No brain file found. Full path to one, or Enter to skip: ")
+            if pick:
+                chosen = Path(pick.strip('"'))
+        if chosen:
+            try:
+                stats = firstrun.import_brain_file(chosen)
+                added = stats.get("suggestions_added", 0)
+                moves = stats.get("move_events_added", 0)
+                print(f"\nImported: +{added} graded calls, +{moves} remembered moves.\n")
+            except Exception as exc:
+                print(f"\nCouldn't import that file: {exc}")
+                print("Setup continues — you can retry later with 'brain import'.\n")
+
+    # 2. The one setting that has to be in .env.
+    import os
+
+    if (os.environ.get("STOCKSAGE_AGENTIC_ACCOUNT") or "").strip():
+        print("Routine account: already set.\n")
+    else:
+        print("Which Robinhood account does your trading routine act on?")
+        print("(Account number, digits only. Leave blank if you don't use the")
+        print("routine — you can add it later.)")
+        answer = _ask("Account number: ")
+        if answer:
+            try:
+                stored = firstrun.set_agentic_account(answer)
+                print(f"Saved to .env — published briefs will name ••••{stored[-4:]}.\n")
+            except ValueError as exc:
+                print(f"{exc} — skipping; add it later with 'setup'.\n")
+
+    # 3. Things only the owner can do, in the right place.
+    steps = {s.key: s for s in firstrun.remaining_steps()}
+    print("-" * 62)
+    if not steps["robinhood"].done:
+        print("\nSTILL TO DO — link Robinhood")
+        print("  Run the launcher with no arguments to open StockSage, go to the")
+        print("  Portfolio tab, and type your login into the form there. Type it")
+        print("  into that form and nowhere else — not into this terminal, and")
+        print("  never into a chat. Expect a sign-in approval on your phone;")
+        print("  this is a new device.")
+    if not steps["drive"].done:
+        print("\nOPTIONAL — Google Drive publishing (only for the trading routine)")
+        print("  See SETUP.md. Get 'publish-drive' working by hand once before")
+        print("  you schedule it, or you get failing jobs with no visible error.")
+    print("\nChecking everything else...\n")
+
+    from .doctor import run_doctor
+
+    return run_doctor()
+
+
 def _add_no_broker(parser) -> None:
     parser.add_argument(
         "--no-broker", action="store_true",
@@ -908,6 +995,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--limit", type=int, default=25)
     p.set_defaults(func=cmd_security)
+
+    p = sub.add_parser(
+        "setup", help="guided first run on a new machine: brain, settings, checks"
+    )
+    p.set_defaults(func=cmd_setup)
 
     p = sub.add_parser(
         "leave",

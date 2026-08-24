@@ -1,6 +1,7 @@
 @echo off
 rem StockSage one-command launcher (Windows).
 rem   .\start.bat            -> open StockSage in its own app window
+rem   .\start.bat setup      -> new machine? guided setup: brain, settings, checks
 rem   .\start.bat install    -> put a StockSage shortcut on your Desktop
 rem   .\start.bat phone      -> share to your phone over home Wi-Fi (QR code)
 rem   .\start.bat web        -> open in a normal browser tab instead
