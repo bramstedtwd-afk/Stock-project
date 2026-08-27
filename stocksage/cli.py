@@ -1016,6 +1016,56 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+class _DropYfinance(logging.Filter):
+    """Drop yfinance's own log records at the handler.
+
+    Setting the yfinance logger's level is not enough: it manages that level
+    itself (its debug-mode helpers assign DEBUG and NOTSET), so a level we
+    set at startup can be thrown away later in the run and the wall of
+    "possibly delisted" errors comes back. A filter on our handler cannot be
+    undone by anything yfinance does to its logger.
+
+    These are not lost information — a name that cannot be priced is
+    reported in plain language at the end of the command instead.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not record.name.startswith("yfinance")
+
+
+def _silence_yfinance() -> None:
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(_DropYfinance())
+    # Belt and braces: the level alone is unreliable, but it costs nothing
+    # and stops the records being formatted at all while it holds.
+    logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
+
+def _report_unpriceable() -> None:
+    """One plain line about names this run had to skip entirely."""
+    from .data import unpriceable
+
+    missing = unpriceable()
+    if not missing:
+        return
+    names = ", ".join(missing)
+    print(
+        f"\nNote: no price data for {names} — delisted, renamed, or not carried "
+        f"by Yahoo Finance."
+    )
+    print(
+        "      Left out of this run's analysis. If you no longer follow "
+        f"{missing[0]}:"
+    )
+    print(f"        .\\start.bat watch remove {missing[0]}      (Windows)")
+    print(f"        ./start.sh watch remove {missing[0]}        (Mac/Linux)")
+    print(
+        "      If you hold it at your broker it is scanned automatically and "
+        "cannot be removed from the watchlist — this note is just telling you "
+        "it has no signals today."
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     load_env()  # pick up .env automatically; real environment still wins
     args = build_parser().parse_args(argv)
@@ -1028,14 +1078,11 @@ def main(argv: list[str] | None = None) -> int:
         format="%(levelname)s %(name)s: %(message)s",
     )
     if not args.verbose:
-        # yfinance logs a red ERROR per failed symbol, and retries mean one
-        # delisted or unrecognized ticker in a watchlist prints the same
-        # scary line a dozen times on a run that otherwise succeeded. We
-        # already catch these, fall back to cached data, and report them
-        # ourselves as scan errors — so its chatter is pure noise to the
-        # owner. -v still shows everything.
-        logging.getLogger("yfinance").setLevel(logging.CRITICAL)
-    return args.func(args)
+        _silence_yfinance()
+    try:
+        return args.func(args)
+    finally:
+        _report_unpriceable()
 
 
 if __name__ == "__main__":

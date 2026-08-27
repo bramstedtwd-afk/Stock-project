@@ -20,6 +20,24 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
+# Tickers this process could not price at all — not even from a stale cache.
+# Process-scoped on purpose: it answers "what did THIS run have to skip",
+# which is what the owner is shown at the end of a command.
+_UNPRICEABLE: set[str] = set()
+
+
+def note_unpriceable(ticker: str) -> None:
+    _UNPRICEABLE.add(ticker.upper())
+
+
+def unpriceable() -> list[str]:
+    return sorted(_UNPRICEABLE)
+
+
+def clear_unpriceable() -> None:
+    _UNPRICEABLE.clear()
+
+
 DEFAULT_CACHE_DIR = Path("~/.stocksage/cache")
 CACHE_TTL_SECONDS = 4 * 3600  # refresh price history at most every 4 hours
 HISTORY_PERIOD = "1y"
@@ -156,6 +174,10 @@ class MarketData:
             if stale is not None:
                 log.warning("using stale cache for %s (download failed)", ticker)
                 return drop_partial_bar(stale)
+            # Nothing anywhere: the name is silently absent from this run's
+            # analysis, which the owner should be told once rather than left
+            # to infer from a wall of yfinance errors.
+            note_unpriceable(ticker)
         return drop_partial_bar(df)
 
     def prefetch(self, tickers: list[str], period: str = HISTORY_PERIOD) -> int:
