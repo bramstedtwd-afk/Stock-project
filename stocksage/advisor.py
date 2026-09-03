@@ -477,6 +477,37 @@ def playbook_for_publishing() -> str:
     return text
 
 
+def _agentic_portfolio(client):
+    """The portfolio of the account the routine actually trades.
+
+    client.portfolio() returns Robinhood's DEFAULT account, which is not the
+    one the routine acts on. That mismatch is not cosmetic: the brief's
+    size_hint_dollars are a percentage of whatever buying power it is handed,
+    so a personal account's balance produces dollar sizes many times what the
+    agentic account can fund — on 2026-08-10 the brief suggested $110-$147
+    entries against an account holding under a dollar.
+
+    STOCKSAGE_AGENTIC_ACCOUNT names the right one. Falling back to the
+    default when it is unset keeps single-account setups working, and the
+    playbook independently tells the routine to size from its own live pull —
+    but the brief should not be misleading in the first place.
+    """
+    account = (os.environ.get("STOCKSAGE_AGENTIC_ACCOUNT") or "").strip()
+    if account:
+        try:
+            scoped = client.portfolio_for(account)
+        except Exception as exc:
+            log.warning("could not read account %s: %s", account[-4:], exc)
+            scoped = None
+        if scoped is not None:
+            return scoped
+        log.warning(
+            "STOCKSAGE_AGENTIC_ACCOUNT is set but that account returned "
+            "nothing; falling back to the default account's portfolio"
+        )
+    return client.portfolio()
+
+
 def desktop_sync_cycle(engine: Engine, client=None, broker: bool = True) -> dict:
     """The full desktop-side heartbeat that keeps the brain current.
 
@@ -511,10 +542,11 @@ def desktop_sync_cycle(engine: Engine, client=None, broker: bool = True) -> dict
             stats["synced"] = sync
             orders = [dict(r) for r in engine.db.rh_orders()]
             stats["fills_ingested"] = ingest_fills(engine, orders)["fills_ingested"]
-        portfolio = client.portfolio()
+        portfolio = _agentic_portfolio(client)
         if portfolio is not None:
             stats["holdings"] = [h.ticker for h in portfolio.holdings]
             stats["buying_power"] = portfolio.buying_power
+            stats["account_number"] = portfolio.account_number
     except Exception as exc:  # never let a broker hiccup block grading/publish
         stats["sync_error"] = str(exc)
     stats["graded"] = engine.evaluate_pending()

@@ -177,3 +177,86 @@ def test_a_broken_account_call_returns_none_not_an_exception(fake_rh, monkeypatc
     monkeypatch.setattr(rh.account, "get_open_stock_positions", boom)
     client, _ = fake_rh
     assert client.portfolio_for("123456789") is None
+
+
+# --- the brief must describe the account the routine actually trades -------
+
+
+class _MultiAccountClient:
+    """Default account rich, agentic account nearly empty — the real shape."""
+
+    def __init__(self):
+        self.asked_for: list[str] = []
+
+    def sync_history(self, db):
+        return None
+
+    def portfolio(self):
+        from stocksage.robinhood import Holding, Portfolio
+
+        return Portfolio([Holding("NVDA", 5.0, 100.0, 120.0, 600.0)], 2500.00, "111111111")
+
+    def portfolio_for(self, number):
+        from stocksage.robinhood import Holding, Portfolio
+
+        self.asked_for.append(number)
+        if number == "123456789":
+            return Portfolio([Holding("GE", 0.25, 100.0, 110.0, 27.5)], 20.81, "123456789")
+        return None
+
+
+def test_the_brief_is_sized_from_the_agentic_account(tmp_path, monkeypatch):
+    """size_hint_dollars is a percentage of whatever buying power it is given.
+    Handed a personal account's balance it proposes entries the traded account
+    cannot fund — $110-$147 against an account holding under a dollar."""
+    from stocksage.advisor import desktop_sync_cycle
+    from stocksage.engine import Engine
+
+    monkeypatch.setenv("STOCKSAGE_DB", str(tmp_path / "brain.db"))
+    monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "123456789")
+    client = _MultiAccountClient()
+    engine = Engine()
+    monkeypatch.setattr(engine, "evaluate_pending", lambda: 0)
+
+    stats = desktop_sync_cycle(engine, client=client)
+    assert stats["buying_power"] == pytest.approx(20.81), "sized from the wrong account"
+    assert stats["holdings"] == ["GE"]
+    assert stats["account_number"] == "123456789"
+    assert client.asked_for == ["123456789"]
+    engine.db.close()
+
+
+def test_an_unset_account_still_works_on_a_single_account_login(tmp_path, monkeypatch):
+    from stocksage.advisor import desktop_sync_cycle
+    from stocksage.engine import Engine
+
+    monkeypatch.setenv("STOCKSAGE_DB", str(tmp_path / "brain.db"))
+    monkeypatch.delenv("STOCKSAGE_AGENTIC_ACCOUNT", raising=False)
+    client = _MultiAccountClient()
+    engine = Engine()
+    monkeypatch.setattr(engine, "evaluate_pending", lambda: 0)
+
+    stats = desktop_sync_cycle(engine, client=client)
+    assert stats["buying_power"] == pytest.approx(2500.00)
+    assert client.asked_for == [], "asked for a scoped account with none configured"
+    engine.db.close()
+
+
+def test_an_unreachable_agentic_account_falls_back_rather_than_publishing_nothing(
+    tmp_path, monkeypatch
+):
+    """A wrong account number in .env must not silently strip the brief of
+    sizing entirely — degrade to the default and log it."""
+    from stocksage.advisor import desktop_sync_cycle
+    from stocksage.engine import Engine
+
+    monkeypatch.setenv("STOCKSAGE_DB", str(tmp_path / "brain.db"))
+    monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "000000000")
+    client = _MultiAccountClient()
+    engine = Engine()
+    monkeypatch.setattr(engine, "evaluate_pending", lambda: 0)
+
+    stats = desktop_sync_cycle(engine, client=client)
+    assert stats["buying_power"] == pytest.approx(2500.00)
+    assert client.asked_for == ["000000000"]
+    engine.db.close()
