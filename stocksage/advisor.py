@@ -647,14 +647,27 @@ def plans_for_accounts(engine: Engine, client, suggestions: list | None = None,
                 warnings.append(f"Could not read {acct.label} this run, so it is missing from this sheet.")
                 continue
             is_agentic = acct.number == (agentic or default_number)
-            role = "agentic" if is_agentic else ("roth" if "roth" in (acct.kind or "").lower() else "personal")
+            role = "agentic" if is_agentic else ("roth" if acct.is_roth else "personal")
             entries.append((role, acct.label, pf, acct.kind or ""))
         entries.sort(key=lambda e: (e[0] != "agentic", e[0]))
         if agentic and not any(a.number == agentic for a in accounts):
-            warnings.append(
-                f"Your routine's account (••••{agentic[-4:]}) was not among the accounts Robinhood "
-                "returned, so it is missing from this sheet. Run .\\start.bat doctor."
-            )
+            # Robinhood's account list does not always include the routine's account
+            # even though it can be read by number. Try that before giving up.
+            direct = None
+            try:
+                direct = client.portfolio_for(agentic)
+            except Exception as exc:
+                log.warning("could not read routine account directly: %s", exc)
+            if direct is not None and (direct.holdings or direct.buying_power > 0
+                                       or (direct.cash or 0) > 0):
+                entries.append(("agentic", f"Agentic ••••{agentic[-4:]}", direct, "cash"))
+                entries.sort(key=lambda e: (e[0] != "agentic", e[0]))
+            else:
+                warnings.append(
+                    f"StockSage cannot see your routine's account (••••{agentic[-4:]}) with your login, "
+                    "so it is not on this sheet. The routine reads that account itself; this sheet "
+                    "covers the others."
+                )
 
     # Scan every held name the daily scan missed ONCE, up front, so each
     # account's plan sees it and the caller gets one suggestion per ticker.
@@ -681,7 +694,7 @@ def plans_for_accounts(engine: Engine, client, suggestions: list | None = None,
             engine, suggestions, positions, pf.sizing_cash,
             profile=profile_for(role), tax_note=tax, entries=entries_override,
         )
-        if "margin" in kind.lower():
+        if "margin" in kind.lower() and role != "roth":
             plan.notes.append(
                 "Margin account: every amount here is sized from your cash only, "
                 "never from margin."

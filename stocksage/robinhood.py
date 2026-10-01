@@ -47,16 +47,30 @@ class Account:
     kind: str            # e.g. "individual", "roth", as Robinhood labels it
     buying_power: float
     portfolio_cash: float
+    # Robinhood's brokerage_account_type ("individual", "ira_roth", ...). `kind` is
+    # how the account trades ("margin", "cash", "limited_margin"): a Roth can be
+    # "limited_margin", so the two must be read separately.
+    account_type: str = ""
+
+    @property
+    def is_roth(self) -> bool:
+        return "roth" in f"{self.kind} {self.account_type}".lower()
 
     @property
     def label(self) -> str:
         """Human-facing name: 'Roth IRA ••••6789'."""
-        pretty = {
-            "individual": "Individual",
-            "roth": "Roth IRA",
-            "traditional": "Traditional IRA",
-            "joint": "Joint",
-        }.get((self.kind or "").lower(), (self.kind or "Account").title())
+        if self.is_roth:
+            pretty = "Roth IRA"
+        elif "ira" in (self.account_type or "").lower():
+            pretty = "Traditional IRA"
+        else:
+            pretty = {
+                "individual": "Individual",
+                "roth": "Roth IRA",
+                "traditional": "Traditional IRA",
+                "joint": "Joint",
+                "limited_margin": "Margin",
+            }.get((self.kind or "").lower(), (self.kind or "Account").title())
         tail = self.number[-4:] if self.number else "????"
         return f"{pretty} ••••{tail}"
 
@@ -276,6 +290,7 @@ class RobinhoodClient:
                     Account(
                         number=str(a.get("account_number") or ""),
                         kind=str(a.get("type") or a.get("brokerage_account_type") or ""),
+                        account_type=str(a.get("brokerage_account_type") or ""),
                         buying_power=float(a.get("buying_power") or 0),
                         portfolio_cash=float(a.get("portfolio_cash") or 0),
                     )

@@ -459,7 +459,7 @@ def test_a_configured_routine_account_that_robinhood_did_not_return_is_flagged(m
     engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
     sheet = today.build_sheet(engine, FakeBroker(), suggestions=default_suggestions(STRONG),
                               book=real_book, news=False, now=NOW)
-    assert any("••••0111" in w and "doctor" in w and "\\\\" not in w for w in sheet.warnings)
+    assert any("••••0111" in w and "cannot see" in w for w in sheet.warnings)
 
 
 def test_robinhoods_own_roth_type_string_is_recognised(monkeypatch):
@@ -482,3 +482,67 @@ def test_a_trim_says_it_is_about_size_and_the_model_read_is_not_labelled_a_buyin
     assert "This is about size, not a verdict on the stock." in ctx
     assert any(c.startswith("The model's read: a solid") for c in ctx)
     assert not any("Buying case" in c for c in ctx)
+
+
+# ------------------------------------------------------------ Robinhood's real account labels
+
+def test_a_roth_that_trades_as_limited_margin_is_still_a_roth(monkeypatch):
+    """Robinhood reports type 'limited_margin' for the Roth and puts 'ira_roth' in
+    brokerage_account_type. Reading only `type` called it a margin account and
+    gave it stop-losses meant for a trading account."""
+    from stocksage.advisor import plans_for_accounts
+    from stocksage.robinhood import Account
+
+    broker = FakeBroker()
+    broker.accts[2] = Account("999999999", "limited_margin", 120.0, 120.0, account_type="ira_roth")
+    engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
+    out = plans_for_accounts(engine, broker, suggestions=default_suggestions(STRONG))
+    roth = [e for e in out["accounts"] if e["role"] == "roth"]
+    assert roth and roth[0]["label"] == "Roth IRA ••••9999"
+    assert not any("Margin account" in n for n in roth[0]["plan"].notes)
+    assert not any(a.kind == "EXIT_STOP" for a in roth[0]["plan"].actions)
+    assert any("tax-free" in a.why for a in roth[0]["plan"].actions if a.side == "SELL")
+
+
+def test_an_ordinary_margin_account_keeps_its_margin_note_and_label():
+    from stocksage.robinhood import Account
+
+    a = Account("111111111", "margin", 1.0, 1.0, account_type="individual")
+    assert a.label == "Margin ••••1111" and not a.is_roth
+
+
+def test_a_routine_account_missing_from_the_list_is_read_directly(monkeypatch):
+    from stocksage.advisor import plans_for_accounts
+    from stocksage.robinhood import Holding, Portfolio
+
+    monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "555000111")
+
+    class Hidden(FakeBroker):
+        def __init__(self):
+            super().__init__(agentic="555000111")
+            self.accts = [a for a in self.accts if a.number != "555000111"]   # not listed...
+            self.pf["555000111"] = Portfolio([Holding("ACT", 2.0, 100.0, 90.0, 180.0)], 5.0, "555000111")
+            # ...but readable by number.
+
+    engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
+    out = plans_for_accounts(engine, Hidden(), suggestions=default_suggestions(STRONG))
+    assert out["accounts"][0]["role"] == "agentic" and out["accounts"][0]["label"] == "Agentic ••••0111"
+    assert not out["warnings"]
+
+
+def test_a_routine_account_that_cannot_be_read_at_all_is_explained_not_faked(monkeypatch):
+    from stocksage.advisor import plans_for_accounts
+    from stocksage.robinhood import Portfolio
+
+    monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "555000111")
+
+    class Empty(FakeBroker):
+        def portfolio_for(self, number):
+            if number == "555000111":
+                return Portfolio([], 0.0, number)       # what an unseen account looks like
+            return super().portfolio_for(number)
+
+    engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
+    out = plans_for_accounts(engine, Empty(), suggestions=default_suggestions(STRONG))
+    assert "agentic" not in [e["role"] for e in out["accounts"]]
+    assert any("••••0111" in w and "reads that account itself" in w for w in out["warnings"])
