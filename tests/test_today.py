@@ -455,11 +455,11 @@ def test_an_account_that_cannot_be_read_is_called_out_not_dropped_quietly(real_b
 
 
 def test_a_configured_routine_account_that_robinhood_did_not_return_is_flagged(monkeypatch, real_book):
-    monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "555555555")
+    monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "555000111")
     engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
     sheet = today.build_sheet(engine, FakeBroker(), suggestions=default_suggestions(STRONG),
                               book=real_book, news=False, now=NOW)
-    assert any("••••5555" in w and "doctor" in w and "\\\\" not in w for w in sheet.warnings)
+    assert any("••••0111" in w and "doctor" in w and "\\\\" not in w for w in sheet.warnings)
 
 
 def test_robinhoods_own_roth_type_string_is_recognised(monkeypatch):
