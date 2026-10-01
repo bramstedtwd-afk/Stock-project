@@ -69,7 +69,12 @@ if "%~1"=="" (
 ) else if "%~1"=="install" (
     %VENV_PY% -m stocksage.desktop install
 ) else if "%~1"=="update" (
-    %VENV_PY% -m stocksage.update
+    rem update can replace this very file. cmd reads a batch file by byte
+    rem position while it runs, so carrying on after a replacement resumes
+    rem in the middle of the NEW file and runs a stray fragment of it.
+    rem Leave before cmd reads another line.
+    %VENV_PY% -m stocksage.update || exit /b 1
+    exit /b 0
 ) else if "%~1"=="doctor" (
     %VENV_PY% -m stocksage.doctor
 ) else if "%~1"=="autopilot" (

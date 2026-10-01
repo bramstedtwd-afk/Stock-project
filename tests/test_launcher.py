@@ -123,3 +123,17 @@ def test_no_parenthesis_inside_the_batch_guard_message():
     opens = len(re.findall(r"\($", guard, flags=re.M))
     closes = len(re.findall(r"^\s*\)\s*$", guard, flags=re.M))
     assert opens == closes, "unbalanced parentheses in the batch guard"
+
+
+def test_update_leaves_the_batch_file_before_cmd_reads_another_line():
+    """`update` can replace start.bat itself. cmd.exe reads a batch file by
+    byte position as it runs, so continuing afterwards resumes in the middle
+    of the NEW file: on the owner's machine it ran a fragment of the phone
+    launcher straight after a successful update. Exiting inside the same
+    block, before another line is read, is the only reliable defence."""
+    bat = _bat()
+    start = bat.index('"%~1"=="update"')
+    block = bat[start: bat.index('"%~1"=="doctor"')]
+    assert "-m stocksage.update || exit /b 1" in block, "a failed update lost its exit code"
+    assert block.index("-m stocksage.update") < block.index("exit /b 0")
+    assert "else if" not in block.split("exit /b 0")[0], "update falls through to another branch"
