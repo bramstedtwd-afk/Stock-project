@@ -2,6 +2,7 @@
 # StockSage one-command launcher (Mac / Linux).
 #
 #   ./start.sh              -> open StockSage in its own app window
+#   ./start.sh backtest     -> does the model have an edge? (replays history honestly)
 #   ./start.sh actions      -> what to do today: sells, trims, entries
 #   ./start.sh setup        -> new machine? guided setup: brain, settings, checks
 #   ./start.sh install      -> put a StockSage icon on your desktop/dock

@@ -529,7 +529,7 @@ def _agentic_portfolio(client):
 
 
 def plan_for_account(engine: Engine, suggestions: list, positions: list[dict],
-                     cash: float):
+                     cash: float, profile: str = "active", tax_note: str | None = None):
     """Today's ranked actions for the account the routine trades.
 
     One function used by the CLI, the dashboard and the published brief, so
@@ -563,7 +563,92 @@ def plan_for_account(engine: Engine, suggestions: list, positions: list[dict],
         model_trust(engine.db.evaluated_suggestions()),
         suggestions_enabled=engine.db.model_suggestions_enabled(),
         reliability=reliability,
+        profile=profile,
+        tax_note=tax_note,
     )
+
+
+ROLE_LABELS = {"agentic": "Agentic", "personal": "Personal", "roth": "Roth IRA"}
+CONCENTRATION_NOTE_AT = 0.15
+
+
+def plans_for_accounts(engine: Engine, client, suggestions: list | None = None) -> dict:
+    """A plan for every account under the login, each by its own rules.
+
+    The agentic account (the one the routine trades) is "active": stops, 10-day
+    exit, tight size cap. Every other account is "core": a long-term account
+    you place orders in by hand, where those rules would be wrong, so only the
+    concentration cap and the model's opinions apply. Tax context differs too
+    (a Roth sale is tax-free; a taxable one realises a gain or loss).
+
+    Also reports any single stock that is a large share of EVERYTHING owned,
+    across accounts — the exposure no single account's plan can see.
+    """
+    from .actions import INDEX_FUNDS
+
+    if suggestions is None:
+        suggestions = engine.scan(capture_context=False, record=False).suggestions
+
+    agentic = (os.environ.get("STOCKSAGE_AGENTIC_ACCOUNT") or "").strip()
+    try:
+        accounts = list(client.accounts())
+    except Exception as exc:
+        log.warning("could not list accounts: %s", exc)
+        accounts = []
+
+    entries: list[tuple[str, str, object]] = []   # (role, label, portfolio)
+    if not accounts:
+        pf = _agentic_portfolio(client)
+        if pf is not None:
+            entries.append(("agentic", "Account", pf))
+    else:
+        default_number = None
+        if not agentic:
+            try:
+                default = client.portfolio()
+                default_number = default.account_number if default else None
+            except Exception:
+                default_number = None
+        for acct in accounts:
+            try:
+                pf = client.portfolio_for(acct.number)
+            except Exception as exc:
+                log.warning("could not read account %s: %s", acct.number[-4:], exc)
+                continue
+            if pf is None:
+                continue
+            is_agentic = acct.number == (agentic or default_number)
+            role = "agentic" if is_agentic else ("roth" if (acct.kind or "").lower() == "roth" else "personal")
+            entries.append((role, acct.label, pf))
+        entries.sort(key=lambda e: (e[0] != "agentic", e[0]))
+
+    out, combined, total = [], {}, 0.0
+    for role, label, pf in entries:
+        positions = [
+            {"ticker": h.ticker, "shares": h.shares, "avg_cost": h.avg_buy_price,
+             "price": h.current_price, "equity": h.equity}
+            for h in pf.holdings
+        ]
+        tax = ("Roth IRA: selling is tax-free." if role == "roth"
+               else "Taxable account: selling realises a gain or loss.")
+        plan = plan_for_account(
+            engine, suggestions, positions, pf.buying_power,
+            profile="active" if role == "agentic" else "core", tax_note=tax,
+        )
+        out.append({"role": role, "title": ROLE_LABELS[role], "label": label,
+                    "manual": role != "agentic", "plan": plan})
+        total += pf.buying_power + sum(p["equity"] for p in positions)
+        for p in positions:
+            combined[p["ticker"]] = combined.get(p["ticker"], 0.0) + p["equity"]
+
+    notes = []
+    if total > 0:
+        for ticker, value in sorted(combined.items(), key=lambda kv: -kv[1]):
+            if ticker not in INDEX_FUNDS and value / total >= CONCENTRATION_NOTE_AT and len(notes) < 3:
+                notes.append(
+                    f"{ticker} is {value / total:.0%} of everything you own across all your accounts."
+                )
+    return {"accounts": out, "overall_notes": notes}
 
 
 def desktop_sync_cycle(engine: Engine, client=None, broker: bool = True) -> dict:

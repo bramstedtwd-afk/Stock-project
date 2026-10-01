@@ -281,3 +281,58 @@ def test_a_broken_planner_never_takes_the_dashboard_down(monkeypatch, tmp_path):
     at = _plan_page(monkeypatch, tmp_path, held_price=90.0, planner_raises=True)
     assert not at.exception, at.exception
     assert not any("What to do today" in str(m.value) for m in at.markdown)
+
+
+def test_dashboard_shows_a_tab_per_account_with_tickets_only_on_manual_ones(monkeypatch, tmp_path):
+    from stocksage.engine import ScanResult
+    from stocksage.robinhood import Account, Holding, Portfolio
+    from stocksage.scoring import Suggestion
+
+    def s(t, action="HOLD", price=100.0):
+        return Suggestion(ticker=t, action=action, score=0.0, risk_adjusted_score=0.0,
+                          price=price, signals={}, risk={"atr_pct": 0.02}, stop_price=price * 0.96)
+
+    portfolios = {
+        "111111111": Portfolio([Holding("PERS", 1.0, 100.0, 100.0, 100.0)], 900.0, "111111111"),
+        "123456789": Portfolio([Holding("ACT", 2.0, 100.0, 90.0, 180.0)], 5.0, "123456789"),
+        "999999999": Portfolio([Holding("ROTH", 5.0, 100.0, 100.0, 500.0)], 100.0, "999999999"),
+    }
+
+    class FakeClient:
+        @staticmethod
+        def credentials_available():
+            return True
+
+        def accounts(self):
+            return [Account("111111111", "individual", 900.0, 900.0),
+                    Account("123456789", "individual", 5.0, 5.0),
+                    Account("999999999", "roth", 100.0, 100.0)]
+
+        def portfolio(self):
+            return portfolios["111111111"]
+
+        def portfolio_for(self, number):
+            return portfolios.get(number)
+
+        def sync_history(self, db):
+            return None
+
+    monkeypatch.setattr("stocksage.robinhood.RobinhoodClient", FakeClient)
+    monkeypatch.setenv("STOCKSAGE_DB", str(tmp_path / "brain.db"))
+    monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "123456789")
+    db = Database(tmp_path / "brain.db")
+    db.set_meta("last_daily_run", date.today().isoformat())
+    db.close()
+
+    at = AppTest.from_file(APP)
+    at.session_state["scan_result"] = ScanResult(
+        suggestions=[s("PERS"), s("ACT", price=90.0), s("ROTH")],
+        portfolio=portfolios["111111111"], sector_trends={})
+    at.run(timeout=RUN_TIMEOUT)
+    assert not at.exception, at.exception
+
+    labels = [str(t.label) for t in at.tabs if "—" in str(getattr(t, "label", ""))]
+    assert labels[0].startswith("⭐ Agentic"), labels
+    assert any("Roth IRA" in x for x in labels) and any("Personal" in x for x in labels)
+    shown = " ".join(str(e.value) for e in at.error)
+    assert "SELL all of ACT" in shown

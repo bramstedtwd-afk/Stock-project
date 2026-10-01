@@ -73,7 +73,7 @@ def _congress_top():
 
 
 def _todays_plan(scan):
-    """Today's actions for the account the routine trades, or None.
+    """Today's actions for every account under the login, or None.
 
     Computed once per scan and remembered, because it talks to the broker.
     Wrapped so that nothing about it — no broker hiccup, no planning bug —
@@ -82,52 +82,71 @@ def _todays_plan(scan):
     cached = st.session_state.get("todays_plan")
     if cached is not None and cached[0] is scan:
         return cached[1]
-    plan = None
+    plans = None
     try:
-        from stocksage.advisor import _agentic_portfolio, plan_for_account
+        from stocksage.advisor import plans_for_accounts
         from stocksage.robinhood import RobinhoodClient
 
         client = RobinhoodClient()
         if client.credentials_available():
-            pf = _agentic_portfolio(client)
-            if pf is not None:
-                positions = [
-                    {"ticker": h.ticker, "shares": h.shares, "avg_cost": h.avg_buy_price,
-                     "price": h.current_price, "equity": h.equity}
-                    for h in pf.holdings
-                ]
-                plan = plan_for_account(
-                    get_engine(), scan.suggestions, positions, pf.buying_power
-                )
+            plans = plans_for_accounts(get_engine(), client, suggestions=scan.suggestions)
+            if not plans["accounts"]:
+                plans = None
     except Exception:
-        plan = None
-    st.session_state["todays_plan"] = (scan, plan)
-    return plan
+        plans = None
+    st.session_state["todays_plan"] = (scan, plans)
+    return plans
 
 
-def _render_plan(plan):
-    """The plan, loudest first. One glance should say what to do."""
-    from stocksage.actions import FYI, URGENT, trust_sentence
+def _render_plan_body(plan, manual):
+    """One account's plan, loudest first. One glance should say what to do."""
+    from stocksage.actions import FYI, URGENT, order_ticket
 
-    doing = [a for a in plan.actions if a.kind not in ("WATCH", "HEADS_UP", "HOLD_PAST_TIME")]
+    doing = [a for a in plan.actions if a.kind not in ("WATCH", "HEADS_UP", "HOLD_PAST_TIME", "IDEA")]
     context = [a for a in plan.actions if a.kind in ("WATCH", "HEADS_UP", "HOLD_PAST_TIME")]
+    ideas = [a for a in plan.actions if a.kind == "IDEA"]
+    if not doing:
+        st.success("Nothing to do today. Holding and waiting is a decision too.")
+    for a in doing:
+        box = st.error if a.urgency == URGENT else (st.info if a.urgency >= FYI else st.warning)
+        tag = f"  ·  _{a.confidence} confidence_" if a.confidence else ""
+        box(f"**{a.headline}**{tag}")
+        st.caption(a.why)
+        ticket = order_ticket(a) if manual else None
+        if ticket:
+            st.code(ticket, language=None)
+    if ideas:
+        st.caption("**Ideas (not recommendations)**")
+        for a in ideas:
+            st.caption(f"· {a.headline}")
+    for a in context:
+        st.caption(f"· {a.headline}")
+    if plan.quiet:
+        st.caption(f"No action needed: {', '.join(plan.quiet)}")
+    for note in plan.notes:
+        st.caption(note)
+
+
+def _render_plans(plans):
     with st.container(border=True):
         st.markdown("### ✅ What to do today")
-        if not doing:
-            st.success("Nothing to do today. Holding and waiting is a decision too.")
-        for a in doing:
-            box = st.error if a.urgency == URGENT else (st.info if a.urgency >= FYI else st.warning)
-            tag = f"  ·  _{a.confidence} confidence_" if a.confidence else ""
-            box(f"**{a.headline}**{tag}")
-            st.caption(a.why)
-        for a in context:
-            st.caption(f"· {a.headline}")
-        if plan.quiet:
-            st.caption(f"No action needed: {', '.join(plan.quiet)}")
-        st.caption(trust_sentence(plan.trust))
+        accounts = plans["accounts"]
+        if len(accounts) == 1:
+            _render_plan_body(accounts[0]["plan"], accounts[0]["manual"])
+        else:
+            tabs = st.tabs([
+                f"⭐ {e['title']} — you confirm" if not e["manual"] else f"{e['title']} — you place it"
+                for e in accounts
+            ])
+            for tab, e in zip(tabs, accounts):
+                with tab:
+                    st.caption(e["label"])
+                    _render_plan_body(e["plan"], e["manual"])
+        for note in plans["overall_notes"]:
+            st.warning(note)
         st.caption(
-            "StockSage never places orders — your routine proposes each one and "
-            "waits for your confirm."
+            "StockSage never places orders — the routine proposes the agentic account's "
+            "and waits for your confirm; the others you place yourself."
         )
 
 
@@ -302,9 +321,9 @@ result = st.session_state.get("scan_result")
 if result is not None:
     from stocksage.briefing import briefing_lines, build_briefing
 
-    _plan = _todays_plan(result)
-    if _plan is not None:
-        _render_plan(_plan)
+    _plans = _todays_plan(result)
+    if _plans is not None:
+        _render_plans(_plans)
 
     briefing = build_briefing(result, get_engine().db)
     mood_icon = {"bullish": "🟢", "bearish": "🔴", "mixed": "🟡"}[briefing["mood"]]

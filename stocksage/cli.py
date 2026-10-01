@@ -485,13 +485,16 @@ def _alert_on(engine, plan_dict) -> None:
 
 
 def cmd_actions(args) -> int:
-    """What to do today, in plain language."""
-    from .actions import Plan, format_plan
-    from .advisor import build_brief
+    """What to do today, for every account, in plain language."""
+    from .actions import FOOTER, format_plan
+    from .advisor import desktop_sync_cycle, plans_for_accounts
+    from .notify import alert_accounts
+    from .robinhood import RobinhoodClient
 
     engine = Engine()
-    sync, focus = _sync_and_focus(engine, args.tickers)
-    if sync.get("positions") is None or sync.get("buying_power") is None:
+    client = RobinhoodClient()
+    sync = desktop_sync_cycle(engine, client=client)
+    if sync.get("positions") is None:
         print(
             "Robinhood is not linked on this computer, so StockSage cannot see "
             "what you hold.\nLink it from the dashboard's Portfolio tab, then "
@@ -500,15 +503,65 @@ def cmd_actions(args) -> int:
         if sync.get("sync_error"):
             print(f"(Last attempt said: {sync['sync_error']})")
         return 1
-    brief = build_brief(
-        engine, tickers=focus, buying_power=sync["buying_power"],
-        positions=sync["positions"],
-    )
-    if not brief.get("actions"):
-        print("Could not work out today's actions - run  .\\start.bat doctor  to see why.")
+
+    result = plans_for_accounts(engine, client)
+    if not result["accounts"]:
+        print("No accounts could be read - run  .\\start.bat doctor  to see why.")
         return 1
-    print("\n".join(format_plan(Plan.from_dict(brief["actions"]))))
-    _alert_on(engine, brief["actions"])
+
+    for entry in result["accounts"]:
+        how = ("your routine proposes it, you reply 'confirm'" if not entry["manual"]
+               else "you place these yourself in Robinhood")
+        print(f"\n{entry['title'].upper()}  {entry['label']}  ({how})")
+        print("=" * 62)
+        print("\n".join(format_plan(entry["plan"], manual=entry["manual"])))
+    if result["overall_notes"]:
+        print("\nACROSS ALL YOUR ACCOUNTS\n" + "=" * 62)
+        for note in result["overall_notes"]:
+            print(note)
+    print("\n" + FOOTER)
+
+    alert_accounts(engine.db, [(e["title"], e["plan"]) for e in result["accounts"]])
+    return 0
+
+def cmd_backtest(args) -> int:
+    """Replay history honestly and say whether the model has an edge."""
+    import json
+    from datetime import datetime, timezone
+
+    from . import backtest
+    from .data import MarketData
+    from .db import Database
+
+    period = f"{args.years}y"
+    print(
+        f"Replaying {args.years} years of history through the live scoring code.\n"
+        "This downloads data for the whole universe and takes a few minutes.\n"
+    )
+    market = MarketData()
+    try:
+        market.prefetch(universe.all_tickers(), period=period)
+        samples = backtest.collect_samples(market, period=period)
+    except RuntimeError as exc:
+        print(f"Could not run the backtest: {exc}")
+        return 1
+    result = backtest.evaluate(samples, top_n=args.top, cost=args.cost / 100.0)
+    print("\n".join(backtest.describe(result, period)))
+
+    state = Path("~/.stocksage").expanduser()
+    try:
+        state.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        report = {"at": stamp, "years": args.years, "top_n": args.top,
+                  "cost_pct": args.cost, **result.to_dict()}
+        (state / "backtest.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+        db = Database()
+        db.set_meta("backtest_level", result.level)
+        db.set_meta("backtest_at", stamp)
+        db.close()
+        print(f"\n(Saved to {state / 'backtest.json'})")
+    except OSError:
+        pass
     return 0
 
 
@@ -1110,6 +1163,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--limit", type=int, default=25)
     p.set_defaults(func=cmd_security)
+
+    p = sub.add_parser(
+        "backtest",
+        help="replay history honestly and say whether the model has an edge",
+    )
+    p.add_argument("--years", type=int, default=2, choices=[1, 2, 3, 5, 10],
+                   help="how much history (more = a firmer answer, slower)")
+    p.add_argument("--top", type=int, default=5, help="picks per period")
+    p.add_argument("--cost", type=float, default=0.10,
+                   help="round-trip cost per pick, in percent (default 0.10)")
+    p.set_defaults(func=cmd_backtest)
 
     p = sub.add_parser(
         "actions", help="what to do today: sells, trims and entries, in plain language"

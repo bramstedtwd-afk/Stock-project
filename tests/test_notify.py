@@ -11,8 +11,11 @@ from stocksage.actions import Action, Plan
 from stocksage.db import Database
 
 
+URGENCY = {"EXIT_STOP": 1, "EXIT_TARGET": 2, "EXIT_TIME": 2, "TRIM": 3, "ENTER": 3}
+
+
 def act(kind, ticker, confidence=None, dollars=123.45):
-    return Action(kind, ticker, "SELL" if kind != "ENTER" else "BUY", 1,
+    return Action(kind, ticker, "SELL" if kind != "ENTER" else "BUY", URGENCY.get(kind, 4),
                   "headline", "why", dollars=dollars, confidence=confidence)
 
 
@@ -115,3 +118,43 @@ def test_a_push_never_carries_money_or_an_account(db):
 def test_the_signature_ignores_order(db):
     a, b = act("EXIT_STOP", "AAA"), act("TRIM", "BBB")
     assert notify.signature([a, b]) == notify.signature([b, a])
+
+
+# --- one push across all accounts, one tap to act -----------------------------
+
+def test_one_combined_push_names_the_account_role_not_a_number(db):
+    rec = Recorder()
+    plans = [("Agentic", Plan(actions=[act("EXIT_STOP", "AAA")])),
+             ("Roth IRA", Plan(actions=[act("TRIM", "BBB", dollars=999.0)]))]
+    assert notify.alert_accounts(db, plans, "t", rec) is True
+    assert len(rec.sent) == 1, "one decision point, not one buzz per account"
+    _, body, headers = rec.sent[0]
+    assert "Agentic: SELL AAA" in body and "Roth IRA: TRIM BBB" in body
+    assert not re.search(r"\d{3,}", body) and "$" not in body
+
+
+def test_tapping_the_alert_opens_the_most_urgent_ticker_in_robinhood(db):
+    rec = Recorder()
+    plans = [("Roth IRA", Plan(actions=[act("TRIM", "SLOW")])),
+             ("Agentic", Plan(actions=[act("EXIT_STOP", "FAST")]))]
+    notify.alert_accounts(db, plans, "t", rec)
+    assert rec.sent[0][2]["Click"] == "https://robinhood.com/us/en/stocks/FAST/"
+    assert rec.sent[0][2]["Priority"] == "high"
+
+
+def test_a_change_in_any_one_account_is_announced_but_a_repeat_is_not(db):
+    rec = Recorder()
+    base = [("Agentic", Plan(actions=[act("EXIT_STOP", "AAA")])), ("Roth IRA", Plan())]
+    assert notify.alert_accounts(db, base, "t", rec) is True
+    assert notify.alert_accounts(db, base, "t", rec) is False
+    grown = [base[0], ("Roth IRA", Plan(actions=[act("TRIM", "BBB")]))]
+    assert notify.alert_accounts(db, grown, "t", rec) is True
+    assert len(rec.sent) == 2
+
+
+def test_the_same_ticker_in_two_accounts_is_two_different_alerts(db):
+    rec = Recorder()
+    a = [("Agentic", Plan(actions=[act("TRIM", "XXX")]))]
+    b = [("Roth IRA", Plan(actions=[act("TRIM", "XXX")]))]
+    notify.alert_accounts(db, a, "t", rec)
+    assert notify.alert_accounts(db, b, "t", rec) is True

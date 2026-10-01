@@ -37,13 +37,14 @@ rather than giving them instructions.
 - `stocksage/update.py` — safe self-update (ff-only, refuses dirty tree)
 - `stocksage/doctor.py` — 11-point self-diagnosis with fixes (incl. whether publishing is actually *happening*, not just scheduled)
 - `stocksage/actions.py` — the plan: pure rules (stop, target, 10-day exit, 25% cap, $15 floor, 3-4 slots) → ranked sells/trims/entries, each entry carrying the model's measured edge. Mirrors ROUTINE.md; change both together. `stocksage/notify.py` — opt-in ntfy phone alert, once per change, tickers+verbs only (no amounts/account)
+- `stocksage/backtest.py` — walk-forward test of the live scoring code: weights re-learned from only-resolved outcomes, costs, random-pick baseline, block-bootstrap CI; verdict via `actions.trust_level` (the SAME definition the live gate uses — never fork it)
 - `stocksage/audit.py` — read-only brain audit + safe duplicate repair (`brain audit`, `brain repair [--apply]`)
 - `stocksage/security.py` — broker access log (fresh sign-in vs reused token) + exposure audit; answers "was that Robinhood sign-in alert us?"
 - `stocksage/cli.py` — all terminal commands; `stocksage/envfile.py` — .env load/save
 
 ## Commands (via ./start.sh or .\start.bat)
 
-`(none)`=app window · `actions` · `setup` (new machine) · `web` · `phone` · `install` · `autopilot [off|status]` ·
+`(none)`=app window · `actions` · `backtest [--years N]` · `setup` (new machine) · `web` · `phone` · `install` · `autopilot [off|status]` ·
 `update` · `doctor` · `daily` · `suggest [TICKERS]` · `sectors` · `portfolio` ·
 `moves` · `performance` · `profit` · `watch add|remove|list` ·
 `congress` · `bootstrap` · `brain export|import|sync|info|audit|repair` ·

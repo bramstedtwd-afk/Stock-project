@@ -40,6 +40,14 @@ NEAR_STOP = 0.015           # within 1.5% of the stop is worth a warning
 STOP_ATR_MULT = 2.0
 EARNINGS_BLACKOUT_DAYS = 5
 MAX_WATCH = 3
+CORE_TARGET_POSITIONS = 12   # long-term accounts hold more names than the active one
+
+# Broad index funds are the thing you hold INSTEAD of picking, so the
+# single-name concentration cap does not apply to them (core accounts only).
+INDEX_FUNDS = frozenset({
+    "VTI", "VOO", "SPY", "IVV", "QQQ", "VT", "VXUS", "SCHB", "ITOT", "SPLG",
+    "VUG", "VTV", "SCHX", "SCHG", "FXAIX", "VFIAX", "FSKAX", "VTSAX",
+})
 
 # --- how much the model has earned ------------------------------------------
 MIN_N_FAILING = 30    # enough measured calls to say it is trailing the market
@@ -122,12 +130,21 @@ def model_trust(rows) -> dict:
     mean = sum(edges) / n
     var = sum((e - mean) ** 2 for e in edges) / (n - 1)
     se = math.sqrt(var / n)
-    level = "unproven"
+    return {"level": trust_level(n, mean, se), "n": n, "edge": mean, "se": se}
+
+
+def trust_level(n: int, mean: float, se: float) -> str:
+    """failing / unproven / earned, from a mean edge and its standard error.
+
+    The single definition of "proof" in StockSage. The live gate and the
+    backtest both call it, so what counts as evidence cannot quietly differ
+    between the place that tests the model and the place that acts on it.
+    """
     if n >= MIN_N_EARNED and mean - Z_EARNED * se > 0:
-        level = "earned"
-    elif n >= MIN_N_FAILING and mean + Z_FAILING * se < 0:
-        level = "failing"
-    return {"level": level, "n": n, "edge": mean, "se": se}
+        return "earned"
+    if n >= MIN_N_FAILING and mean + Z_FAILING * se < 0:
+        return "failing"
+    return "unproven"
 
 
 def trust_sentence(trust: dict) -> str:
@@ -211,14 +228,23 @@ def build_plan(
     today: date | None = None,
     suggestions_enabled: bool = True,
     reliability: dict[str, tuple[int, float | None]] | None = None,
+    profile: str = "active",
+    tax_note: str | None = None,
 ) -> Plan:
     """Rank what to do, given the account and the scan.
+
+    profile "active" is the small account the routine day-trades: stops,
+    targets and the 10-day exit all apply. "core" is a long-term account you
+    manage by hand: those would be wrong there (a 10-day exit on a Roth index
+    fund is nonsense), so only the concentration cap and the model's own
+    opinions are applied.
 
     positions: [{ticker, shares, avg_cost, price, equity}] for the account the
     routine trades. cash: settled buying power there. entry_dates: when each
     held name was last bought (for the time exit).
     """
     today = today or date.today()
+    active = profile == "active"
     reliability = reliability or {}
     by_ticker = {s.ticker: s for s in suggestions}
     plan = Plan(trust=trust)
@@ -233,10 +259,10 @@ def build_plan(
         price, cost, shares, equity = p["price"], p["avg_cost"], p["shares"], p["equity"]
         s = by_ticker.get(t)
         atr = _atr_pct(s) if s else None
-        stop = round(cost * (1 - STOP_ATR_MULT * atr), 2) if atr else None
+        stop = round(cost * (1 - STOP_ATR_MULT * atr), 2) if (atr and active) else None
         target = round(cost + 2 * (cost - stop), 2) if stop else None
         entered = entry_dates.get(t)
-        age = trading_days_between(entered, today) if entered else None
+        age = trading_days_between(entered, today) if (entered and active) else None
         pnl = (price / cost - 1) if cost else 0.0
         acted = False
 
@@ -289,7 +315,8 @@ def build_plan(
                 freed += equity
             acted = True
 
-        if t not in exited and total_equity > 0:
+        capped = not (profile == "core" and t in INDEX_FUNDS)
+        if t not in exited and total_equity > 0 and capped:
             over = equity - MAX_POSITION_FRACTION * total_equity
             if over >= MIN_ORDER:
                 plan.actions.append(Action(
@@ -335,7 +362,7 @@ def build_plan(
         )
     else:
         kept = len(positions) - len(exited)
-        slots = max(0, TARGET_POSITIONS - kept)
+        slots = max(0, (TARGET_POSITIONS if active else CORE_TARGET_POSITIONS) - kept)
         held = {p["ticker"] for p in positions}
         ranked = sorted(
             (
@@ -349,6 +376,7 @@ def build_plan(
         budget = cash + freed
         cap = MAX_POSITION_FRACTION * total_equity
         picked = ranked[:slots] if slots else []
+        failing = trust.get("level") == "failing"
         watch = 0
         for i, s in enumerate(picked):
             size = min(cap, budget / (len(picked) - i)) if budget > 0 else 0.0
@@ -356,7 +384,21 @@ def build_plan(
             target = round(s.price + 2 * (s.price - stop), 2) if stop else None
             conf = _confidence(s, trust.get("level", "unproven"),
                                reliability.get(s.ticker, (0, None)))
-            if size >= ENTRY_FLOOR:
+            if failing:
+                # The gate. A model measurably trailing the market has not
+                # earned a numbered BUY, however good the setup looks; it is
+                # shown as an idea, outside the list of things to do.
+                if watch < MAX_WATCH:
+                    plan.actions.append(Action(
+                        "IDEA", s.ticker, "WATCH", FYI,
+                        f"Idea: {s.ticker} — the model rates it {s.action}, but it has not earned your trust",
+                        (s.why or f"The model rates it {s.action}.")
+                        + f" Stop {_money(stop) if stop else 'n/a'}, target "
+                        f"{_money(target) if target else 'n/a'} if you ever took it.",
+                        stop=stop, target=target, confidence="low",
+                    ))
+                    watch += 1
+            elif size >= ENTRY_FLOOR:
                 needs_sale = size > cash
                 plan.actions.append(Action(
                     "ENTER", s.ticker, "BUY", ROUTINE,
@@ -381,12 +423,23 @@ def build_plan(
                     stop=stop, target=target, confidence=conf,
                 ))
                 watch += 1
+        if failing and picked:
+            plan.notes.append(
+                "Because the model is trailing the market, its buy ideas are listed "
+                "as ideas, not recommendations. Over the same calls the plain market "
+                "did better than the model's picks, so cash can reasonably wait or "
+                "sit in a broad index fund — your call, not advice."
+            )
         if slots == 0 and ranked:
             plan.notes.append(
                 f"All {TARGET_POSITIONS} position slots are in use, so new ideas wait "
                 f"until something is sold."
             )
 
+    if tax_note:
+        for a in plan.actions:
+            if a.side == "SELL":
+                a.why += " " + tax_note
     # Stable sort on urgency ONLY: within an urgency the order already means
     # something (entries are ranked best-first), and breaking ties by ticker
     # would put the weakest idea above the strongest whenever it sorts first.
@@ -396,11 +449,34 @@ def build_plan(
     return plan
 
 
-def format_plan(plan: Plan) -> list[str]:
-    """The plan as the owner reads it — numbered, plain, nothing to decode."""
-    lines = ["TODAY'S ACTIONS", "-" * 62]
-    doing = [a for a in plan.actions if a.kind not in ("WATCH", "HEADS_UP", "HOLD_PAST_TIME")]
+ROBINHOOD_STOCK_URL = "https://robinhood.com/us/en/stocks/{t}/"
+_CONTEXT_KINDS = ("WATCH", "HEADS_UP", "HOLD_PAST_TIME", "IDEA")
+
+
+def order_ticket(a: Action) -> str | None:
+    """What to type into Robinhood for an action you place yourself."""
+    if a.side not in ("SELL", "BUY"):
+        return None
+    where = ROBINHOOD_STOCK_URL.format(t=a.ticker)
+    if a.side == "SELL" and a.kind != "TRIM":
+        how = "Sell -> All shares, market order"
+    elif a.side == "SELL":
+        how = f"Sell -> ${a.dollars:,.2f}, market order" if a.dollars else "Sell"
+    else:
+        how = f"Buy -> ${a.dollars:,.2f}, market order" if a.dollars else "Buy"
+    return f"{where}  ->  {how}"
+
+
+def format_plan(plan: Plan, manual: bool = False) -> list[str]:
+    """The plan as the owner reads it — numbered, plain, nothing to decode.
+
+    manual=True is for accounts you place orders in yourself: each action gets
+    the exact page and order to enter, so acting is a copy, not a decision.
+    """
+    lines = []
+    doing = [a for a in plan.actions if a.kind not in _CONTEXT_KINDS]
     context = [a for a in plan.actions if a.kind in ("WATCH", "HEADS_UP", "HOLD_PAST_TIME")]
+    ideas = [a for a in plan.actions if a.kind == "IDEA"]
 
     if doing:
         for i, a in enumerate(doing, 1):
@@ -409,9 +485,17 @@ def format_plan(plan: Plan) -> list[str]:
             lines.append(f"     {a.why}")
             if a.shares and a.side == "SELL" and a.kind == "TRIM":
                 lines.append(f"     About {a.shares:g} shares.")
+            ticket = order_ticket(a) if manual else None
+            if ticket:
+                lines.append(f"     DO IT: {ticket}")
             lines.append("")
     else:
         lines += ["Nothing to do today.", ""]
+    if ideas:
+        lines.append("Ideas (not recommendations)")
+        for a in ideas:
+            lines.append(f"  · {a.headline}")
+        lines.append("")
     if context:
         lines.append("Worth knowing")
         for a in context:
@@ -422,12 +506,13 @@ def format_plan(plan: Plan) -> list[str]:
         lines.append("")
     for note in plan.notes:
         lines.append(note)
-    lines.append("")
-    lines.append(
-        "StockSage never places orders. Your routine proposes each one and "
-        "waits for your 'confirm'."
-    )
     return lines
+
+
+FOOTER = (
+    "StockSage never places orders. Your routine proposes each one and "
+    "waits for your 'confirm'; anything marked manual you place yourself."
+)
 
 
 def entry_dates_from_orders(orders, held_tickers) -> dict[str, date]:
