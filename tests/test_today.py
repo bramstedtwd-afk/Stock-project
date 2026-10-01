@@ -330,3 +330,39 @@ def test_two_accounts_of_the_same_role_can_be_told_apart_in_the_bottom_line():
     b = today.AccountSheet(role="personal", title="Personal", label="Margin ••••7354", manual=True)
     assert today._bottom_line(a)[0] != today._bottom_line(b)[0]
     assert "••••2885" in today._bottom_line(a)[0]
+
+
+# ------------------------------------------------------------ trend + biggest risk
+
+def _hist(up: bool, n=200):
+    import numpy as np
+    import pandas as pd
+
+    px = np.linspace(100, 150, n) if up else np.linspace(150, 100, n)
+    return pd.DataFrame({"Close": px})
+
+
+def test_trend_lines_name_which_asset_classes_are_up_and_which_are_down():
+    lines = today.core_trend_lines({"SPY": _hist(True), "EFA": _hist(True), "AGG": _hist(False),
+                                    "GLD": _hist(True), "VNQ": _hist(False)})
+    assert "3 of 5" in lines[0] and "up: US stocks" in lines[0] and "down: bonds, real estate" in lines[0]
+    assert "not an order" in lines[1], "must never read as an instruction"
+
+
+def test_trend_lines_skip_what_has_no_data_and_say_nothing_if_nothing_does():
+    assert today.core_trend_lines({}) == []
+    assert "1 of 1" in today.core_trend_lines({"SPY": _hist(True)})[0]
+
+
+def test_concentration_across_accounts_leads_the_bottom_line(real_book):
+    broker = FakeBroker()
+    from stocksage.robinhood import Holding, Portfolio
+
+    broker.pf["999999999"] = Portfolio([Holding("PERS", 4.0, 100.0, 120.0, 480.0)], 20.0, "999999999")
+    engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
+    sheet = today.build_sheet(engine, broker, suggestions=default_suggestions(STRONG),
+                              book=real_book, news=False, now=NOW)
+    text = today.render_text(sheet)
+    risk = text.index("BIGGEST RISK")
+    assert "PERS is " in text[risk:risk + 120]
+    assert risk < text.index("AGENTIC")

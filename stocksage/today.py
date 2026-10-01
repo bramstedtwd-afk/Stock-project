@@ -77,12 +77,13 @@ class AccountSheet:
 class Sheet:
     generated_at: str
     market: list[str] = field(default_factory=list)
+    trend: list[str] = field(default_factory=list)
     accounts: list[AccountSheet] = field(default_factory=list)
     overall_notes: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return {"generated_at": self.generated_at, "market": self.market,
+        return {"generated_at": self.generated_at, "market": self.market, "trend": self.trend,
                 "accounts": [a.to_dict() for a in self.accounts],
                 "overall_notes": self.overall_notes, "notes": self.notes}
 
@@ -146,6 +147,48 @@ def _market_lines(engine) -> list[str]:
     except Exception:
         pass
     return lines
+
+
+CORE_CLASSES = [("SPY", "US stocks"), ("EFA", "foreign stocks"), ("AGG", "bonds"),
+                ("GLD", "gold"), ("VNQ", "real estate")]
+CORE_TREND_DAYS = 150
+
+
+def core_trend_lines(histories: dict) -> list[str]:
+    """Which broad asset classes are in an uptrend. A risk dial, not an order.
+
+    Research (`research` command) found rules of this kind cut the worst
+    drops sharply over 20 years but trailed plain SPY in strong bull runs and
+    showed no alpha in the holdout years alone, so it is stated as context.
+    """
+    above, below = [], []
+    for ticker, label in CORE_CLASSES:
+        df = histories.get(ticker)
+        if df is None or len(df) < CORE_TREND_DAYS + 1:
+            continue
+        close = df["Close"]
+        (above if float(close.iloc[-1]) > float(close.iloc[-CORE_TREND_DAYS:].mean()) else below).append(label)
+    if not above and not below:
+        return []
+    total = len(above) + len(below)
+    out = [f"TREND  {len(above)} of {total} broad asset classes are above their "
+           f"{CORE_TREND_DAYS}-day average"
+           + (f" (up: {', '.join(above)}" if above else " (")
+           + (f"{'; ' if above else ''}down: {', '.join(below)}" if below else "")
+           + ")."]
+    out.append("TREND  In 20 years of tests, selling what falls below its trend cut the worst "
+               "drops a lot but trailed buy-and-hold in strong years: a risk dial, not an order.")
+    return out
+
+
+def _core_trend(engine) -> list[str]:
+    hist = {}
+    for ticker, _ in CORE_CLASSES:
+        try:
+            hist[ticker] = engine.market.history(ticker)
+        except Exception:
+            hist[ticker] = None
+    return core_trend_lines(hist)
 
 
 def _news_line(engine, ticker: str) -> str | None:
@@ -257,7 +300,7 @@ def build_sheet(engine, client, suggestions=None, book="auto", news: bool = True
         sector_trends = {}
 
     sheet = Sheet(generated_at=now.strftime("%a %d %b %Y, %H:%M"),
-                  market=_market_lines(engine), overall_notes=list(result.get("overall_notes", [])))
+                  market=_market_lines(engine), trend=_core_trend(engine), overall_notes=list(result.get("overall_notes", [])))
     if book is None:
         sheet.notes.append(
             "Look-alike history is not built yet, so no BUY can be stated plainly. "
@@ -332,11 +375,16 @@ def render_text(sheet: Sheet) -> str:
     lines = [f"STOCKSAGE TODAY  —  {sheet.generated_at}", "=" * 66]
     for m in sheet.market:
         lines.append(f"MARKET  {m}")
+    lines += sheet.trend
     lines += ["", "BOTTOM LINE", "-" * 66]
+    # Concentration across every account is the largest risk that needs no model
+    # to see, so it leads.
+    for n in sheet.overall_notes:
+        lines.append(f"BIGGEST RISK  {n}")
+    if sheet.overall_notes:
+        lines.append("")
     for a in sheet.accounts:
         lines += _bottom_line(a) + [""]
-    for n in sheet.overall_notes:
-        lines.append(f"ACROSS ALL ACCOUNTS  {n}")
     lines += ["", "DETAIL", "-" * 66]
     for a in sheet.accounts:
         lines.append(f"{a.title.upper()}  {a.label}")

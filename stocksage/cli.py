@@ -481,6 +481,40 @@ def _keep_lookalikes(samples) -> None:
         pass     # a cache that can't be written must never fail the command
 
 
+def cmd_research(args) -> int:
+    """Test ~60 rules honestly: does anything beat just holding the market?"""
+    import json
+    from datetime import datetime, timezone
+
+    from . import research, today
+    from .db import Database
+
+    print("Testing every rule on 20 years of ETF history (about a minute)...\n")
+    cache = today.state_dir() / "research_prices.parquet"
+    try:
+        prices = research.load_prices(cache)
+    except Exception as exc:
+        print(f"Could not get the price history: {exc}")
+        return 1
+    res = research.run(prices, draws=args.draws)
+    print("\n".join(research.describe(res, top=args.top)))
+    try:
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        base = today.state_dir()
+        base.mkdir(parents=True, exist_ok=True)
+        report = {"at": stamp, **{k: v for k, v in res.items() if k != "rows"},
+                  "rows": [r.to_dict() for r in res["rows"]]}
+        (base / "research.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+        db = Database()
+        db.set_meta("research_at", stamp)
+        db.set_meta("research_survivors", ",".join(r.name for r in res["rows"] if r.passed))
+        db.close()
+        print(f"\n(Saved to {base / 'research.json'})")
+    except OSError:
+        pass
+    return 0
+
+
 def cmd_analogs(args) -> int:
     """Build the look-alike history that lets a BUY be stated plainly."""
     from . import backtest
@@ -1314,6 +1348,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("tickers", nargs="*", help="extra tickers to look at")
     p.set_defaults(func=cmd_actions)
+
+    p = sub.add_parser(
+        "research",
+        help="test about 60 rule-based strategies on 20 years of ETFs, corrected for luck",
+    )
+    p.add_argument("--draws", type=int, default=2000, help="bootstrap draws (more = steadier p-values)")
+    p.add_argument("--top", type=int, default=12, help="how many candidates to list")
+    p.set_defaults(func=cmd_research)
 
     p = sub.add_parser(
         "analogs",

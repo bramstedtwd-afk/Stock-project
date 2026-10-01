@@ -41,6 +41,7 @@ rather than giving them instructions.
 - `stocksage/lab.py` — strategy lab: 12-1 momentum, regime filter, gap-up drift (a *proxy* for post-earnings drift; real PEAD needs EPS-surprise history) plus the weekly model, a ridge challenger and the look-alike filter (7 ideas), all vs holding SPY. **Verdicts are Bonferroni-corrected for how many ideas were tried** — never report the best-looking result uncorrected
 - `stocksage/analogs.py` — look-alike evidence: kNN over signal fingerprints from the walk-forward samples, averaged per DATE (neighbours from one rally are one observation), direction-aware (a sell is right when the stock trails), 95% lower bound must clear zero after costs to be `backed`. Cached at `~/.stocksage/analogs.npz` (`analogs` command; backtest/lab refresh it; scheduled broker runs rebuild it when >10 days old). In-sample guide only — whether the filter *helps* is tested out of sample as a lab idea
 - `stocksage/today.py` — the blunt "StockSage Today" sheet (`today`/`actions` command, dashboard header, `StockSage Today.txt` in Drive after each scheduled broker run, `~/.stocksage/today.txt`). SELL/TRIM stated as orders (tagged `[RULE]` or `[MODEL]`); **a BUY is plain only when look-alike history backs it, otherwise it is an unnumbered idea** (`apply_evidence`). News/trend/earnings lines are context only and never change a call. The alert plans come from the evidence-filtered sheet
+- `stocksage/research.py` — mass strategy research on ETFs (`research` command): ~60 rules (trend, dual momentum, asset/sector rotation, inverse-vol, vol-target, RSI2) via one no-look-ahead `simulate` (weights set at close t earn t+1), costs, alpha vs BOTH SPY and a passive asset-class mix, **White's Reality Check** across the whole family, and a holdout (2017+) spent only on development survivors. Verdicts and policy are in `STRATEGY.md` — read it before changing what the sheet claims. Never report a single candidate's own p-value
 - `stocksage/audit.py` — read-only brain audit + safe duplicate repair (`brain audit`, `brain repair [--apply]`)
 - `.github/workflows/cloud-research.yml` — scheduled cloud run (pull brain → learn on the evening run → `publish-drive --no-broker`). **Never give it broker credentials** (public repo, public logs); `tests/test_cloud_workflow.py` fails the build if any appear, and cross-checks the learn step's cron against the schedule so a typo can't silently disable learning
 - `stocksage/security.py` — broker access log (fresh sign-in vs reused token) + exposure audit; answers "was that Robinhood sign-in alert us?"
@@ -48,7 +49,7 @@ rather than giving them instructions.
 
 ## Commands (via ./start.sh or .\start.bat)
 
-`(none)`=app window · `today` (alias `actions`) · `analogs` · `backtest [--years N]` · `lab [--years N]` · `setup` (new machine) · `web` · `phone` · `install` · `autopilot [off|status]` ·
+`(none)`=app window · `today` (alias `actions`) · `analogs` · `research [--draws N]` · `backtest [--years N]` · `lab [--years N]` · `setup` (new machine) · `web` · `phone` · `install` · `autopilot [off|status]` ·
 `update` · `doctor` · `daily` · `suggest [TICKERS]` · `sectors` · `portfolio` ·
 `moves` · `performance` · `profit` · `watch add|remove|list` ·
 `congress` · `bootstrap` · `brain export|import|sync|info|audit|repair` ·
