@@ -606,9 +606,9 @@ def test_the_actions_command_labels_each_account_and_how_to_act(monkeypatch, cap
     assert cli.main(["actions"]) == 0
     out = capsys.readouterr().out
     assert "AGENTIC" in out and "PERSONAL" in out and "ROTH IRA" in out
-    assert "your routine proposes it" in out
+    assert "you reply 'confirm' in the routine" in out
     assert "you place these yourself" in out
-    assert "SELL all of ACT" in out and "never places orders" in out
+    assert "SELL ALL ACT" in out and "never places orders" in out
     assert "DO IT: https://robinhood.com/us/en/stocks/" in out   # manual accounts only
     agentic_block = out.split("PERSONAL")[0]
     assert "DO IT" not in agentic_block, "the routine's account is confirmed there, not typed by hand"

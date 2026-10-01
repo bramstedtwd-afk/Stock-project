@@ -38,3 +38,13 @@ def downtrend_df() -> pd.DataFrame:
 @pytest.fixture
 def flat_df() -> pd.DataFrame:
     return make_ohlcv(daily_drift=0.0, daily_vol=0.005, seed=3)
+
+
+@pytest.fixture(autouse=True)
+def _state_dir_is_a_temp_dir(monkeypatch, tmp_path_factory):
+    """Anything that saves under ~/.stocksage (today's sheet, the look-alike
+    cache) goes to a scratch folder, so no test writes to the real one."""
+    import os
+
+    if "STOCKSAGE_STATE" not in os.environ:
+        monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path_factory.mktemp("state")))

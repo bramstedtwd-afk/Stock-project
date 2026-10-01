@@ -257,6 +257,22 @@ see `ROUTINE.md`). Only the Drive token needs to travel.
 
 ---
 
+## Your daily "what do I do" sheet
+
+```
+cd C:\Users\<you>\Stock-project
+.\start.bat analogs      (once: builds the look-alike history, a few minutes)
+.\start.bat today        (the sheet: SELL / TRIM / BUY per account)
+```
+
+It says SELL and TRIM plainly (stops, size cap and the 10-day clock are rules).
+It says BUY plainly **only** when look-alike history backs that call; otherwise
+the name is listed as an idea, not an instruction. News and sector trends are
+shown under each call for you to weigh, but they never change it. It also shows
+at the top of the dashboard, and each scheduled run on your computer saves it
+and puts a copy in your Drive folder as **StockSage Today** so you can read it on
+your phone. StockSage never places an order; you do that yourself.
+
 ## If anything seems off
 
 ```bash

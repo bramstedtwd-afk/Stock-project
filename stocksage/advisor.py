@@ -529,7 +529,8 @@ def _agentic_portfolio(client):
 
 
 def plan_for_account(engine: Engine, suggestions: list, positions: list[dict],
-                     cash: float, profile: str = "active", tax_note: str | None = None):
+                     cash: float, profile: str = "active", tax_note: str | None = None,
+                     entries: str | None = None):
     """Today's ranked actions for the account the routine trades.
 
     One function used by the CLI, the dashboard and the published brief, so
@@ -569,7 +570,7 @@ def plan_for_account(engine: Engine, suggestions: list, positions: list[dict],
         reliability=reliability,
         profile=profile,
         tax_note=tax_note,
-        entries=entries_policy(),
+        entries=entries or entries_policy(),
         backtest_level=engine.db.get_meta("backtest_level"),
     )
 
@@ -596,7 +597,8 @@ def profile_for(role: str) -> str:
 CONCENTRATION_NOTE_AT = 0.15
 
 
-def plans_for_accounts(engine: Engine, client, suggestions: list | None = None) -> dict:
+def plans_for_accounts(engine: Engine, client, suggestions: list | None = None,
+                       entries_override: str | None = None) -> dict:
     """A plan for every account under the login, each by its own rules.
 
     Each account gets the rules that fit how it is used (see PROFILE_DEFAULTS):
@@ -646,6 +648,16 @@ def plans_for_accounts(engine: Engine, client, suggestions: list | None = None) 
             entries.append((role, acct.label, pf, acct.kind or ""))
         entries.sort(key=lambda e: (e[0] != "agentic", e[0]))
 
+    # Scan every held name the daily scan missed ONCE, up front, so each
+    # account's plan sees it and the caller gets one suggestion per ticker.
+    have = {s.ticker for s in suggestions}
+    held_all = {h.ticker for _, _, pf, _ in entries for h in pf.holdings}
+    missing = sorted(held_all - have)
+    if missing:
+        suggestions = list(suggestions) + engine.scan(
+            tickers=missing, capture_context=False, record=False
+        ).suggestions
+
     out, combined, total = [], {}, 0.0
     for role, label, pf, kind in entries:
         positions = [
@@ -659,7 +671,7 @@ def plans_for_accounts(engine: Engine, client, suggestions: list | None = None) 
         # latter includes money that can be borrowed.
         plan = plan_for_account(
             engine, suggestions, positions, pf.sizing_cash,
-            profile=profile_for(role), tax_note=tax,
+            profile=profile_for(role), tax_note=tax, entries=entries_override,
         )
         if "margin" in kind.lower():
             plan.notes.append(
@@ -679,7 +691,8 @@ def plans_for_accounts(engine: Engine, client, suggestions: list | None = None) 
                 notes.append(
                     f"{ticker} is {value / total:.0%} of everything you own across all your accounts."
                 )
-    return {"accounts": out, "overall_notes": notes}
+    return {"accounts": out, "overall_notes": notes,
+            "suggestions": {s.ticker: s for s in suggestions}}
 
 
 def desktop_sync_cycle(engine: Engine, client=None, broker: bool = True) -> dict:

@@ -248,7 +248,21 @@ def _publish_env(monkeypatch, tmp_path, topic="t"):
     monkeypatch.setattr("stocksage.advisor.publish_brief_via_api",
                         lambda *a, **k: {"candidates": 1, "files": ["x"], "actions": None})
     monkeypatch.setattr("stocksage.robinhood.RobinhoodClient", lambda: object())
+    # Nothing here may reach the network: no look-alike rebuild, no Drive upload.
+    monkeypatch.setattr("stocksage.data.MarketData.prefetch", lambda self, *a, **k: 0)
+
+    def offline(*a, **k):
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr("stocksage.backtest.collect_samples", offline)
+    monkeypatch.setattr("stocksage.drive_api.publish_text", lambda name, text: "id")
     return cli
+
+
+def _one_account(plan):
+    return {"accounts": [{"role": "agentic", "title": "Agentic", "label": "x",
+                          "manual": False, "plan": plan}],
+            "overall_notes": [], "suggestions": {}}
 
 
 def test_the_scheduled_publish_plans_every_account_and_alerts(monkeypatch, tmp_path):
@@ -257,26 +271,29 @@ def test_the_scheduled_publish_plans_every_account_and_alerts(monkeypatch, tmp_p
                         lambda *a, **k: {"fills_ingested": 0, "graded": 0, "holdings": [],
                                          "positions": [{}], "buying_power": 1.0})
     seen = {}
-    monkeypatch.setattr("stocksage.advisor.plans_for_accounts", lambda engine, client: {
-        "accounts": [{"title": "Agentic", "plan": Plan(actions=[act("EXIT_STOP", "AAA")])}],
-        "overall_notes": []})
+    monkeypatch.setattr("stocksage.advisor.plans_for_accounts",
+                        lambda *a, **k: _one_account(Plan(actions=[act("EXIT_STOP", "AAA")])))
     monkeypatch.setattr("stocksage.notify.alert_accounts",
                         lambda db, plans, *a, **k: seen.setdefault("plans", plans))
     assert cli.main(["publish-drive"]) == 0
     assert [(r, [x.ticker for x in p.actions]) for r, p in seen["plans"]] == [("Agentic", ["AAA"])]
 
 
-def test_with_no_topic_nothing_extra_is_computed(monkeypatch, tmp_path):
+def test_with_no_topic_the_sheet_is_still_built_but_nothing_is_pushed(monkeypatch, tmp_path):
     cli = _publish_env(monkeypatch, tmp_path, topic=None)
     monkeypatch.setattr("stocksage.advisor.desktop_sync_cycle",
                         lambda *a, **k: {"fills_ingested": 0, "graded": 0, "holdings": [],
                                          "positions": [{}], "buying_power": 1.0})
+    monkeypatch.setattr("stocksage.advisor.plans_for_accounts",
+                        lambda *a, **k: _one_account(Plan(actions=[act("EXIT_STOP", "AAA")])))
 
     def boom(*a, **k):
-        raise AssertionError("planned every account although alerts are off")
+        raise AssertionError("pushed although alerts are off")
 
-    monkeypatch.setattr("stocksage.advisor.plans_for_accounts", boom)
+    monkeypatch.setattr("stocksage.notify.alert_accounts", boom)
     assert cli.main(["publish-drive"]) == 0
+    from stocksage import today
+    assert "SELL ALL AAA" in (today.state_dir() / "today.txt").read_text()
 
 
 def test_a_no_broker_publish_never_alerts(monkeypatch, tmp_path):

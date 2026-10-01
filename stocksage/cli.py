@@ -471,29 +471,86 @@ def _pull_drive_brain(engine) -> None:
         )
 
 
-def _alert_all_accounts(engine, client) -> None:
-    """Plan every account and push if something needs the owner. Opt-in.
-
-    Skipped entirely without a topic (so no extra scan is paid for), and it
-    never raises: an alerting problem must not fail a publish.
-    """
+def _keep_lookalikes(samples) -> None:
+    """Remember what a backtest just replayed, so today's sheet can cite it."""
     try:
-        from .advisor import plans_for_accounts
+        from .analogs import AnalogBook, store_if_better
+
+        store_if_better(AnalogBook.from_samples(samples))
+    except Exception:
+        pass     # a cache that can't be written must never fail the command
+
+
+def cmd_analogs(args) -> int:
+    """Build the look-alike history that lets a BUY be stated plainly."""
+    from . import backtest
+    from .analogs import AnalogBook
+    from .data import MarketData
+
+    period = f"{args.years}y"
+    print(f"Building look-alike history from {args.years} years of the whole universe "
+          "(a few minutes)...")
+    market = MarketData()
+    try:
+        market.prefetch(universe.all_tickers(), period=period)
+        samples = backtest.collect_samples(market, period=period)
+    except RuntimeError as exc:
+        print(f"Could not build it: {exc}")
+        return 1
+    path = AnalogBook.from_samples(samples).save()
+    print(f"Done: {len(samples):,} past setups saved ({path}).\n"
+          "Now  .\\start.bat today  can state a BUY plainly when history backs it.")
+    return 0
+
+
+def _refresh_today(engine, client, upload: bool = True, rebuild_book: bool = False) -> dict:
+    """Build, save, publish and alert on today's sheet. Never raises.
+
+    One scan feeds all of it. Returns {"sheet", "text", "error"} so callers
+    that want to show it can; a scheduler can ignore the result.
+    """
+    out = {"sheet": None, "text": None, "error": None}
+    try:
+        from . import today
+        from .analogs import AnalogBook
         from .notify import alert_accounts, topic_from_env
 
-        if client is None or not topic_from_env():
-            return
-        result = plans_for_accounts(engine, client)
-        alert_accounts(engine.db, [(e["title"], e["plan"]) for e in result["accounts"]])
-    except Exception:
-        pass
+        if client is None:
+            return out
+        if rebuild_book:
+            book = AnalogBook.load()
+            if book is None or book.stale:
+                try:
+                    from . import backtest
+
+                    market = engine.market
+                    market.prefetch(universe.all_tickers(), period="5y")
+                    book = AnalogBook.from_samples(backtest.collect_samples(market, period="5y"))
+                    book.save()
+                except Exception as exc:       # keep going with whatever book exists
+                    out["error"] = f"look-alike refresh failed: {exc}"
+        sheet = today.build_sheet(engine, client)
+        text = today.render_text(sheet)
+        today.save_local(sheet, text)
+        out.update(sheet=sheet, text=text)
+        if upload:
+            try:
+                from .drive_api import publish_text
+
+                publish_text(today.DRIVE_NAME, text)
+            except Exception as exc:           # Drive is optional for the sheet
+                out["error"] = f"could not upload the sheet to Drive: {exc}"
+        if topic_from_env():
+            alert_accounts(engine.db, [(a.title, a.plan) for a in sheet.accounts if a.plan])
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"
+    return out
 
 
 def cmd_actions(args) -> int:
-    """What to do today, for every account, in plain language."""
-    from .actions import FOOTER, format_plan
-    from .advisor import desktop_sync_cycle, plans_for_accounts
-    from .notify import alert_accounts
+    """Today's sheet: blunt sells and buys for every account."""
+    from . import today
+    from .advisor import desktop_sync_cycle
     from .robinhood import RobinhoodClient
 
     engine = Engine()
@@ -509,25 +566,15 @@ def cmd_actions(args) -> int:
             print(f"(Last attempt said: {sync['sync_error']})")
         return 1
 
-    result = plans_for_accounts(engine, client)
-    if not result["accounts"]:
-        print("No accounts could be read - run  .\\start.bat doctor  to see why.")
+    done = _refresh_today(engine, client, upload=False)
+    if done["sheet"] is None:
+        print("No accounts could be read - run  .\\start.bat doctor  to see why."
+              + (f"\n({done['error']})" if done["error"] else ""))
         return 1
-
-    for entry in result["accounts"]:
-        how = ("your routine proposes it, you reply 'confirm'" if not entry["manual"]
-               else "you place these yourself in Robinhood")
-        print(f"\n{entry['title'].upper()}  {entry['label']}  ({how})")
-        print("=" * 62)
-        print("\n".join(format_plan(entry["plan"], manual=entry["manual"])))
-    if result["overall_notes"]:
-        print("\nACROSS ALL YOUR ACCOUNTS\n" + "=" * 62)
-        for note in result["overall_notes"]:
-            print(note)
-    print("\n" + FOOTER)
-
-    alert_accounts(engine.db, [(e["title"], e["plan"]) for e in result["accounts"]])
+    print(done["text"])
+    print(f"\n(Saved to {today.state_dir() / 'today.txt'})")
     return 0
+
 
 def cmd_backtest(args) -> int:
     """Replay history honestly and say whether the model has an edge."""
@@ -550,6 +597,7 @@ def cmd_backtest(args) -> int:
     except RuntimeError as exc:
         print(f"Could not run the backtest: {exc}")
         return 1
+    _keep_lookalikes(samples)
     result = backtest.evaluate(samples, top_n=args.top, cost=args.cost / 100.0)
     sells = backtest.evaluate(samples, top_n=args.top, cost=args.cost / 100.0, side="sell")
     print("\n".join(backtest.describe(result, period)))
@@ -579,12 +627,13 @@ def cmd_lab(args) -> int:
     from datetime import datetime, timezone
 
     from . import backtest, lab
+    from . import today as today_mod
     from .data import MarketData
     from .db import Database
 
     period = f"{args.years}y"
     print(
-        f"Testing six ideas over {args.years} years of history, each judged against\n"
+        f"Testing seven ideas over {args.years} years of history, each judged against\n"
         "simply holding SPY and corrected for how many were tried.\n"
         "This downloads data for the whole universe and takes several minutes.\n"
     )
@@ -596,13 +645,19 @@ def cmd_lab(args) -> int:
     except RuntimeError as exc:
         print(f"Could not run the lab: {exc}")
         return 1
+    _keep_lookalikes(weekly)
 
     cost = args.cost / 100.0
     hedge = backtest.evaluate(weekly, cost=cost)
     ridge = backtest.evaluate_ridge(weekly, cost=cost)
-    family = 4 + 2
-    results = lab.run_all(monthly, extra=[hedge, ridge], cost=cost)
-    for name, weekly_result in (("current model (weekly)", hedge), ("ridge challenger (weekly)", ridge)):
+    # The app states a BUY plainly only when look-alike history backs it, so
+    # that filter is itself one of the ideas under test (and counts toward the
+    # family size that corrects the verdicts).
+    confirmed = backtest.evaluate(weekly, cost=cost, confirm_with_analogs=True)
+    family = 4 + 3
+    results = lab.run_all(monthly, extra=[hedge, ridge, confirmed], cost=cost)
+    for name, weekly_result in (("current model (weekly)", hedge), ("ridge challenger (weekly)", ridge),
+                                (today_mod.LAB_FILTER_NAME + " (weekly)", confirmed)):
         wrapped = lab.relevel(weekly_result, family)
         wrapped.name = name
         results.append(wrapped)
@@ -616,7 +671,7 @@ def cmd_lab(args) -> int:
             json.dumps({"at": stamp, "years": args.years, "cost_pct": args.cost,
                         "results": [r.to_dict() for r in results]}, indent=2),
             encoding="utf-8")
-        winners = [r.name for r in results if r.level == "earned"]
+        winners = [r.name.removesuffix(" (weekly)") for r in results if r.level == "earned"]
         db = Database()
         db.set_meta("lab_winners", ",".join(winners))
         db.set_meta("lab_at", stamp)
@@ -674,7 +729,10 @@ def cmd_publish_drive(args) -> int:
         _record_publish(engine, error=f"{type(exc).__name__}: {exc}")
         raise
     _record_publish(engine)
-    _alert_all_accounts(engine, client if sync.get("positions") is not None else None)
+    done = _refresh_today(engine, client if sync.get("positions") is not None else None,
+                          rebuild_book=True)
+    if done["error"]:
+        print(f"(Today's sheet: {done['error']})")
     print(f"Published directly to Google Drive ({result['candidates']} candidates):")
     for name in result["files"]:
         print(f"  · {name}  (in your Drive's StockSage folder)")
@@ -1251,10 +1309,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_lab)
 
     p = sub.add_parser(
-        "actions", help="what to do today: sells, trims and entries, in plain language"
+        "actions", aliases=["today"],
+        help="today's sheet: SELL and BUY calls for every account, in plain language",
     )
     p.add_argument("tickers", nargs="*", help="extra tickers to look at")
     p.set_defaults(func=cmd_actions)
+
+    p = sub.add_parser(
+        "analogs",
+        help="build the look-alike history that lets a BUY be stated plainly",
+    )
+    p.add_argument("--years", type=int, default=5, choices=[3, 5, 10],
+                   help="how much history (more look-alikes = firmer evidence)")
+    p.set_defaults(func=cmd_analogs)
 
     p = sub.add_parser(
         "setup", help="guided first run on a new machine: brain, settings, checks"

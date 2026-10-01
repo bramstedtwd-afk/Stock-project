@@ -255,7 +255,7 @@ def test_the_lab_command_runs_everything_and_remembers_the_winners(monkeypatch, 
                         lambda market, tickers=None, period="5y": make_rows(effect=0.03))
     assert cli.main(["lab"]) == 0
     out = capsys.readouterr().out
-    assert "6 ideas tried" in out
+    assert "7 ideas tried" in out
     for name in ("12-1 momentum", "regime filter only", "current model (weekly)", "ridge challenger (weekly)"):
         assert name in out
 

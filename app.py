@@ -89,9 +89,20 @@ def _todays_plan(scan):
 
         client = RobinhoodClient()
         if client.credentials_available():
-            plans = plans_for_accounts(get_engine(), client, suggestions=scan.suggestions)
+            engine = get_engine()
+            plans = plans_for_accounts(engine, client, suggestions=scan.suggestions,
+                                       entries_override="always")
             if not plans["accounts"]:
                 plans = None
+            else:
+                # The blunt sheet: a BUY stays a BUY only where look-alike
+                # history backs it; the rest drop to ideas inside each plan.
+                from stocksage import today
+
+                sheet = today.build_sheet(engine, client, plans=plans)
+                plans["sheet"] = sheet
+                for entry, acct in zip(plans["accounts"], sheet.accounts):
+                    entry["plan"] = acct.plan
     except Exception:
         plans = None
     st.session_state["todays_plan"] = (scan, plans)
@@ -130,6 +141,18 @@ def _render_plan_body(plan, manual):
 def _render_plans(plans):
     with st.container(border=True):
         st.markdown("### ✅ What to do today")
+        sheet = plans.get("sheet")
+        if sheet is not None:
+            from stocksage import today
+
+            for line in sheet.market:
+                st.caption(line)
+            for acct in sheet.accounts:
+                st.code("\n".join(today._bottom_line(acct)), language=None)
+            for note in sheet.notes:
+                st.caption(note)
+            with st.expander("Full sheet with news, trends and look-alike evidence"):
+                st.code(today.render_text(sheet), language=None)
         accounts = plans["accounts"]
         if len(accounts) == 1:
             _render_plan_body(accounts[0]["plan"], accounts[0]["manual"])

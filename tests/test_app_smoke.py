@@ -268,6 +268,8 @@ def test_dashboard_leads_with_what_to_do_when_a_stop_is_hit(monkeypatch, tmp_pat
     assert "SELL all of ZZZ" in shown and "hit its stop" in shown
     assert any("What to do today" in str(m.value) for m in at.markdown)
     assert any("never places orders" in c.value for c in at.caption)
+    # The blunt bottom line sits above the per-account detail.
+    assert any("SELL ALL ZZZ" in str(c.value) and "[RULE]" in str(c.value) for c in at.code)
 
 
 def test_dashboard_says_so_when_there_is_nothing_to_do(monkeypatch, tmp_path):

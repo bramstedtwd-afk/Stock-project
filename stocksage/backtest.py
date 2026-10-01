@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import universe
+from . import analogs as analog_mod
 from .actions import trust_level
 from .indicators import MIN_HISTORY_ROWS, compute_features
 from .learning import update_weights, weighted_score
@@ -146,8 +147,14 @@ def evaluate(
     learn: bool = True,
     seed: int = 7,
     side: str = "buy",
+    confirm_with_analogs: bool = False,
 ) -> Result:
     """Walk forward through time, picking as the live system would.
+
+    confirm_with_analogs=True keeps only the picks whose look-alikes — samples
+    from STRICTLY EARLIER dates, whose outcomes were therefore known — back the
+    call (analogs.evidence_arrays). It is how the app's "plain BUY only when
+    history backs it" rule gets tested out of sample rather than assumed to work.
 
     side="buy" tests the names the model likes (did they beat the market?).
     side="sell" tests the names it rates SELL (did they trail it?). The two
@@ -170,6 +177,14 @@ def evaluate(
     if side not in ("buy", "sell"):
         raise ValueError("side must be 'buy' or 'sell'")
     sign = 1.0 if side == "buy" else -1.0
+    # Look-alike history: every sample, sorted by date, so "samples before d"
+    # is just a prefix. Nothing at or after d is ever in the slice.
+    if confirm_with_analogs:
+        ordered = sorted(samples, key=lambda smp: smp.date)
+        a_names = sorted({k for smp in ordered for k in smp.features})
+        a_x = np.array([[smp.features.get(n, 0.0) for n in a_names] for smp in ordered], dtype=float)
+        a_dates = np.array([smp.date for smp in ordered])
+        a_excess = np.array([smp.excess for smp in ordered], dtype=float)
     rng = random.Random(seed)
     weights: dict[str, float] = {}
     model_edges: list[float] = []
@@ -195,6 +210,15 @@ def evaluate(
             chosen = [s for score, s in scored if score >= BUY_THRESHOLD][:top_n]
         else:
             chosen = [s for score, s in scored if score <= SELL_THRESHOLD][:top_n]
+        if confirm_with_analogs and chosen:
+            upto = int(np.searchsorted(a_dates, d, side="left"))     # strictly before d
+            chosen = [
+                s for s in chosen
+                if analog_mod.evidence_arrays(
+                    a_x[:upto], a_dates[:upto], a_excess[:upto],
+                    np.array([s.features.get(n, 0.0) for n in a_names]), side, cost=cost,
+                ).backed
+            ]
         if not chosen:
             no_signal += 1
             continue

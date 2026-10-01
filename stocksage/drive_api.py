@@ -202,6 +202,17 @@ def upload_or_update(
     return created["id"]
 
 
+def publish_text(name: str, text: str) -> str:
+    """Put one plain-text document in the StockSage Drive folder, in place.
+
+    Used for the human-readable "StockSage Today" sheet, so it can be opened
+    from a phone. Returns the Drive file id.
+    """
+    service = get_service()
+    folder_id = ensure_folder(service)
+    return upload_or_update(service, name, text, "text/plain", folder_id)
+
+
 def download_file(service, name: str, folder_id: str) -> bytes | None:
     """Raw bytes of a file in the StockSage Drive folder, or None if no
     file by that name has been published there yet."""
