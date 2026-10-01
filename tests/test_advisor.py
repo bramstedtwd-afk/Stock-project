@@ -136,7 +136,7 @@ def test_the_brief_carries_a_plan_for_the_account_it_was_given(engine):
                         positions=_held(engine))
     plan = brief["actions"]
     assert plan is not None
-    assert set(plan) == {"actions", "no_action_needed", "notes", "model_trust"}
+    assert set(plan) == {"actions", "no_action_needed", "notes", "model_trust", "model_trust_sell"}
     # WEAK was bought 30% above where it trades: through its stop.
     assert any(a["kind"] == "EXIT_STOP" and a["ticker"] == "WEAK" for a in plan["actions"])
 

@@ -558,9 +558,13 @@ def plan_for_account(engine: Engine, suggestions: list, positions: list[dict],
     for s in suggestions:
         graded, hit, _ = engine.db.ticker_track_record(s.ticker)
         reliability[s.ticker] = (graded, hit)
+    graded = engine.db.evaluated_suggestions()
     return build_plan(
         positions, cash, suggestions, entered,
-        model_trust(engine.db.evaluated_suggestions()),
+        # BUYING is gated on the buy side's record alone; the sell side is
+        # reported beside it but cannot unlock a purchase.
+        model_trust(graded, "buy"),
+        sell_trust=model_trust(graded, "sell"),
         suggestions_enabled=engine.db.model_suggestions_enabled(),
         reliability=reliability,
         profile=profile,
@@ -614,11 +618,11 @@ def plans_for_accounts(engine: Engine, client, suggestions: list | None = None) 
         log.warning("could not list accounts: %s", exc)
         accounts = []
 
-    entries: list[tuple[str, str, object]] = []   # (role, label, portfolio)
+    entries: list[tuple[str, str, object, str]] = []   # (role, label, portfolio, kind)
     if not accounts:
         pf = _agentic_portfolio(client)
         if pf is not None:
-            entries.append(("agentic", "Account", pf))
+            entries.append(("agentic", "Account", pf, ""))
     else:
         default_number = None
         if not agentic:
@@ -637,11 +641,11 @@ def plans_for_accounts(engine: Engine, client, suggestions: list | None = None) 
                 continue
             is_agentic = acct.number == (agentic or default_number)
             role = "agentic" if is_agentic else ("roth" if (acct.kind or "").lower() == "roth" else "personal")
-            entries.append((role, acct.label, pf))
+            entries.append((role, acct.label, pf, acct.kind or ""))
         entries.sort(key=lambda e: (e[0] != "agentic", e[0]))
 
     out, combined, total = [], {}, 0.0
-    for role, label, pf in entries:
+    for role, label, pf, kind in entries:
         positions = [
             {"ticker": h.ticker, "shares": h.shares, "avg_cost": h.avg_buy_price,
              "price": h.current_price, "equity": h.equity}
@@ -649,13 +653,20 @@ def plans_for_accounts(engine: Engine, client, suggestions: list | None = None) 
         ]
         tax = ("Roth IRA: selling is tax-free." if role == "roth"
                else "Taxable account: selling realises a gain or loss.")
+        # Sized from settled CASH, never buying power: on a margin account the
+        # latter includes money that can be borrowed.
         plan = plan_for_account(
-            engine, suggestions, positions, pf.buying_power,
+            engine, suggestions, positions, pf.sizing_cash,
             profile=profile_for(role), tax_note=tax,
         )
+        if "margin" in kind.lower():
+            plan.notes.append(
+                "Margin account: every amount here is sized from your cash only, "
+                "never from margin."
+            )
         out.append({"role": role, "title": ROLE_LABELS[role], "label": label,
                     "manual": role != "agentic", "plan": plan})
-        total += pf.buying_power + sum(p["equity"] for p in positions)
+        total += pf.sizing_cash + sum(p["equity"] for p in positions)
         for p in positions:
             combined[p["ticker"]] = combined.get(p["ticker"], 0.0) + p["equity"]
 
@@ -711,7 +722,7 @@ def desktop_sync_cycle(engine: Engine, client=None, broker: bool = True) -> dict
                  "price": h.current_price, "equity": h.equity}
                 for h in portfolio.holdings
             ]
-            stats["buying_power"] = portfolio.buying_power
+            stats["buying_power"] = portfolio.sizing_cash
             stats["account_number"] = portfolio.account_number
     except Exception as exc:  # never let a broker hiccup block grading/publish
         stats["sync_error"] = str(exc)

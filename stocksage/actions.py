@@ -88,7 +88,8 @@ class Plan:
     actions: list[Action] = field(default_factory=list)
     quiet: list[str] = field(default_factory=list)   # held, nothing to do
     notes: list[str] = field(default_factory=list)   # plain-language context
-    trust: dict = field(default_factory=dict)
+    trust: dict = field(default_factory=dict)        # the model's BUY calls
+    sell_trust: dict = field(default_factory=dict)   # the model's SELL calls
 
     @classmethod
     def from_dict(cls, data: dict) -> "Plan":
@@ -97,6 +98,7 @@ class Plan:
             quiet=list(data.get("no_action_needed", [])),
             notes=list(data.get("notes", [])),
             trust=dict(data.get("model_trust", {})),
+            sell_trust=dict(data.get("model_trust_sell", {})),
         )
 
     def to_dict(self) -> dict:
@@ -105,6 +107,7 @@ class Plan:
             "no_action_needed": self.quiet,
             "notes": self.notes,
             "model_trust": self.trust,
+            "model_trust_sell": self.sell_trust,
         }
 
 
@@ -133,12 +136,16 @@ def _direction(row) -> float:
     return 1.0
 
 
-def model_trust(rows) -> dict:
+def model_trust(rows, side: str = "all") -> dict:
     """How much the model's measured edge over the market can be believed.
 
     Uses only calls that were actually measured against SPY — a call with no
     benchmark says nothing about edge — and judges each in the direction it
-    bet: buys by how much they beat the market, sells by how much they trailed it. The standard error here treats calls
+    bet: buys by how much they beat the market, sells by how much they trailed it.
+
+    side="buy" or "sell" looks at one kind of call alone. They are different
+    claims, and the gate on BUYING must use the buy side only: good sell calls
+    must not be able to unlock purchases a poor buy record has not earned. The standard error here treats calls
     as independent, which they are not (they cluster on the same days and
     sectors), so it is optimistic; that is why "earned" demands both a large
     sample and a stricter threshold than "failing" does.
@@ -147,6 +154,7 @@ def model_trust(rows) -> dict:
         _direction(r) * (r["realized_return"] - r["benchmark_return"])
         for r in rows
         if r["benchmark_return"] is not None and r["realized_return"] is not None
+        and (side == "all" or (side == "buy") == (_direction(r) > 0))
     ]
     n = len(edges)
     if n < 2:
@@ -171,29 +179,36 @@ def trust_level(n: int, mean: float, se: float) -> str:
     return "unproven"
 
 
-def trust_sentence(trust: dict) -> str:
+def trust_sentence(trust: dict, label: str = "Model track record") -> str:
     n, edge, level = trust.get("n", 0), trust.get("edge"), trust.get("level")
     if edge is None or n < MIN_N_FAILING:
         return (
-            f"Model track record: too early to judge — only {n} calls measured "
+            f"{label}: too early to judge — only {n} calls measured "
             f"against the market."
         )
     pct = f"{edge * 100:+.2f}%"
+    cluster = (" Calls cluster on the same days, so this overstates how sure it is.")
     if level == "failing":
         return (
-            f"Model track record: TRAILING the market by {pct} per call over {n} "
-            f"calls, and that gap is bigger than chance. Treat entries as ideas, "
-            f"not signals."
+            f"{label}: TRAILING the market by {pct} per call over {n} "
+            f"calls, more than chance alone would explain.{cluster}"
         )
     if level == "earned":
         return (
-            f"Model track record: beating the market by {pct} per call over {n} "
-            f"calls, beyond what chance explains."
+            f"{label}: beating the market by {pct} per call over {n} "
+            f"calls, beyond what chance explains.{cluster} Promising, not proven."
         )
     return (
-        f"Model track record: {pct} per call versus the market over {n} calls — "
+        f"{label}: {pct} per call versus the market over {n} calls — "
         f"not yet distinguishable from luck either way."
     )
+
+
+def trust_short(trust: dict, label: str) -> str:
+    n, edge = trust.get("n", 0), trust.get("edge")
+    if edge is None or n < MIN_N_FAILING:
+        return f"{label}: too early to judge"
+    return f"{label}: {edge * 100:+.2f}% per call over {n}"
 
 
 # --- helpers -----------------------------------------------------------------
@@ -256,6 +271,7 @@ def build_plan(
     tax_note: str | None = None,
     entries: str = "proven",
     backtest_level: str | None = None,
+    sell_trust: dict | None = None,
 ) -> Plan:
     """Rank what to do, given the account and the scan.
 
@@ -286,8 +302,10 @@ def build_plan(
     active = profile == "active"
     reliability = reliability or {}
     by_ticker = {s.ticker: s for s in suggestions}
-    plan = Plan(trust=trust)
-    plan.notes.append(trust_sentence(trust))
+    plan = Plan(trust=trust, sell_trust=sell_trust or {})
+    plan.notes.append(trust_sentence(trust, "Model's BUY calls"))
+    if sell_trust:
+        plan.notes.append(trust_sentence(sell_trust, "Model's SELL calls"))
 
     total_equity = cash + sum(p["equity"] for p in positions)
     exited: set[str] = set()
@@ -378,7 +396,8 @@ def build_plan(
                 "EXIT_SIGNAL", t, "SELL", FYI,
                 f"Consider selling {t} — the model now rates it {s.action}",
                 (s.why or "The signals have turned against it.")
-                + " This one rests on the model's skill, not a risk rule.",
+                + " This one rests on the model's skill, not a risk rule"
+                + (f" ({trust_short(sell_trust, 'its sell calls')})." if sell_trust else "."),
                 dollars=round(equity, 2), shares=round(shares, 6),
             ))
             acted = True

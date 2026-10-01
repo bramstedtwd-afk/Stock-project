@@ -66,6 +66,23 @@ class Portfolio:
     holdings: list[Holding]
     buying_power: float
     account_number: str | None = None
+    # Settled cash, when the broker reports it separately. On a MARGIN account
+    # buying_power includes money that can be borrowed, so sizing a purchase
+    # from it can quietly use margin. None means "not reported" (a plain cash
+    # account, where the two are the same thing).
+    cash: float | None = None
+
+    @property
+    def sizing_cash(self) -> float:
+        """The most that may be spent: never more than the cash itself.
+
+        Takes the smaller of buying power and reported cash, floored at zero
+        (a margin account that has borrowed reports negative cash). Every
+        entry size in the app comes from this, never from buying_power.
+        """
+        if self.cash is None:
+            return max(0.0, self.buying_power)
+        return max(0.0, min(self.buying_power, self.cash))
 
     def shares_of(self, ticker: str) -> float:
         for h in self.holdings:
@@ -76,6 +93,24 @@ class Portfolio:
     @property
     def total_equity(self) -> float:
         return sum(h.equity for h in self.holdings)
+
+
+def _cash_from_profile(profile: dict) -> float | None:
+    """Settled cash from an account profile, or None if it reports none.
+
+    Several fields can hold it; the SMALLEST present, non-empty one is used so
+    a figure that includes margin or pending money can never win.
+    """
+    values = []
+    for key in ("cash", "portfolio_cash"):
+        raw = profile.get(key)
+        if raw in (None, ""):
+            continue
+        try:
+            values.append(float(raw))
+        except (TypeError, ValueError):
+            continue
+    return min(values) if values else None
 
 
 def extract_watchlist_symbols(payload) -> list[str]:
@@ -207,6 +242,7 @@ class RobinhoodClient:
             holdings=holdings,
             buying_power=buying_power,
             account_number=str(profile.get("account_number") or "") or None,
+            cash=_cash_from_profile(profile),
         )
 
     # --- accounts (read-only) ---
@@ -298,7 +334,8 @@ class RobinhoodClient:
         except (TypeError, ValueError):
             buying_power = 0.0
         return Portfolio(
-            holdings=holdings, buying_power=buying_power, account_number=account_number
+            holdings=holdings, buying_power=buying_power, account_number=account_number,
+            cash=_cash_from_profile(profile),
         )
 
     def _latest_prices(self, tickers: list[str]) -> dict[str, float]:

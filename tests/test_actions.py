@@ -640,7 +640,7 @@ def test_the_entries_policy_is_read_from_the_environment(monkeypatch):
     from tests.test_engine import FakeMarket
 
     engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
-    monkeypatch.setattr("stocksage.actions.model_trust", lambda rows: UNPROVEN)
+    monkeypatch.setattr("stocksage.actions.model_trust", lambda rows, side="all": UNPROVEN)
     monkeypatch.delenv("STOCKSAGE_ENTRIES", raising=False)
     assert entries_policy() == "proven"
     assert not any(a.kind == "ENTER" for a in plan_for_account(engine, [sug("NEW")], [], 200.0).actions)
@@ -657,7 +657,7 @@ def test_a_stored_backtest_verdict_reaches_the_plan(monkeypatch):
     from tests.test_engine import FakeMarket
 
     engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
-    monkeypatch.setattr("stocksage.actions.model_trust", lambda rows: UNPROVEN)
+    monkeypatch.setattr("stocksage.actions.model_trust", lambda rows, side="all": UNPROVEN)
     monkeypatch.delenv("STOCKSAGE_ENTRIES", raising=False)
     engine.db.set_meta("backtest_level", "earned")
     assert any(a.kind == "ENTER" for a in plan_for_account(engine, [sug("NEW")], [], 200.0).actions)
@@ -764,3 +764,145 @@ def test_it_reads_real_database_rows(tmp_path):
         db.mark_evaluated(sid, realized, True, 0.0)
     trust = model_trust(db.evaluated_suggestions())
     assert trust["n"] == 2 and trust["edge"] == pytest.approx(0.03)
+
+
+# ------------------------------------------- the gate on BUYING reads the BUY side only
+
+def _graded_db(buy_edge, n_buys, sell_edge, n_sells):
+    """A brain whose buys and sells have different track records. The SELL
+    edge is the amount the stock trailed the market (positive = right)."""
+    from stocksage.db import Database
+
+    db = Database(":memory:")
+    for i in range(n_buys):
+        sid = db.record_suggestion("AAA", "BUY", 0.4, 100.0, {"x": 0.1}, 5)
+        db.mark_evaluated(sid, buy_edge + (i % 5 - 2) * 0.003, True, 0.0)
+    for i in range(n_sells):
+        sid = db.record_suggestion("BBB", "SELL", -0.4, 100.0, {"x": 0.1}, 5)
+        db.mark_evaluated(sid, -sell_edge + (i % 5 - 2) * 0.003, True, 0.0)
+    return db
+
+
+def test_good_sell_calls_cannot_unlock_buys_a_poor_buy_record_has_not_earned(monkeypatch):
+    """The owner's real situation: buys trailing the market, sells working. The
+    COMBINED record read as 'beating the market, beyond chance', and a numbered
+    BUY appeared — against the rule that buys stay ideas until the buy side is
+    proven."""
+    from stocksage.advisor import plan_for_account
+    from stocksage.engine import Engine
+    from tests.test_engine import FakeMarket
+
+    monkeypatch.delenv("STOCKSAGE_ENTRIES", raising=False)
+    db = _graded_db(buy_edge=-0.0076, n_buys=251, sell_edge=0.019, n_sells=213)
+    rows = db.evaluated_suggestions()
+    assert model_trust(rows)["level"] == "earned", "the misleading combined view"
+    assert model_trust(rows, "buy")["level"] == "failing"
+    assert model_trust(rows, "sell")["level"] == "earned"
+
+    plan = plan_for_account(Engine(db=db, market=FakeMarket({})), [sug("NEW")], [], 500.0)
+    assert not [a for a in plan.actions if a.kind == "ENTER"]
+    assert any(a.kind == "IDEA" for a in plan.actions)
+
+
+def test_the_plan_reports_both_records_side_by_side(monkeypatch):
+    from stocksage.advisor import plan_for_account
+    from stocksage.engine import Engine
+    from tests.test_engine import FakeMarket
+
+    db = _graded_db(-0.0076, 251, 0.019, 213)
+    plan = plan_for_account(Engine(db=db, market=FakeMarket({})), [sug("NEW")], [], 500.0)
+    text = " ".join(plan.notes)
+    assert "Model's BUY calls: TRAILING" in text
+    assert "Model's SELL calls: beating the market" in text
+    assert "cluster" in text, "the optimism caveat must travel with the number"
+
+
+def test_a_sell_signal_carries_the_sell_sides_record():
+    held = [pos("AAA", cost=100, price=102)]
+    plan = plan_for(held, [sug("AAA", action="SELL", score=-0.5)], cash=600,
+                    sell_trust={"level": "earned", "n": 213, "edge": 0.019, "se": 0.002})
+    signal = next(a for a in plan.actions if a.kind == "EXIT_SIGNAL")
+    assert "its sell calls: +1.90% per call over 213" in signal.why
+
+
+def test_both_records_survive_the_trip_through_the_brief():
+    plan = plan_for([], [sug("NEW")], cash=100, trust=UNPROVEN,
+                    sell_trust={"level": "earned", "n": 213, "edge": 0.019, "se": 0.002})
+    again = actions.Plan.from_dict(plan.to_dict())
+    assert again.sell_trust == plan.sell_trust and again.trust == plan.trust
+
+
+def test_the_buy_and_sell_sides_split_cleanly():
+    rows = [_call("BUY", 0.03) for _ in range(40)] + [_call("SELL", +0.03) for _ in range(40)]
+    assert model_trust(rows, "buy")["edge"] == pytest.approx(0.03)
+    assert model_trust(rows, "sell")["edge"] == pytest.approx(-0.03)
+    assert model_trust(rows, "buy")["n"] == model_trust(rows, "sell")["n"] == 40
+    assert model_trust(rows)["n"] == 80
+
+
+# ------------------------------------------- never size from margin
+
+def test_buying_power_that_includes_margin_never_sizes_a_purchase():
+    from stocksage.robinhood import Portfolio
+
+    margin = Portfolio([], buying_power=5000.0, account_number="1", cash=120.0)
+    assert margin.sizing_cash == 120.0
+    assert Portfolio([], 300.0, "1").sizing_cash == 300.0, "a cash account reports one number"
+    assert Portfolio([], 5000.0, "1", cash=-800.0).sizing_cash == 0.0, "a borrowed balance is not cash"
+    assert Portfolio([], 50.0, "1", cash=900.0).sizing_cash == 50.0, "nor more than buying power"
+
+
+def test_cash_is_the_smallest_figure_the_broker_reports():
+    from stocksage.robinhood import _cash_from_profile
+
+    assert _cash_from_profile({"cash": "800.00", "portfolio_cash": "120.50"}) == 120.5
+    assert _cash_from_profile({"cash": "", "portfolio_cash": "55"}) == 55.0
+    assert _cash_from_profile({"buying_power": "9999"}) is None, "buying power is not cash"
+    assert _cash_from_profile({"cash": "junk"}) is None
+
+
+def test_a_margin_account_is_never_told_to_spend_borrowed_money(monkeypatch):
+    from stocksage.advisor import plans_for_accounts
+    from stocksage.db import Database
+    from stocksage.engine import Engine
+    from stocksage.robinhood import Account, Portfolio
+    from tests.test_engine import FakeMarket
+
+    monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "123456789")
+    monkeypatch.setenv("STOCKSAGE_ENTRIES", "always")
+
+    class MarginBroker(FakeBroker):
+        def __init__(self):
+            super().__init__()
+            self.accts[0] = Account("111111111", "margin", 9000.0, 40.0)
+            self.pf["111111111"] = Portfolio([], buying_power=9000.0,
+                                             account_number="111111111", cash=40.0)
+
+    engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
+    out = plans_for_accounts(engine, MarginBroker(), suggestions=_everything_scanned())
+    personal = next(e for e in out["accounts"] if e["role"] == "personal")
+    spent = sum(a.dollars for a in personal["plan"].actions if a.kind == "ENTER")
+    assert spent <= 40.0 + 1e-6, f"{spent} proposed against $40 of real cash"
+    assert any("Margin account" in n and "never from margin" in n for n in personal["plan"].notes)
+
+
+def test_the_brief_is_sized_from_cash_not_buying_power(monkeypatch):
+    from stocksage.advisor import desktop_sync_cycle
+    from stocksage.db import Database
+    from stocksage.engine import Engine
+    from stocksage.robinhood import Holding, Portfolio
+    from tests.test_engine import FakeMarket
+
+    class Client:
+        def sync_history(self, db):
+            return None
+
+        def accounts(self):
+            return []
+
+        def portfolio(self):
+            return Portfolio([Holding("X", 1, 10, 10, 10)], 8000.0, "9", cash=75.0)
+
+    monkeypatch.delenv("STOCKSAGE_AGENTIC_ACCOUNT", raising=False)
+    engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
+    assert desktop_sync_cycle(engine, client=Client())["buying_power"] == 75.0
