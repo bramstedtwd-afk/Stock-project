@@ -78,15 +78,24 @@ def test_sector_weights_roundtrip():
 
 
 def test_evaluation_trains_sector_weights():
-    """Grading a real-universe ticker must update its sector's own weights."""
-    from datetime import datetime, timezone
+    """Grading a real-universe ticker must update its sector's own weights —
+    from a market-relative result, like every other update."""
+    from tests.test_engine import CALLED_AT, GRADED_AT, _backdate
 
-    frames = {"AAPL": make_ohlcv(daily_drift=0.003, seed=31)}
+    aapl = make_ohlcv(daily_drift=0.003, seed=31)
+    frames = {"AAPL": aapl, "SPY": make_ohlcv(daily_drift=0.0005, seed=9)}
     engine = Engine(db=Database(":memory:"), market=FakeMarket(frames))
     engine.scan(tickers=["AAPL"], capture_context=False, record=True)
-    engine.market.price_overrides["AAPL"] = 999999.0  # resolves as a big win
-    future = datetime.now(timezone.utc) + timedelta(days=15)
-    assert engine.evaluate_pending(now=future) >= 1
+    _backdate(engine)
+
+    # AAPL jumps 15% in the sessions after the call while SPY drifts: a
+    # decisive win over the market, well clear of the learner's noise floor.
+    after = aapl.index > CALLED_AT[:10]
+    boosted = aapl.copy()
+    boosted.loc[after, ["Open", "High", "Low", "Close"]] *= 1.15
+    engine.market.frames["AAPL"] = boosted
+
+    assert engine.evaluate_pending(now=GRADED_AT) >= 1
     assert engine.db.load_sector_weights("Technology")  # sector learned
     assert engine.db.sector_grade_counts().get("Technology", 0) >= 1
 

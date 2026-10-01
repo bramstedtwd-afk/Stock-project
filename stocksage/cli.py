@@ -241,6 +241,40 @@ def cmd_brain(args) -> int:
                 f"weights kept from the {stats['weights_taken_from']} brain "
                 "(the one that learned most recently)."
             )
+    elif args.brain_action == "audit":
+        from . import audit
+
+        try:
+            report = audit.audit_brain()
+        except FileNotFoundError as exc:
+            print(exc)
+            return 1
+        print("\n".join(audit.describe(report)))
+    elif args.brain_action == "repair":
+        from . import audit
+
+        try:
+            res = audit.repair_duplicates(apply=args.apply)
+        except FileNotFoundError as exc:
+            print(exc)
+            return 1
+        if not res["groups"] and not res["applied"]:
+            print("No duplicate owner calls found — nothing to repair.")
+        elif not args.apply:
+            print(
+                f"Found {res['rows_removed']} duplicate owner calls "
+                f"({res['groups']} trades recorded more than once)."
+            )
+            print("Nothing has been changed. To remove them (a backup is made first):")
+            print("  .\\start.bat brain repair --apply      (Windows)")
+            print("  ./start.sh brain repair --apply        (Mac/Linux)")
+        else:
+            print(f"Backup saved: {res['backup']}")
+            print(
+                f"Removed {res['rows_removed']} duplicate calls; relinked "
+                f"{res['ledger_linked']} fills in the ledger."
+            )
+            print("Run the audit again to confirm:  .\\start.bat brain audit")
     elif args.brain_action == "snapshot":
         path = brain.write_snapshot()
         print(f"Brain snapshot written to {path}")
@@ -436,6 +470,27 @@ def _pull_drive_brain(engine) -> None:
         )
 
 
+def _record_publish(engine, error: str | None = None) -> None:
+    """Remember whether the last publish worked, inside the brain.
+
+    Publishing runs unattended five times a day, and when it stops nothing on
+    this machine says so — the first anyone knew of a four-day outage was the
+    trading routine finding a stale brief on the other end. Doctor reads these
+    two keys so the desktop can say it itself. Bookkeeping only: it must never
+    be able to make a publish fail.
+    """
+    from datetime import datetime, timezone
+
+    try:
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        if error is None:
+            engine.db.set_meta("last_publish_ok", now)
+        else:
+            engine.db.set_meta("last_publish_error", f"{now}|{error[:300]}")
+    except Exception:
+        pass
+
+
 def cmd_publish_drive(args) -> int:
     from .advisor import publish_brief_via_api
     from .drive_api import DriveNotConfigured
@@ -449,8 +504,15 @@ def cmd_publish_drive(args) -> int:
             holdings=sync.get("holdings"), buying_power=sync.get("buying_power"),
         )
     except DriveNotConfigured as exc:
+        _record_publish(engine, error=str(exc))
         print(f"Not set up yet: {exc}")
         return 1
+    except Exception as exc:
+        # Still crash loudly (the scheduler's log keeps the traceback), but
+        # leave a note the owner will actually see: doctor reads it.
+        _record_publish(engine, error=f"{type(exc).__name__}: {exc}")
+        raise
+    _record_publish(engine)
     print(f"Published directly to Google Drive ({result['candidates']} candidates):")
     for name in result["files"]:
         print(f"  · {name}  (in your Drive's StockSage folder)")
@@ -917,6 +979,15 @@ def build_parser() -> argparse.ArgumentParser:
         "pull-drive",
         help="pull the shared brain from Google Drive (no-install path) and merge it in",
     )
+    b.set_defaults(func=cmd_brain)
+    b = brain_sub.add_parser(
+        "audit", help="read-only report on what is actually inside the brain"
+    )
+    b.set_defaults(func=cmd_brain)
+    b = brain_sub.add_parser(
+        "repair", help="remove duplicate owner calls (dry run unless --apply)"
+    )
+    b.add_argument("--apply", action="store_true", help="actually do it (backs up first)")
     b.set_defaults(func=cmd_brain)
     b = brain_sub.add_parser("info", help="where the brain lives and what it knows")
     b.set_defaults(func=cmd_brain)

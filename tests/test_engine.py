@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from stocksage.db import Database
-from stocksage.engine import SUGGESTION_HORIZON_DAYS, Engine
+from stocksage.engine import Engine
 from tests.conftest import make_ohlcv
 
 
@@ -57,26 +57,70 @@ def test_scan_records_convictions(engine):
     assert all(abs(r["score"]) >= 0.2 for r in recorded)
 
 
-def test_learning_loop_end_to_end(engine):
-    """Record -> mature -> evaluate -> weights actually move."""
+# The synthetic bars end on a fixed date (see conftest.make_ohlcv), so grading
+# tests live on that timeline: calls made ~10 sessions before the last bar,
+# graded the evening after it. Real "now" would sit months past the data.
+CALLED_AT = "2026-06-22T14:00:00+00:00"
+GRADED_AT = datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc)
+
+
+def _backdate(engine):
+    """Place every recorded call inside the fixture's history so grading
+    resolves from price bars, exactly as it does against real data."""
+    engine.db.conn.execute("UPDATE suggestions SET created_at = ?", (CALLED_AT,))
+    engine.db.conn.commit()
+
+
+def _market_engine(with_spy: bool):
+    frames = {
+        "UPUP": make_ohlcv(daily_drift=0.004, daily_vol=0.008, seed=11),
+        "DOWN": make_ohlcv(daily_drift=-0.008, daily_vol=0.008, seed=12),
+    }
+    if with_spy:
+        frames["SPY"] = make_ohlcv(daily_drift=0.001, daily_vol=0.006, seed=9)
+    return Engine(db=Database(":memory:"), market=FakeMarket(frames))
+
+
+def test_learning_loop_end_to_end():
+    """Record -> mature -> grade against the market -> weights actually move."""
+    engine = _market_engine(with_spy=True)
     engine.scan(tickers=["UPUP", "DOWN"], capture_context=False, record=True)
     assert engine.db.load_weights() == {}
+    _backdate(engine)
 
-    # Simulate the future: price resolves 10% above the suggestion price.
-    for row in engine.db.recent_suggestions():
-        engine.market.price_overrides[row["ticker"]] = row["price"] * 1.10
-
-    future = datetime.now(timezone.utc) + timedelta(days=SUGGESTION_HORIZON_DAYS * 2)
-    count = engine.evaluate_pending(now=future)
+    count = engine.evaluate_pending(now=GRADED_AT)
     assert count >= 1
 
     weights = engine.db.load_weights()
     assert weights and sum(weights.values()) == pytest.approx(1.0)
     graded = [r for r in engine.db.recent_suggestions() if r["evaluated"]]
     assert graded
+    assert all(r["benchmark_return"] is not None for r in graded), (
+        "every grade the weights learned from must carry its market benchmark"
+    )
     up_rows = [r for r in graded if r["ticker"] == "UPUP"]
     if up_rows:  # UPUP predicted up, price went up -> hit
         assert up_rows[0]["hit"] == 1
+
+
+def test_a_call_with_no_market_benchmark_trains_nothing():
+    """Weights learn from SPY-EXCESS return or not at all. When the benchmark
+    is unavailable the old code fell back to the raw return, which in a rising
+    market rewards every long call and teaches permanent bullishness — the
+    exact bias market-relative grading exists to remove, silently readmitted
+    whenever SPY history was missing."""
+    engine = _market_engine(with_spy=False)
+    engine.scan(tickers=["UPUP", "DOWN"], capture_context=False, record=True)
+    _backdate(engine)
+
+    count = engine.evaluate_pending(now=GRADED_AT)
+
+    assert count >= 1, "the call is real and belongs in the ledger"
+    assert engine.db.load_weights() == {}, "weights learned from an unbenchmarked grade"
+    graded = [r for r in engine.db.recent_suggestions() if r["evaluated"]]
+    assert graded and all(r["benchmark_return"] is None for r in graded)
+    assert all(r["realized_return"] is not None for r in graded)
+    assert engine.db.conn.execute("SELECT COUNT(*) FROM learning_log").fetchone()[0] == 0
 
 
 def test_evaluate_skips_immature(engine):

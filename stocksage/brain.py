@@ -177,6 +177,26 @@ def merge_brains(dest_path: str | Path, src_path: str | Path) -> dict:
         )
         stats["suggestions_added"] = conn.total_changes - before
 
+        # The record of which Robinhood fills have already become calls must
+        # travel with the calls themselves. Without it a fresh device that
+        # merges this brain and then syncs the same broker history sees every
+        # order as new and turns each one into a SECOND call — doubling the
+        # owner's record and announcing "captured N new trades" as news.
+        if "ingested_fills" in src_tables:
+            before = conn.total_changes
+            # Suggestion ids are per-database, so the link has to be rebuilt:
+            # find the same call (time, ticker, action) on this side.
+            conn.execute(
+                "INSERT OR IGNORE INTO ingested_fills"
+                " (order_id, suggestion_id, ingested_at)"
+                " SELECT f.order_id, d.id, f.ingested_at"
+                " FROM src.ingested_fills f"
+                " JOIN src.suggestions s ON s.id = f.suggestion_id"
+                " JOIN suggestions d ON d.created_at = s.created_at"
+                "   AND d.ticker = s.ticker AND d.action = s.action"
+            )
+            stats["ingested_fills_added"] = conn.total_changes - before
+
         # Weights travel as a whole vector: take whichever learned last.
         src_ts = conn.execute("SELECT MAX(updated_at) FROM src.weights").fetchone()[0]
         dest_ts = conn.execute("SELECT MAX(updated_at) FROM weights").fetchone()[0]

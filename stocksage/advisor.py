@@ -401,6 +401,14 @@ def ingest_fills(engine: Engine, orders: list[dict], horizon_days: int = 5) -> d
         if action is None or price <= 0 or not ticker or not executed_at:
             continue
 
+        existing = engine.db.owner_call_for_fill(ticker, action, executed_at, price)
+        if existing is not None:
+            # Already a call — the ledger just never learned about it (see
+            # brain.merge_brains). Record the link so this is settled for good,
+            # but do not create a second call or count it as new.
+            engine.db.mark_fill_ingested(order_id, existing)
+            continue
+
         # Signals as they stood on the fill date (history sliced, no peeking).
         signals: dict[str, float] = {}
         df = engine.market.history(ticker)

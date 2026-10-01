@@ -35,7 +35,8 @@ rather than giving them instructions.
 - `stocksage/desktop.py` — app-window/web/phone launch modes + desktop icon install
 - `stocksage/autopilot.py` — OS-scheduler registration (launchd/cron/Task Scheduler)
 - `stocksage/update.py` — safe self-update (ff-only, refuses dirty tree)
-- `stocksage/doctor.py` — 10-point self-diagnosis with fixes
+- `stocksage/doctor.py` — 11-point self-diagnosis with fixes (incl. whether publishing is actually *happening*, not just scheduled)
+- `stocksage/audit.py` — read-only brain audit + safe duplicate repair (`brain audit`, `brain repair [--apply]`)
 - `stocksage/security.py` — broker access log (fresh sign-in vs reused token) + exposure audit; answers "was that Robinhood sign-in alert us?"
 - `stocksage/cli.py` — all terminal commands; `stocksage/envfile.py` — .env load/save
 
@@ -44,7 +45,7 @@ rather than giving them instructions.
 `(none)`=app window · `setup` (new machine) · `web` · `phone` · `install` · `autopilot [off|status]` ·
 `update` · `doctor` · `daily` · `suggest [TICKERS]` · `sectors` · `portfolio` ·
 `moves` · `performance` · `profit` · `watch add|remove|list` ·
-`congress` · `bootstrap` · `brain export|import|sync|info` ·
+`congress` · `bootstrap` · `brain export|import|sync|info|audit|repair` ·
 `security [--signin TIME]` · `leave [--keep-brain FILE|--forget-brain] --yes`
 
 ## Trading-routine integration (stocksage/advisor.py)
@@ -79,11 +80,13 @@ live technical analysis (degraded run, never a halt).
 
 ## Development conventions
 
-- Tests: `python -m pytest` — 317 tests, **fully offline** (synthetic OHLCV via `tests/conftest.make_ohlcv`, in-memory DBs, `FakeMarket` injection, Streamlit AppTest for the dashboard). Keep it that way: no test may need network.
+- Tests: `python -m pytest` — 430+ tests, **fully offline** (synthetic OHLCV via `tests/conftest.make_ohlcv`, in-memory DBs, `FakeMarket` injection, Streamlit AppTest for the dashboard). Keep it that way: no test may need network.
 - Lint: `ruff check stocksage/ app.py tests/` must stay clean.
 - Push to `main` (the repo's default branch). The repository is **public** —
   it doubles as a portfolio piece, so nothing personal may enter a tracked
   file. `tests/test_privacy.py` enforces that; read it before adding fixtures.
+- **Weights learn from market-relative returns or not at all.** A call graded without a SPY benchmark is recorded in the ledger but must never train the model (a raw-return fallback once silently taught it to be permanently bullish). `test_a_call_with_no_market_benchmark_trains_nothing` guards this.
+- **State that dedupes must travel with the data it dedupes.** `merge_brains` carries `ingested_fills` for that reason; adding a table that gates ingestion without teaching the merge about it re-creates the device-move duplicate bug.
 - Signal names are stable identifiers (learned weights key on them) — renaming one resets its learned weight.
 - DB schema changes must be additive (`CREATE TABLE IF NOT EXISTS`) — existing brains migrate automatically; brain merges must tolerate older-schema files.
 - Credentials live only in `.env` (gitignored, 0600). Never move them into the brain, logs, or commits.

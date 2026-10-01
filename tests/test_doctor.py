@@ -118,3 +118,127 @@ def test_routine_account_passes_and_shows_only_the_last_four(monkeypatch):
     assert result["status"] == PASS
     assert "0111" in result["detail"]
     assert "555000111" not in result["detail"]
+
+
+# --- publishing: scheduled is not the same as working -----------------------
+
+
+def _brain_with(tmp_path, monkeypatch, ok=None, err=None):
+    from stocksage.db import Database
+
+    monkeypatch.setenv("STOCKSAGE_DB", str(tmp_path / "b.db"))
+    monkeypatch.setenv("STOCKSAGE_DRIVE_TOKEN", "x")
+    db = Database(tmp_path / "b.db")
+    if ok:
+        db.set_meta("last_publish_ok", ok)
+    if err:
+        db.set_meta("last_publish_error", err)
+    db.close()
+
+
+def _at(y, m, d, h=16):
+    from datetime import datetime, timezone
+
+    return datetime(y, m, d, h, 0, tzinfo=timezone.utc)
+
+
+def test_weekends_do_not_count_as_missed_publishes():
+    from stocksage.doctor import business_days_since
+
+    friday, monday = _at(2026, 9, 25), _at(2026, 9, 28)
+    assert business_days_since(friday, monday) == 1
+    assert business_days_since(_at(2026, 9, 28), _at(2026, 9, 30)) == 2
+
+
+def test_a_recent_publish_is_healthy(tmp_path, monkeypatch):
+    from stocksage.doctor import PASS, check_publish_freshness
+
+    _brain_with(tmp_path, monkeypatch, ok="2026-09-29T19:30:00+00:00")
+    assert check_publish_freshness(now=_at(2026, 9, 30))["status"] == PASS
+
+
+def test_two_missed_weekdays_warns_and_names_the_fix(tmp_path, monkeypatch):
+    """The exact outage that happened: last publish Monday 9/28, nothing
+    Tuesday or Wednesday, and only the routine noticed."""
+    from stocksage.doctor import WARN, check_publish_freshness
+
+    _brain_with(tmp_path, monkeypatch, ok="2026-09-28T19:30:00+00:00")
+    result = check_publish_freshness(now=_at(2026, 9, 30, 18))
+    assert result["status"] == WARN
+    assert "stale brief" in result["detail"]
+    assert "asleep or signed out" in result["fix"]
+
+
+def test_the_command_shown_is_one_the_owner_can_paste(tmp_path, monkeypatch):
+    """Rendered, not read from source — an over-escaped backslash passes a
+    source scan and still fails on the owner's keyboard."""
+    from stocksage.doctor import check_publish_freshness
+
+    _brain_with(tmp_path, monkeypatch, ok="2026-09-28T19:30:00+00:00")
+    fix = check_publish_freshness(now=_at(2026, 9, 30, 18))["fix"]
+    assert ".\\start.bat publish-drive" in fix
+    assert ".\\\\start.bat" not in fix
+
+
+def test_the_failure_reason_is_surfaced_when_there_is_one(tmp_path, monkeypatch):
+    from stocksage.doctor import check_publish_freshness
+
+    _brain_with(
+        tmp_path, monkeypatch, ok="2026-09-28T19:30:00+00:00",
+        err="2026-09-29T14:00:00+00:00|Google sign-in expired",
+    )
+    detail = check_publish_freshness(now=_at(2026, 9, 30, 18))["detail"]
+    assert "Google sign-in expired" in detail
+
+
+def test_an_old_error_does_not_blame_a_later_success(tmp_path, monkeypatch):
+    from stocksage.doctor import PASS, check_publish_freshness
+
+    _brain_with(
+        tmp_path, monkeypatch, ok="2026-09-30T14:00:00+00:00",
+        err="2026-09-26T14:00:00+00:00|old failure",
+    )
+    result = check_publish_freshness(now=_at(2026, 9, 30, 18))
+    assert result["status"] == PASS and "old failure" not in result["detail"]
+
+
+def test_never_published_warns(tmp_path, monkeypatch):
+    from stocksage.doctor import WARN, check_publish_freshness
+
+    _brain_with(tmp_path, monkeypatch)
+    assert check_publish_freshness()["status"] == WARN
+
+
+def test_no_drive_setup_means_nothing_to_check(tmp_path, monkeypatch):
+    from stocksage.doctor import PASS, check_publish_freshness
+
+    monkeypatch.delenv("STOCKSAGE_DRIVE_TOKEN", raising=False)
+    monkeypatch.setattr("pathlib.Path.exists", lambda self: False)
+    assert check_publish_freshness()["status"] == PASS
+
+
+def test_publish_records_success_and_failure_in_the_brain(tmp_path, monkeypatch):
+    from stocksage import cli
+    from stocksage.db import Database
+
+    monkeypatch.setenv("STOCKSAGE_DB", str(tmp_path / "b.db"))
+
+    class E:
+        db = Database(tmp_path / "b.db")
+
+    cli._record_publish(E)
+    cli._record_publish(E, error="token expired")
+    assert E.db.get_meta("last_publish_ok")
+    assert E.db.get_meta("last_publish_error").endswith("|token expired")
+
+
+def test_recording_a_publish_can_never_break_one():
+    from stocksage import cli
+
+    class Broken:
+        class db:
+            @staticmethod
+            def set_meta(*a):
+                raise RuntimeError("disk full")
+
+    cli._record_publish(Broken)  # must not raise

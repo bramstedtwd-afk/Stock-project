@@ -200,6 +200,24 @@ class Database:
             "SELECT 1 FROM ingested_fills WHERE order_id = ?", (order_id,)
         ).fetchone() is not None
 
+    def owner_call_for_fill(
+        self, ticker: str, action: str, created_at: str, price: float
+    ) -> int | None:
+        """Id of the owner call that already represents this fill, if any.
+
+        The order-id ledger is the primary guard, but it can be missing on a
+        brain that was merged before the ledger travelled with it. Matching
+        on what the fill *is* — same name, side, instant and price — makes
+        re-ingestion harmless however the ledger went missing. Price is part
+        of the key so two genuinely different orders are never conflated.
+        """
+        row = self.conn.execute(
+            "SELECT MIN(id) FROM suggestions WHERE source = ? AND ticker = ?"
+            " AND action = ? AND created_at = ? AND ABS(price - ?) < 0.005",
+            (SOURCE_OWNER, ticker, action, created_at, price),
+        ).fetchone()
+        return row[0] if row and row[0] is not None else None
+
     def mark_fill_ingested(self, order_id: str, suggestion_id: int) -> None:
         self.conn.execute(
             "INSERT OR IGNORE INTO ingested_fills (order_id, suggestion_id, ingested_at)"

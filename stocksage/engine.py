@@ -199,6 +199,7 @@ class Engine:
         sector_grades: dict[str, int] = {}
         count = 0
         trained = 0
+        unbenchmarked = 0
         for row in self.db.pending_evaluations(now):
             outcome = self._resolve_outcome(row, now)
             if outcome is UNGRADEABLE:
@@ -210,11 +211,22 @@ class Engine:
                 continue
             realized, exit_date = outcome
             benchmark = self._benchmark_return(row["created_at"][:10], exit_date)
-            excess = realized - benchmark if benchmark is not None else realized
             predicted_up = row["score"] > 0
             hit = (realized > 0) == predicted_up
             self.db.mark_evaluated(row["id"], realized, hit, benchmark)
             count += 1
+
+            if benchmark is None:
+                # No market benchmark for this window, so there is no honest
+                # excess return to learn from. The old behaviour fell back to
+                # the RAW return, which in a rising market rewards every long
+                # call and teaches the model to be permanently bullish — the
+                # exact distortion market-relative grading exists to prevent,
+                # re-admitted silently whenever SPY data was unavailable. The
+                # call stays in the ledger (it is real) but trains nothing.
+                unbenchmarked += 1
+                continue
+            excess = realized - benchmark
 
             # Only the model's own calls train the model. The owner's real
             # fills are recorded and graded so their record can be measured,
@@ -243,6 +255,12 @@ class Engine:
             for name, n in sector_grades.items():
                 key = f"sector_grades:{name}"
                 self.db.set_meta(key, str(int(self.db.get_meta(key, "0")) + n))
+        if unbenchmarked:
+            log.warning(
+                "%d call(s) graded without a market benchmark and left out of "
+                "learning — SPY history was unavailable for their window",
+                unbenchmarked,
+            )
         if count:
             log.info(
                 "graded %d matured calls (%d of them the model's own, "

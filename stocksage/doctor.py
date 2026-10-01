@@ -209,6 +209,85 @@ def check_routine_account() -> dict:
     )
 
 
+def business_days_since(last, now) -> int:
+    """Weekdays elapsed after `last`'s date, up to and including `now`'s.
+
+    A Monday 3pm publish checked Wednesday morning is 2: Tuesday and
+    Wednesday have both started with no publish in them. Weekends do not
+    count, because nothing is expected to publish on them.
+    """
+    from datetime import timedelta
+
+    days, day = 0, last.date()
+    while day < now.date():
+        day += timedelta(days=1)
+        if day.weekday() < 5:
+            days += 1
+    return days
+
+
+def check_publish_freshness(now=None) -> dict:
+    """Is the research the routine reads actually being refreshed?
+
+    The job being *scheduled* proves nothing — a laptop that was asleep, a
+    signed-out session or an expired sign-in all leave the schedule intact
+    while nothing is published. The routine only finds out when it reads a
+    stale brief; this lets the desktop find out first.
+    """
+    from datetime import datetime, timezone
+
+    from .db import Database
+
+    now = now or datetime.now(timezone.utc)
+    drive_set_up = bool(os.environ.get("STOCKSAGE_DRIVE_TOKEN")) or Path(
+        "~/.stocksage/drive_token.json"
+    ).expanduser().exists()
+    if not drive_set_up:
+        return _check("Publishing", PASS, "not publishing to Drive (optional)")
+
+    try:
+        db = Database()
+        last_ok = db.get_meta("last_publish_ok")
+        last_err = db.get_meta("last_publish_error")
+        db.close()
+    except Exception:
+        return _check("Publishing", PASS, "skipped — brain unreadable (see Brain above)")
+
+    redo = (
+        "Run '.\\start.bat publish-drive' by hand and read what it says. If the "
+        "computer was asleep or signed out at publish time, the scheduled runs "
+        "were skipped — they only run while this Windows account is signed in "
+        "and awake."
+    )
+    if not last_ok:
+        return _check(
+            "Publishing", WARN, "no successful publish recorded on this computer yet",
+            redo,
+        )
+    try:
+        last = datetime.fromisoformat(last_ok)
+    except ValueError:
+        return _check("Publishing", WARN, "the last-publish record is unreadable", redo)
+
+    behind = business_days_since(last, now)
+    reason = ""
+    if last_err and "|" in last_err:
+        err_at, _, err_msg = last_err.partition("|")
+        if err_at > last_ok:
+            reason = f" The last attempt failed: {err_msg}"
+    if behind >= 2:
+        return _check(
+            "Publishing", WARN,
+            f"the last successful publish was {last.astimezone():%a %d %b %H:%M} — "
+            f"{behind} weekdays ago, so your routine is reading a stale brief."
+            + reason,
+            redo,
+        )
+    return _check(
+        "Publishing", PASS, f"last published {last.astimezone():%a %d %b %H:%M}"
+    )
+
+
 def check_update_channel() -> dict:
     import subprocess
 
@@ -293,6 +372,7 @@ ALL_CHECKS = (
     check_robinhood,
     check_account_security,
     check_routine_account,
+    check_publish_freshness,
     check_update_channel,
     check_autopilot,
 )
