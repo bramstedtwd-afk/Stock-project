@@ -211,6 +211,16 @@ def evaluate(
 
     result = Result(periods=len(model_edges), no_signal_periods=no_signal, picks=picks_total,
                     per_period=model_edges, picks_log=picks_log)
+    return _finish(result, model_edges, random_edges, universe_edges, seed)
+
+
+def _finish(result: Result, model_edges, random_edges, universe_edges, seed: int) -> Result:
+    """The statistics every strategy is judged by, in one place.
+
+    The Hedge model and any challenger go through this same function, so a
+    difference in verdict can only come from the picks, never from how they
+    were scored.
+    """
     n = len(model_edges)
     if n < 2:
         return result
@@ -224,6 +234,73 @@ def evaluate(
     result.vs_random = mean - result.random_edge
     result.level = trust_level(n, mean, result.se)
     return result
+
+
+def evaluate_ridge(
+    samples: list[Sample],
+    top_n: int = DEFAULT_TOP_N,
+    cost: float = DEFAULT_COST,
+    alpha: float = 10.0,
+    seed: int = 7,
+) -> Result:
+    """A challenger: ridge regression on the same features, same rules.
+
+    Walk-forward and exact: the normal equations are accumulated from resolved
+    outcomes only (a pick made at the previous date is added the moment it
+    finishes, never before), then solved fresh at every date. It picks the
+    names with the highest PREDICTED excess return, requiring the prediction to
+    clear zero. Everything else — costs, random baseline, interval — is
+    identical to evaluate(), via _finish.
+    """
+    by_date: dict[str, list[Sample]] = {}
+    for smp in samples:
+        by_date.setdefault(smp.date, []).append(smp)
+    names = sorted({k for smp in samples for k in smp.features})
+    d = len(names) + 1                                   # + intercept
+
+    def vec(smp: Sample) -> np.ndarray:
+        return np.array([1.0] + [smp.features.get(k, 0.0) for k in names])
+
+    xtx, xty = np.zeros((d, d)), np.zeros(d)
+    penalty = alpha * np.eye(d)
+    penalty[0, 0] = 0.0                                  # never shrink the intercept
+    rng = random.Random(seed)
+    model_edges, random_edges, universe_edges = [], [], []
+    picks_total, no_signal, previous = 0, 0, []
+    picks_log: dict[str, list[str]] = {}
+    trained = 0
+
+    for date_key in sorted(by_date):
+        today = by_date[date_key]
+        for smp in previous:                             # resolved as of today
+            x = vec(smp)
+            xtx += np.outer(x, x)
+            xty += x * smp.excess
+            trained += 1
+        previous = today
+        if trained < d * 5:                              # too little to fit anything
+            no_signal += 1
+            continue
+        w = np.linalg.solve(xtx + penalty, xty)
+        preds = sorted(((float(vec(smp) @ w), smp) for smp in today), key=lambda t: t[0], reverse=True)
+        chosen = [smp for pred, smp in preds if pred > 0][:top_n]
+        if not chosen:
+            no_signal += 1
+            continue
+        k = len(chosen)
+        picks_total += k
+        picks_log[date_key] = [smp.ticker for smp in chosen]
+        model_edges.append(sum(smp.excess for smp in chosen) / k - cost)
+        universe_edges.append(sum(smp.excess for smp in today) / len(today))
+        draws = [
+            sum(smp.excess for smp in rng.sample(today, min(k, len(today)))) / min(k, len(today))
+            for _ in range(RANDOM_DRAWS)
+        ]
+        random_edges.append(sum(draws) / len(draws) - cost)
+
+    result = Result(periods=len(model_edges), no_signal_periods=no_signal, picks=picks_total,
+                    per_period=model_edges, picks_log=picks_log)
+    return _finish(result, model_edges, random_edges, universe_edges, seed)
 
 
 # --- the words ---------------------------------------------------------------

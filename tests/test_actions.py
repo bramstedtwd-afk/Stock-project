@@ -209,37 +209,56 @@ def test_the_best_ranked_idea_is_taken_first():
 
 # ---------------------------------------------------------------- confidence & trust
 
-def test_by_default_a_failing_model_still_gets_numbered_buys_tagged_low_confidence():
-    """The owner's choice: keep the BUY lines, but never let a model that
-    trails the market look confident, and keep its record on the page."""
+def test_when_always_a_failing_model_still_gets_numbered_buys_tagged_low_confidence():
+    """STOCKSAGE_ENTRIES=always: numbered lines, but a model that trails the
+    market can never look confident, and its record stays on the page."""
     plan = plan_for([], [sug("NEW", score=0.95)], cash=200, trust=FAILING,
-                    reliability={"NEW": (20, 0.95)})
+                    reliability={"NEW": (20, 0.95)}, entries="always")
     enter = next(a for a in plan.actions if a.kind == "ENTER")
     assert enter.confidence == "low"
     assert not [a for a in plan.actions if a.kind == "IDEA"]
     assert "TRAILING" in plan.notes[0]
 
 
-def test_the_strict_gate_demotes_a_failing_models_buys_to_ideas():
-    """Opt-in (STOCKSAGE_STRICT_GATE): a model that measurably trails the
-    market has not earned a BUY line — it is shown as an idea."""
-    plan = plan_for([], [sug("NEW", score=0.95)], cash=200, trust=FAILING,
-                    reliability={"NEW": (20, 0.95)}, strict_gate=True)
-    assert not [a for a in plan.actions if a.kind == "ENTER"]
-    idea = next(a for a in plan.actions if a.kind == "IDEA")
-    assert idea.confidence == "low" and idea.dollars is None and idea.side == "WATCH"
-    assert any("trailing the market" in n for n in plan.notes)
+def test_by_default_buys_are_only_ideas_until_the_buy_side_is_proven():
+    """The owner's rule: no numbered BUY from a model whose buy picks have not
+    been shown to beat the market."""
+    for trust in (UNPROVEN, FAILING):
+        plan = plan_for([], [sug("NEW", score=0.95)], cash=200, trust=trust,
+                        reliability={"NEW": (20, 0.95)})
+        assert not [a for a in plan.actions if a.kind == "ENTER"], trust
+        idea = next(a for a in plan.actions if a.kind == "IDEA")
+        assert idea.confidence == "low" and idea.dollars is None and idea.side == "WATCH"
+        assert any("not been proven" in n for n in plan.notes)
+
+
+def test_a_proven_live_record_earns_numbered_buys():
+    plan = plan_for([], [sug("NEW")], cash=200, trust=TRUSTED)
+    assert any(a.kind == "ENTER" for a in plan.actions)
+
+
+def test_a_backtest_that_found_an_edge_earns_numbered_buys_too():
+    plan = plan_for([], [sug("NEW")], cash=200, trust=UNPROVEN, backtest_level="earned")
+    assert any(a.kind == "ENTER" for a in plan.actions)
+    for level in (None, "unproven", "failing"):
+        assert not any(a.kind == "ENTER" for a in
+                       plan_for([], [sug("NEW")], cash=200, trust=UNPROVEN,
+                                backtest_level=level).actions)
+
+
+def test_never_removes_model_buys_entirely_not_even_as_ideas():
+    plan = plan_for([], [sug("NEW")], cash=200, trust=TRUSTED, entries="never")
+    assert not [a for a in plan.actions if a.kind in ("ENTER", "IDEA", "WATCH")]
 
 
 def test_an_unproven_model_still_makes_suggestions_so_a_new_install_is_not_dead():
-    plan = plan_for([], [sug("NEW")], cash=200, trust=UNPROVEN)
+    plan = plan_for([], [sug("NEW")], cash=200, trust=UNPROVEN, entries="always")
     assert any(a.kind == "ENTER" for a in plan.actions)
 
 
 def test_the_gate_does_not_touch_exits_or_spend_the_budget():
     held = [pos("AAA", cost=100, price=90)]
-    plan = plan_for(held, [sug("AAA"), sug("NEW", price=40)], cash=10, trust=FAILING,
-                    strict_gate=True)
+    plan = plan_for(held, [sug("AAA"), sug("NEW", price=40)], cash=10, trust=FAILING)
     assert ("EXIT_STOP", "AAA") in kinds(plan)
     assert not any(a.dollars for a in plan.actions if a.kind == "IDEA")
 
@@ -247,7 +266,7 @@ def test_the_gate_does_not_touch_exits_or_spend_the_budget():
 def test_ideas_never_appear_in_the_numbered_list_or_trigger_alerts():
     from stocksage.notify import alertable
 
-    plan = plan_for([], [sug("NEW")], cash=200, trust=FAILING, strict_gate=True)
+    plan = plan_for([], [sug("NEW")], cash=200, trust=FAILING)
     text = "\n".join(format_plan(plan))
     assert "Ideas (not recommendations)" in text
     assert "Nothing to do today" in text and "1." not in text
@@ -320,7 +339,7 @@ def test_high_confidence_needs_conviction_a_good_name_record_and_an_earned_model
                     reliability={"NEW": (12, 0.8)})
     assert next(a for a in best.actions if a.kind == "ENTER").confidence == "high"
     unproven = plan_for([], [sug("NEW", score=0.9)], cash=200, trust=UNPROVEN,
-                        reliability={"NEW": (12, 0.8)})
+                        reliability={"NEW": (12, 0.8)}, entries="always")
     assert next(a for a in unproven.actions if a.kind == "ENTER").confidence == "medium"
 
 
@@ -614,20 +633,34 @@ def test_a_profile_can_be_overridden_in_config_and_garbage_is_ignored(monkeypatc
     assert profile_for("roth") == "core", "an unreadable value must fall back, not break"
 
 
-def test_the_strict_gate_is_read_from_the_environment(monkeypatch):
+def test_the_entries_policy_is_read_from_the_environment(monkeypatch):
+    from stocksage.advisor import entries_policy, plan_for_account
+    from stocksage.db import Database
+    from stocksage.engine import Engine
+    from tests.test_engine import FakeMarket
+
+    engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
+    monkeypatch.setattr("stocksage.actions.model_trust", lambda rows: UNPROVEN)
+    monkeypatch.delenv("STOCKSAGE_ENTRIES", raising=False)
+    assert entries_policy() == "proven"
+    assert not any(a.kind == "ENTER" for a in plan_for_account(engine, [sug("NEW")], [], 200.0).actions)
+    monkeypatch.setenv("STOCKSAGE_ENTRIES", "always")
+    assert any(a.kind == "ENTER" for a in plan_for_account(engine, [sug("NEW")], [], 200.0).actions)
+    monkeypatch.setenv("STOCKSAGE_ENTRIES", "nonsense")
+    assert entries_policy() == "proven", "garbage must fall back to the cautious default"
+
+
+def test_a_stored_backtest_verdict_reaches_the_plan(monkeypatch):
     from stocksage.advisor import plan_for_account
     from stocksage.db import Database
     from stocksage.engine import Engine
     from tests.test_engine import FakeMarket
 
     engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
-    monkeypatch.setattr("stocksage.actions.model_trust", lambda rows: FAILING)
-    monkeypatch.delenv("STOCKSAGE_STRICT_GATE", raising=False)
-    loose = plan_for_account(engine, [sug("NEW")], [], 200.0)
-    assert any(a.kind == "ENTER" for a in loose.actions)
-    monkeypatch.setenv("STOCKSAGE_STRICT_GATE", "1")
-    strict = plan_for_account(engine, [sug("NEW")], [], 200.0)
-    assert not any(a.kind == "ENTER" for a in strict.actions)
+    monkeypatch.setattr("stocksage.actions.model_trust", lambda rows: UNPROVEN)
+    monkeypatch.delenv("STOCKSAGE_ENTRIES", raising=False)
+    engine.db.set_meta("backtest_level", "earned")
+    assert any(a.kind == "ENTER" for a in plan_for_account(engine, [sug("NEW")], [], 200.0).actions)
 
 
 def test_a_position_held_for_months_is_an_investment_not_a_trade():

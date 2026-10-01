@@ -573,6 +573,60 @@ def cmd_backtest(args) -> int:
     return 0
 
 
+def cmd_lab(args) -> int:
+    """Try several ideas honestly and say whether any beats holding the market."""
+    import json
+    from datetime import datetime, timezone
+
+    from . import backtest, lab
+    from .data import MarketData
+    from .db import Database
+
+    period = f"{args.years}y"
+    print(
+        f"Testing six ideas over {args.years} years of history, each judged against\n"
+        "simply holding SPY and corrected for how many were tried.\n"
+        "This downloads data for the whole universe and takes several minutes.\n"
+    )
+    market = MarketData()
+    try:
+        market.prefetch(universe.all_tickers(), period=period)
+        weekly = backtest.collect_samples(market, period=period)
+        monthly = lab.collect_monthly(market, period=period)
+    except RuntimeError as exc:
+        print(f"Could not run the lab: {exc}")
+        return 1
+
+    cost = args.cost / 100.0
+    hedge = backtest.evaluate(weekly, cost=cost)
+    ridge = backtest.evaluate_ridge(weekly, cost=cost)
+    family = 4 + 2
+    results = lab.run_all(monthly, extra=[hedge, ridge], cost=cost)
+    for name, weekly_result in (("current model (weekly)", hedge), ("ridge challenger (weekly)", ridge)):
+        wrapped = lab.relevel(weekly_result, family)
+        wrapped.name = name
+        results.append(wrapped)
+    print("\n".join(lab.describe(results)))
+
+    state = Path("~/.stocksage").expanduser()
+    try:
+        state.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        (state / "lab.json").write_text(
+            json.dumps({"at": stamp, "years": args.years, "cost_pct": args.cost,
+                        "results": [r.to_dict() for r in results]}, indent=2),
+            encoding="utf-8")
+        winners = [r.name for r in results if r.level == "earned"]
+        db = Database()
+        db.set_meta("lab_winners", ",".join(winners))
+        db.set_meta("lab_at", stamp)
+        db.close()
+        print(f"\n(Saved to {state / 'lab.json'})")
+    except OSError:
+        pass
+    return 0
+
+
 def _record_publish(engine, error: str | None = None) -> None:
     """Remember whether the last publish worked, inside the brain.
 
@@ -1185,6 +1239,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cost", type=float, default=0.10,
                    help="round-trip cost per pick, in percent (default 0.10)")
     p.set_defaults(func=cmd_backtest)
+
+    p = sub.add_parser(
+        "lab",
+        help="try several strategies honestly: does anything beat just holding the market?",
+    )
+    p.add_argument("--years", type=int, default=5, choices=[3, 5, 10],
+                   help="how much history (more = a firmer answer; monthly ideas need 5+)")
+    p.add_argument("--cost", type=float, default=0.10,
+                   help="round-trip cost per pick, in percent (default 0.10)")
+    p.set_defaults(func=cmd_lab)
 
     p = sub.add_parser(
         "actions", help="what to do today: sells, trims and entries, in plain language"

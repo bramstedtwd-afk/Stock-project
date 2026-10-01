@@ -565,9 +565,15 @@ def plan_for_account(engine: Engine, suggestions: list, positions: list[dict],
         reliability=reliability,
         profile=profile,
         tax_note=tax_note,
-        strict_gate=(os.environ.get("STOCKSAGE_STRICT_GATE") or "").strip().lower()
-        in ("1", "true", "yes", "on"),
+        entries=entries_policy(),
+        backtest_level=engine.db.get_meta("backtest_level"),
     )
+
+
+def entries_policy() -> str:
+    """How model-driven BUYs appear: proven (default) | always | never."""
+    chosen = (os.environ.get("STOCKSAGE_ENTRIES") or "").strip().lower()
+    return chosen if chosen in ("proven", "always", "never") else "proven"
 
 
 ROLE_LABELS = {"agentic": "Agentic", "personal": "Personal", "roth": "Roth IRA"}

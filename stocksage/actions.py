@@ -254,7 +254,8 @@ def build_plan(
     reliability: dict[str, tuple[int, float | None]] | None = None,
     profile: str = "active",
     tax_note: str | None = None,
-    strict_gate: bool = False,
+    entries: str = "proven",
+    backtest_level: str | None = None,
 ) -> Plan:
     """Rank what to do, given the account and the scan.
 
@@ -269,9 +270,13 @@ def build_plan(
     or a 10-day clock on something owned for two, would flood the first run
     with sell lines for things that were never trades.
 
-    strict_gate=True demotes a failing model's buys to unnumbered "ideas".
-    It is off by default: the owner chose to see the model's buys as normal
-    lines tagged low confidence, with its track record shown above them.
+    entries decides whether the model's BUYS are numbered actions:
+      "proven" (default) - only when the buy side has earned it, by its live
+                           record or by a backtest; otherwise they are shown as
+                           unnumbered "ideas". Sells, trims and exits are risk
+                           rules and are never held back.
+      "always"           - numbered BUY lines regardless, tagged by confidence.
+      "never"            - no model-driven buys at all, not even as ideas.
 
     positions: [{ticker, shares, avg_cost, price, equity}] for the account the
     routine trades. cash: settled buying power there. entry_dates: when each
@@ -413,7 +418,10 @@ def build_plan(
         budget = cash + freed
         cap = MAX_POSITION_FRACTION * total_equity
         picked = ranked[:slots] if slots else []
-        failing = strict_gate and trust.get("level") == "failing"
+        proven = trust.get("level") == "earned" or backtest_level == "earned"
+        failing = entries == "proven" and not proven   # shown as ideas, not actions
+        if entries == "never":
+            picked = []
         watch = 0
         for i, s in enumerate(picked):
             size = min(cap, budget / (len(picked) - i)) if budget > 0 else 0.0
@@ -462,10 +470,11 @@ def build_plan(
                 watch += 1
         if failing and picked:
             plan.notes.append(
-                "Because the model is trailing the market, its buy ideas are listed "
-                "as ideas, not recommendations. Over the same calls the plain market "
-                "did better than the model's picks, so cash can reasonably wait or "
-                "sit in a broad index fund — your call, not advice."
+                "The model's buy picks have not been proven better than random "
+                "(run .\\start.bat backtest), so they are shown as ideas, not "
+                "recommendations. Sells, trims and exits are unaffected. Until a "
+                "strategy passes, cash can reasonably wait or sit in a broad "
+                "index fund — your call, not advice."
             )
         if slots == 0 and ranked:
             plan.notes.append(

@@ -297,3 +297,41 @@ def test_an_unknown_side_is_refused_not_silently_treated_as_buy():
 def test_the_report_names_the_side_and_states_which_way_is_good():
     sells = "\n".join(describe(evaluate(make_samples(signal=0.02, n_dates=140), side="sell"), side="sell"))
     assert "SELL CALLS TRAIL" in sells and "positive = the sells were right" in sells
+
+
+# ------------------------------------------------------------ the ridge challenger
+
+def test_the_challenger_finds_a_real_linear_signal():
+    r = backtest.evaluate_ridge(make_samples(signal=0.02, n_dates=160))
+    assert r.edge > 0.005 and r.level == "earned"
+
+
+def test_the_challenger_does_not_invent_an_edge_from_noise():
+    for seed in range(8):
+        r = backtest.evaluate_ridge(make_samples(signal=0.0, seed=seed, n_dates=160))
+        assert r.level != "earned", f"noise world {seed}"
+
+
+def test_the_challenger_cannot_see_the_future():
+    full = make_samples(signal=0.01, n_dates=120, seed=5)
+    cut = sorted({s.date for s in full})[69]
+    early = [s for s in full if s.date <= cut]
+    a, b = backtest.evaluate_ridge(full), backtest.evaluate_ridge(early)
+    k = len(b.per_period)
+    assert k > 20 and a.per_period[:k] == b.per_period
+
+
+def test_the_challenger_never_trains_on_the_outcome_of_the_date_it_is_picking():
+    base = make_samples(signal=0.01, n_dates=90, seed=8)
+    target = sorted({s.date for s in base})[60]
+    flipped = [Sample(s.date, s.ticker, s.features, -s.excess * 100 if s.date == target else s.excess, s.vol)
+               for s in base]
+    assert backtest.evaluate_ridge(base).picks_log[target] == backtest.evaluate_ridge(flipped).picks_log[target]
+
+
+def test_the_challenger_and_the_current_model_are_scored_by_the_same_function():
+    s = make_samples(signal=0.01, n_dates=100, seed=2)
+    a, b = backtest.evaluate(s), backtest.evaluate_ridge(s)
+    assert a.level in ("earned", "unproven", "failing") and b.level in ("earned", "unproven", "failing")
+    # The same interval machinery: a seeded bootstrap of identical data is identical.
+    assert backtest._block_bootstrap_ci(a.per_period, 7) == backtest._block_bootstrap_ci(a.per_period, 7)

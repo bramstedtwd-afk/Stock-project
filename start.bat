@@ -1,6 +1,7 @@
 @echo off
 rem StockSage one-command launcher (Windows).
 rem   .\start.bat            -> open StockSage in its own app window
+rem   .\start.bat lab         -> try several strategies: does anything beat holding the market?
 rem   .\start.bat backtest    -> does the model have an edge? (replays history honestly)
 rem   .\start.bat actions    -> what to do today: sells, trims, entries
 rem   .\start.bat setup      -> new machine? guided setup: brain, settings, checks
