@@ -35,6 +35,13 @@ using it (-1.39% a period, all below zero). Treat anything on stocks with
 extra suspicion: the stock universe is today's winners, which flatters every
 momentum test (survivorship).
 
+## The owner's goal (2026-10-01)
+
+**Maximum growth: hold the market, manage risk only.** The trend rules are
+therefore context, not instructions. Sale proceeds default to a broad index
+fund, because nothing tested here has beaten one. The sheet keeps a forward
+scorecard (below) so any idea that later earns a place does so on live evidence.
+
 ## What is in force
 
 1. **Rules, always.** Stop-loss, 25% size cap, 10-day clock (agentic account
@@ -46,7 +53,15 @@ momentum test (survivorship).
 3. **Model opinions are ideas.** A model BUY is a plain BUY only when look-alike
    history backs it *and* the buy side has earned trust (`STOCKSAGE_ENTRIES`).
    Today neither holds, so buys are listed as ideas.
-4. **Model SELLs** are stated as `[MODEL]`. The live record is promising and the
+4. **Where money goes.** Proceeds from trims and sells on the manual accounts
+   default to a broad index fund (the one already held, else VTI), unless a plain
+   BUY wants the cash.
+5. **Forward scorecard.** Every call the sheet makes (rule sells, model sells,
+   trims, plain buys, and the buy ideas history did not back) is logged and graded
+   against SPY after 10 trading days. Verdicts use `actions.trust_level`, the one
+   definition of proof, with uncertainty taken from two-week buckets. It trains
+   nothing. This is the only evidence that can promote a buy idea.
+6. **Model SELLs** are stated as `[MODEL]`. The live record is promising and the
    backtest inconclusive; treat them as a prompt to look, weigh the rules first.
 
 ## How something gets promoted
@@ -55,7 +70,7 @@ momentum test (survivorship).
 |---|---|
 | Idea tested | counted in the family: every variant tried raises the bar for all |
 | Becomes a rule | passes on development years (corrected p < 0.10), then positive on holdout |
-| Becomes an instruction | a forward record: months of live, logged calls graded at the real horizon against SPY |
+| Becomes an instruction | the forward scorecard shows `earned` for that kind of call (enough graded calls and a clear margin over SPY) |
 
 Adding candidates to `research.candidates()` is allowed but is logged by the
 family size in the report. Do not delete the ones that failed.

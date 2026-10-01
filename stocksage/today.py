@@ -49,6 +49,7 @@ class Directive:
     urgency: int = 3
     evidence: str | None = None
     context: list[str] = field(default_factory=list)
+    dollars: float = 0.0
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -65,6 +66,7 @@ class AccountSheet:
     watch: list[str] = field(default_factory=list)
     quiet: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    reinvest: str | None = None                           # where sale proceeds default to
     plan: Plan | None = None                              # evidence-filtered, for alerts
 
     def to_dict(self) -> dict:
@@ -154,13 +156,7 @@ CORE_CLASSES = [("SPY", "US stocks"), ("EFA", "foreign stocks"), ("AGG", "bonds"
 CORE_TREND_DAYS = 150
 
 
-def core_trend_lines(histories: dict) -> list[str]:
-    """Which broad asset classes are in an uptrend. A risk dial, not an order.
-
-    Research (`research` command) found rules of this kind cut the worst
-    drops sharply over 20 years but trailed plain SPY in strong bull runs and
-    showed no alpha in the holdout years alone, so it is stated as context.
-    """
+def _trend_sets(histories: dict) -> tuple[list[str], list[str]]:
     above, below = [], []
     for ticker, label in CORE_CLASSES:
         df = histories.get(ticker)
@@ -168,27 +164,65 @@ def core_trend_lines(histories: dict) -> list[str]:
             continue
         close = df["Close"]
         (above if float(close.iloc[-1]) > float(close.iloc[-CORE_TREND_DAYS:].mean()) else below).append(label)
+    return above, below
+
+
+def core_trend_lines(histories: dict, previous: dict | None = None) -> list[str]:
+    """Which broad asset classes are in an uptrend. A risk dial, not an order.
+
+    `previous` is {"above": [...], "since": "YYYY-MM-DD"} from the last time the
+    set changed; a difference is announced first, because a change of state is
+    the only moment this line matters.
+
+    Research (`research` command) found rules of this kind cut the worst drops
+    sharply over 20 years but trailed plain SPY in strong bull runs and showed no
+    alpha in the holdout years alone, and the owner chose growth over smoothness,
+    so it is stated as context.
+    """
+    above, below = _trend_sets(histories)
     if not above and not below:
         return []
+    out = []
+    if previous and set(previous.get("above", [])) != set(above):
+        went_down = sorted(set(previous["above"]) - set(above))
+        went_up = sorted(set(above) - set(previous["above"]))
+        moves = [f"{x} moved UP into an uptrend" for x in went_up] + \
+                [f"{x} moved DOWN below its trend" for x in went_down]
+        out.append(f"TREND CHANGED since {previous.get('since', 'last check')}: " + "; ".join(moves) + ".")
     total = len(above) + len(below)
-    out = [f"TREND  {len(above)} of {total} broad asset classes are above their "
-           f"{CORE_TREND_DAYS}-day average"
-           + (f" (up: {', '.join(above)}" if above else " (")
-           + (f"{'; ' if above else ''}down: {', '.join(below)}" if below else "")
-           + ")."]
+    out.append(f"TREND  {len(above)} of {total} broad asset classes are above their "
+               f"{CORE_TREND_DAYS}-day average"
+               + (f" (up: {', '.join(above)}" if above else " (")
+               + (f"{'; ' if above else ''}down: {', '.join(below)}" if below else "")
+               + ").")
     out.append("TREND  In 20 years of tests, selling what falls below its trend cut the worst "
                "drops a lot but trailed buy-and-hold in strong years: a risk dial, not an order.")
     return out
 
 
-def _core_trend(engine) -> list[str]:
+def _core_trend(engine, track: bool = False, today: datetime | None = None) -> list[str]:
     hist = {}
     for ticker, _ in CORE_CLASSES:
         try:
             hist[ticker] = engine.market.history(ticker)
         except Exception:
             hist[ticker] = None
-    return core_trend_lines(hist)
+    previous = None
+    try:
+        raw = engine.db.get_meta("trend_state")
+        previous = json.loads(raw) if raw else None
+    except Exception:
+        previous = None
+    lines = core_trend_lines(hist, previous)
+    if track:
+        try:
+            above, _ = _trend_sets(hist)
+            if above and (previous is None or set(previous.get("above", [])) != set(above)):
+                since = (today or datetime.now()).strftime("%Y-%m-%d")
+                engine.db.set_meta("trend_state", json.dumps({"above": above, "since": since}))
+        except Exception:
+            pass
+    return lines
 
 
 def _news_line(engine, ticker: str) -> str | None:
@@ -234,6 +268,13 @@ def _money(x: float | None) -> str:
 
 
 def _directive(a: Action) -> Directive | None:
+    d = _directive_text(a)
+    if d is not None:
+        d.dollars = float(a.dollars or 0.0)
+    return d
+
+
+def _directive_text(a: Action) -> Directive | None:
     if a.kind == "EXIT_STOP":
         return Directive("SELL", a.ticker, f"SELL ALL {a.ticker} (~{_money(a.dollars)}) — hit its stop",
                          "risk rule", 1)
@@ -257,6 +298,35 @@ def _directive(a: Action) -> Directive | None:
     return None
 
 
+BROAD_INDEX = ("VTI", "VOO", "SPY", "IVV", "VT")
+
+
+def _reinvest(acct: AccountSheet) -> str | None:
+    """Where money from sells and trims defaults to: a broad index fund.
+
+    Five years of testing found no stock-picking idea that beat the index, so
+    the default home for proceeds is the index, not another stock. Skipped for the
+    routine's account (its own playbook decides), when a plain BUY already wants
+    the cash, and for proceeds that came from an index fund itself.
+    """
+    from .actions import ENTRY_FLOOR, INDEX_FUNDS
+
+    if not acct.manual or any(d.verb == "BUY" for d in acct.directives):
+        return None
+    sold = [d for d in acct.directives if d.verb in ("SELL", "TRIM") and d.ticker not in INDEX_FUNDS]
+    proceeds = sum(d.dollars for d in sold)
+    if proceeds < ENTRY_FLOOR:
+        return None
+    sold_names = {d.ticker for d in acct.directives if d.verb in ("SELL", "TRIM")}
+    held = set(acct.plan.quiet) if acct.plan else set()
+    options = [t for t in BROAD_INDEX if t not in sold_names]
+    dest = next((t for t in options if t in held), options[0] if options else None)
+    if dest is None:
+        return None
+    return (f"THEN  Put the ~${proceeds:,.0f} from those sales into {dest}. "
+            "Nothing tested here has beaten a broad index, so that is the default home for it.")
+
+
 def lab_status(db) -> str:
     """Has the look-alike filter itself passed an out-of-sample test?"""
     when = db.get_meta("lab_at")
@@ -272,7 +342,8 @@ def lab_status(db) -> str:
 
 
 def build_sheet(engine, client, suggestions=None, book="auto", news: bool = True,
-                now: datetime | None = None, plans: dict | None = None) -> Sheet:
+                now: datetime | None = None, plans: dict | None = None,
+                track: bool = False) -> Sheet:
     """Assemble the sheet for every account under the login."""
     from .advisor import plans_for_accounts
 
@@ -300,7 +371,7 @@ def build_sheet(engine, client, suggestions=None, book="auto", news: bool = True
         sector_trends = {}
 
     sheet = Sheet(generated_at=now.strftime("%a %d %b %Y, %H:%M"),
-                  market=_market_lines(engine), trend=_core_trend(engine), overall_notes=list(result.get("overall_notes", [])))
+                  market=_market_lines(engine), trend=_core_trend(engine, track, now), overall_notes=list(result.get("overall_notes", [])))
     if book is None:
         sheet.notes.append(
             "Look-alike history is not built yet, so no BUY can be stated plainly. "
@@ -340,9 +411,14 @@ def build_sheet(engine, client, suggestions=None, book="auto", news: bool = True
                 d.context.append(news_cache[d.ticker])
             acct.directives.append(d)
         acct.directives.sort(key=lambda d: d.urgency)
+        acct.reinvest = _reinvest(acct)
         sheet.accounts.append(acct)
     if any(d.verb == "BUY" for a in sheet.accounts for d in a.directives):
         sheet.notes.append(lab_status(engine.db))
+    from . import scorekeeping
+
+    sheet.notes += (scorekeeping.update(engine, sheet, now.date() if now else None)
+                    if track else scorekeeping.lines(engine.db))
     return sheet
 
 
@@ -366,6 +442,8 @@ def _bottom_line(a: AccountSheet) -> list[str]:
             out.append("  BUY: nothing.")
     if not sells:
         out.append("  SELL: nothing.")
+    if a.reinvest:
+        out.append(f"  {a.reinvest}")
     return out
 
 

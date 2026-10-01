@@ -82,6 +82,18 @@ CREATE TABLE IF NOT EXISTS ingested_fills (
     ingested_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS sheet_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    call_date TEXT NOT NULL,          -- the day the sheet said it
+    ticker TEXT NOT NULL,
+    kind TEXT NOT NULL,               -- sell_rule / sell_model / trim / buy / idea
+    horizon_days INTEGER NOT NULL,
+    evaluated INTEGER NOT NULL DEFAULT 0,
+    ret REAL,                         -- the stock's return over the horizon
+    bench_ret REAL,                   -- SPY's over the same bars
+    UNIQUE (call_date, ticker, kind)
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL

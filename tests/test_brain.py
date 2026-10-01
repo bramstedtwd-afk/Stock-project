@@ -314,4 +314,4 @@ def test_the_committed_snapshot_in_this_repo_is_clean():
         pytest.skip("no snapshot committed")
     counts = _counts(SNAPSHOT_PATH)
     for table in PRIVATE_TABLES:
-        assert counts[table] == 0, f"{table} in the committed snapshot has real data"
+        assert counts.get(table, 0) == 0, f"{table} in the committed snapshot has real data"

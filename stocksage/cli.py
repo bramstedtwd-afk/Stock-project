@@ -563,7 +563,7 @@ def _refresh_today(engine, client, upload: bool = True, rebuild_book: bool = Fal
                     book.save()
                 except Exception as exc:       # keep going with whatever book exists
                     out["error"] = f"look-alike refresh failed: {exc}"
-        sheet = today.build_sheet(engine, client)
+        sheet = today.build_sheet(engine, client, track=True)
         text = today.render_text(sheet)
         today.save_local(sheet, text)
         out.update(sheet=sheet, text=text)

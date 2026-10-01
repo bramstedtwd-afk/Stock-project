@@ -197,6 +197,18 @@ def merge_brains(dest_path: str | Path, src_path: str | Path) -> dict:
             )
             stats["ingested_fills_added"] = conn.total_changes - before
 
+        # The forward record (what the sheet said, and how it turned out) is
+        # months of evidence that must follow the owner to a new machine.
+        if "sheet_calls" in src_tables:
+            before = conn.total_changes
+            conn.execute(
+                "INSERT OR IGNORE INTO sheet_calls"
+                " (call_date, ticker, kind, horizon_days, evaluated, ret, bench_ret)"
+                " SELECT call_date, ticker, kind, horizon_days, evaluated, ret, bench_ret"
+                " FROM src.sheet_calls"
+            )
+            stats["sheet_calls_added"] = conn.total_changes - before
+
         # Weights travel as a whole vector: take whichever learned last.
         src_ts = conn.execute("SELECT MAX(updated_at) FROM src.weights").fetchone()[0]
         dest_ts = conn.execute("SELECT MAX(updated_at) FROM weights").fetchone()[0]
@@ -285,7 +297,10 @@ STATE_DIR = Path("~/.stocksage").expanduser()
 # execution price and timestamp — and the calls derived from those fills.
 # That is a personal financial record, and this one file is committed to a
 # public repository. Learned knowledge travels; the account does not.
-PRIVATE_TABLES = ("rh_orders", "rh_dividends", "ingested_fills")
+# sheet_calls says which of the owner's holdings the sheet told them to sell or
+# trim, so it is private too; it travels between the owner's own machines
+# (merge_brains) but is never put in the snapshot.
+PRIVATE_TABLES = ("rh_orders", "rh_dividends", "ingested_fills", "sheet_calls")
 
 
 def scrub_personal_data(path: str | Path) -> dict:

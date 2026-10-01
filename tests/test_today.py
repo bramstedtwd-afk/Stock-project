@@ -366,3 +366,72 @@ def test_concentration_across_accounts_leads_the_bottom_line(real_book):
     risk = text.index("BIGGEST RISK")
     assert "PERS is " in text[risk:risk + 120]
     assert risk < text.index("AGENTIC")
+
+
+# ------------------------------------------------------------ where the money goes
+
+def _acct(directives, quiet=(), manual=True):
+    acct = today.AccountSheet(role="personal", title="Personal", label="x", manual=manual,
+                              directives=directives, plan=Plan(quiet=list(quiet)))
+    acct.reinvest = today._reinvest(acct)
+    return acct
+
+
+def trim(t, dollars):
+    return today.Directive("TRIM", t, f"TRIM {t}", "risk rule", dollars=dollars)
+
+
+def test_trim_proceeds_default_to_the_index_fund_already_held():
+    acct = _acct([trim("TXN", 160.0), trim("TMO", 130.0)], quiet=["AMZN", "VTI"])
+    assert "~$290" in acct.reinvest and "into VTI" in acct.reinvest
+    assert "index" in acct.reinvest
+
+
+def test_with_no_index_fund_held_it_names_a_broad_one():
+    assert "into VTI" in _acct([trim("TXN", 160.0)], quiet=["AMZN"]).reinvest
+
+
+def test_money_is_never_sent_back_into_the_thing_just_sold():
+    acct = _acct([trim("TXN", 160.0), today.Directive("SELL", "VTI", "SELL VTI", "model call", dollars=500.0)],
+                 quiet=["VTI"])
+    assert "into VTI" not in acct.reinvest and "into VOO" in acct.reinvest
+    assert "~$160" in acct.reinvest, "selling an index fund is not stock-picking money"
+
+
+def test_no_redeploy_line_for_the_routines_account_tiny_amounts_or_when_a_buy_wants_the_cash():
+    assert _acct([trim("TXN", 160.0)], manual=False).reinvest is None
+    assert _acct([trim("TXN", 5.0)]).reinvest is None
+    buy = today.Directive("BUY", "NEW", "BUY NEW", "model call", dollars=80.0)
+    assert _acct([trim("TXN", 160.0), buy]).reinvest is None
+
+
+def test_the_redeploy_line_reaches_the_bottom_line_after_the_sells():
+    acct = _acct([trim("TXN", 160.0)], quiet=["VTI"])
+    lines = today._bottom_line(acct)
+    assert lines.index(acct.reinvest and f"  {acct.reinvest}") > 1
+
+
+# ------------------------------------------------------------ the trend dial remembers
+
+def test_a_change_in_trend_is_announced_first_with_when_it_last_changed():
+    now = {"SPY": _hist(True), "EFA": _hist(True), "AGG": _hist(False), "GLD": _hist(True), "VNQ": _hist(True)}
+    prev = {"above": ["US stocks", "foreign stocks", "bonds", "gold", "real estate"], "since": "2026-08-03"}
+    lines = today.core_trend_lines(now, prev)
+    assert lines[0].startswith("TREND CHANGED since 2026-08-03") and "bonds moved DOWN" in lines[0]
+    assert not today.core_trend_lines(now, {"above": ["US stocks", "foreign stocks", "gold", "real estate"],
+                                            "since": "x"})[0].startswith("TREND CHANGED")
+
+
+def test_tracking_stores_the_trend_state_and_a_plain_run_does_not():
+    class Mk(FakeMarket):
+        def history(self, ticker, period="1y"):
+            return _hist(ticker != "AGG")
+
+    db = Database(":memory:")
+    engine = Engine(db=db, market=Mk({}))
+    today._core_trend(engine, track=False)
+    assert db.get_meta("trend_state") is None
+    today._core_trend(engine, track=True, today=NOW)
+    import json
+    state = json.loads(db.get_meta("trend_state"))
+    assert state["since"] == "2026-10-06" and "bonds" not in state["above"]
