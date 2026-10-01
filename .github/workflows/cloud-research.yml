@@ -1,0 +1,82 @@
+# Cloud research: scan, grade, learn and publish WITHOUT any computer being on.
+#
+# Replaces the five scheduled Windows tasks and their failure mode (a laptop
+# that is asleep or signed out publishes nothing, and nothing says so).
+#
+# What it deliberately does NOT have: Robinhood credentials. This repository
+# is public and so are its workflow logs; a broker password has no business
+# here. Without them the run does the market-side work only. Which account
+# holds what is decided by your own machine and your routine, where the
+# connector already has legitimate read access.
+#
+# One secret is required: STOCKSAGE_DRIVE_TOKEN (see SETUP.md, "Run it in the
+# cloud"). Optional: STOCKSAGE_HEALTHCHECK_URL, pinged after each good run so a
+# dead-man service can email you when it goes quiet.
+
+name: Cloud research
+
+on:
+  schedule:
+    # Weekdays, UTC. These mirror the desktop's five publish times and its
+    # 17:30 learning run in US Central DAYLIGHT time; after clocks change
+    # (first Sunday of November) they run an hour earlier on the wall clock.
+    - cron: "30 13 * * 1-5"   # 08:30 CT  publish
+    - cron: "45 14 * * 1-5"   # 09:45 CT  publish
+    - cron: "15 16 * * 1-5"   # 11:15 CT  publish
+    - cron: "45 17 * * 1-5"   # 12:45 CT  publish
+    - cron: "30 19 * * 1-5"   # 14:30 CT  publish
+    - cron: "30 22 * * 1-5"   # 17:30 CT  learn, then publish
+  workflow_dispatch:          # the "Run workflow" button: also the first-run probe
+
+permissions:
+  contents: read
+
+# One writer at a time: two runs merging the same brain would race.
+concurrency:
+  group: stocksage-cloud
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      STOCKSAGE_DRIVE_TOKEN: ${{ secrets.STOCKSAGE_DRIVE_TOKEN }}
+      HEALTHCHECK_URL: ${{ secrets.STOCKSAGE_HEALTHCHECK_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Check the Drive sign-in is configured
+        run: |
+          if [ -z "$STOCKSAGE_DRIVE_TOKEN" ]; then
+            echo "STOCKSAGE_DRIVE_TOKEN is not set."
+            echo "Add it under Settings > Secrets and variables > Actions (see SETUP.md)."
+            exit 1
+          fi
+
+      - name: Can this runner reach market data?
+        # A probe, not a gate: Yahoo sometimes throttles shared cloud addresses,
+        # and the log should say so plainly instead of failing three steps later.
+        run: python -m stocksage.doctor || true
+
+      - name: Pull the shared brain from Drive
+        run: python -m stocksage brain pull-drive
+
+      - name: Learn (the evening run, or a manual run)
+        if: ${{ github.event.schedule == '30 22 * * 1-5' || github.event_name == 'workflow_dispatch' }}
+        run: python -m stocksage daily
+
+      - name: Publish the brief, playbook and brain to Drive
+        run: python -m stocksage publish-drive --no-broker
+
+      - name: Tell the dead-man switch we are alive
+        if: ${{ success() && env.HEALTHCHECK_URL != '' }}
+        run: curl -fsS --retry 3 "$HEALTHCHECK_URL" > /dev/null

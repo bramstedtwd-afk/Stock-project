@@ -39,6 +39,7 @@ rather than giving them instructions.
 - `stocksage/actions.py` — the plan: pure rules (stop, target, 10-day exit, 25% cap, $15 floor, 3-4 slots) → ranked sells/trims/entries, each entry carrying the model's measured edge. Mirrors ROUTINE.md; change both together. `stocksage/notify.py` — opt-in ntfy phone alert, once per change, tickers+verbs only (no amounts/account)
 - `stocksage/backtest.py` — walk-forward test of the live scoring code: weights re-learned from only-resolved outcomes, costs, random-pick baseline, block-bootstrap CI; verdict via `actions.trust_level` (the SAME definition the live gate uses — never fork it)
 - `stocksage/audit.py` — read-only brain audit + safe duplicate repair (`brain audit`, `brain repair [--apply]`)
+- `.github/workflows/cloud-research.yml` — scheduled cloud run (pull brain → learn on the evening run → `publish-drive --no-broker`). **Never give it broker credentials** (public repo, public logs); `tests/test_cloud_workflow.py` fails the build if any appear, and cross-checks the learn step's cron against the schedule so a typo can't silently disable learning
 - `stocksage/security.py` — broker access log (fresh sign-in vs reused token) + exposure audit; answers "was that Robinhood sign-in alert us?"
 - `stocksage/cli.py` — all terminal commands; `stocksage/envfile.py` — .env load/save
 
@@ -89,6 +90,8 @@ live technical analysis (degraded run, never a halt).
   file. `tests/test_privacy.py` enforces that; read it before adding fixtures.
 - **Weights learn from market-relative returns or not at all.** A call graded without a SPY benchmark is recorded in the ledger but must never train the model (a raw-return fallback once silently taught it to be permanently bullish). `test_a_call_with_no_market_benchmark_trains_nothing` guards this.
 - **State that dedupes must travel with the data it dedupes.** `merge_brains` carries `ingested_fills` for that reason; adding a table that gates ingestion without teaching the merge about it re-creates the device-move duplicate bug.
+- **Alerts: urgent now, everything else one daily digest** (`notify.py`). Messages carry a verb, a ticker and the account *role* only — ntfy topics are not private.
+- **Account profiles:** agentic and personal are `active` (stops, 10-day exit, 25% cap); Roth is `core`. Anything held >60 trading days is treated as an investment, not a trade. Override with `STOCKSAGE_PROFILE_<ROLE>`. The strict gate (failing model's buys shown as ideas) is opt-in via `STOCKSAGE_STRICT_GATE`.
 - Signal names are stable identifiers (learned weights key on them) — renaming one resets its learned weight.
 - DB schema changes must be additive (`CREATE TABLE IF NOT EXISTS`) — existing brains migrate automatically; brain merges must tolerate older-schema files.
 - Credentials live only in `.env` (gitignored, 0600). Never move them into the brain, logs, or commits.

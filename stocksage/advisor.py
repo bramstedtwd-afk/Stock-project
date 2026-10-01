@@ -565,20 +565,32 @@ def plan_for_account(engine: Engine, suggestions: list, positions: list[dict],
         reliability=reliability,
         profile=profile,
         tax_note=tax_note,
+        strict_gate=(os.environ.get("STOCKSAGE_STRICT_GATE") or "").strip().lower()
+        in ("1", "true", "yes", "on"),
     )
 
 
 ROLE_LABELS = {"agentic": "Agentic", "personal": "Personal", "roth": "Roth IRA"}
+
+# Which rules each kind of account gets. The owner's answer: the personal
+# brokerage is actively traded like the agentic one; the Roth is long-term.
+# Override per role with STOCKSAGE_PROFILE_PERSONAL=core, etc.
+PROFILE_DEFAULTS = {"agentic": "active", "personal": "active", "roth": "core"}
+
+
+def profile_for(role: str) -> str:
+    chosen = (os.environ.get(f"STOCKSAGE_PROFILE_{role.upper()}") or "").strip().lower()
+    return chosen if chosen in ("active", "core") else PROFILE_DEFAULTS[role]
 CONCENTRATION_NOTE_AT = 0.15
 
 
 def plans_for_accounts(engine: Engine, client, suggestions: list | None = None) -> dict:
     """A plan for every account under the login, each by its own rules.
 
-    The agentic account (the one the routine trades) is "active": stops, 10-day
-    exit, tight size cap. Every other account is "core": a long-term account
-    you place orders in by hand, where those rules would be wrong, so only the
-    concentration cap and the model's opinions apply. Tax context differs too
+    Each account gets the rules that fit how it is used (see PROFILE_DEFAULTS):
+    "active" has stops, a 10-day exit and a tight size cap; "core" is a
+    long-term account where those would be wrong, so only the concentration
+    cap and the model's opinions apply. Tax context differs too
     (a Roth sale is tax-free; a taxable one realises a gain or loss).
 
     Also reports any single stock that is a large share of EVERYTHING owned,
@@ -633,7 +645,7 @@ def plans_for_accounts(engine: Engine, client, suggestions: list | None = None) 
                else "Taxable account: selling realises a gain or loss.")
         plan = plan_for_account(
             engine, suggestions, positions, pf.buying_power,
-            profile="active" if role == "agentic" else "core", tax_note=tax,
+            profile=profile_for(role), tax_note=tax,
         )
         out.append({"role": role, "title": ROLE_LABELS[role], "label": label,
                     "manual": role != "agentic", "plan": plan})

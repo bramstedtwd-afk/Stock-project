@@ -209,11 +209,22 @@ def test_the_best_ranked_idea_is_taken_first():
 
 # ---------------------------------------------------------------- confidence & trust
 
-def test_a_model_trailing_the_market_gets_no_numbered_buys_only_ideas():
-    """The gate. However good the setup looks, a model that measurably trails
-    the market has not earned a BUY line — it is shown as an idea."""
+def test_by_default_a_failing_model_still_gets_numbered_buys_tagged_low_confidence():
+    """The owner's choice: keep the BUY lines, but never let a model that
+    trails the market look confident, and keep its record on the page."""
     plan = plan_for([], [sug("NEW", score=0.95)], cash=200, trust=FAILING,
                     reliability={"NEW": (20, 0.95)})
+    enter = next(a for a in plan.actions if a.kind == "ENTER")
+    assert enter.confidence == "low"
+    assert not [a for a in plan.actions if a.kind == "IDEA"]
+    assert "TRAILING" in plan.notes[0]
+
+
+def test_the_strict_gate_demotes_a_failing_models_buys_to_ideas():
+    """Opt-in (STOCKSAGE_STRICT_GATE): a model that measurably trails the
+    market has not earned a BUY line — it is shown as an idea."""
+    plan = plan_for([], [sug("NEW", score=0.95)], cash=200, trust=FAILING,
+                    reliability={"NEW": (20, 0.95)}, strict_gate=True)
     assert not [a for a in plan.actions if a.kind == "ENTER"]
     idea = next(a for a in plan.actions if a.kind == "IDEA")
     assert idea.confidence == "low" and idea.dollars is None and idea.side == "WATCH"
@@ -227,7 +238,8 @@ def test_an_unproven_model_still_makes_suggestions_so_a_new_install_is_not_dead(
 
 def test_the_gate_does_not_touch_exits_or_spend_the_budget():
     held = [pos("AAA", cost=100, price=90)]
-    plan = plan_for(held, [sug("AAA"), sug("NEW", price=40)], cash=10, trust=FAILING)
+    plan = plan_for(held, [sug("AAA"), sug("NEW", price=40)], cash=10, trust=FAILING,
+                    strict_gate=True)
     assert ("EXIT_STOP", "AAA") in kinds(plan)
     assert not any(a.dollars for a in plan.actions if a.kind == "IDEA")
 
@@ -235,7 +247,7 @@ def test_the_gate_does_not_touch_exits_or_spend_the_budget():
 def test_ideas_never_appear_in_the_numbered_list_or_trigger_alerts():
     from stocksage.notify import alertable
 
-    plan = plan_for([], [sug("NEW")], cash=200, trust=FAILING)
+    plan = plan_for([], [sug("NEW")], cash=200, trust=FAILING, strict_gate=True)
     text = "\n".join(format_plan(plan))
     assert "Ideas (not recommendations)" in text
     assert "Nothing to do today" in text and "1." not in text
@@ -581,3 +593,81 @@ def test_the_actions_command_labels_each_account_and_how_to_act(monkeypatch, cap
     assert "DO IT: https://robinhood.com/us/en/stocks/" in out   # manual accounts only
     agentic_block = out.split("PERSONAL")[0]
     assert "DO IT" not in agentic_block, "the routine's account is confirmed there, not typed by hand"
+
+
+# ------------------------------------------------- owner's profile choices
+
+def test_personal_is_active_and_roth_is_core_by_default(monkeypatch):
+    from stocksage.advisor import profile_for
+
+    for role in ("agentic", "personal", "roth"):
+        monkeypatch.delenv(f"STOCKSAGE_PROFILE_{role.upper()}", raising=False)
+    assert [profile_for(r) for r in ("agentic", "personal", "roth")] == ["active", "active", "core"]
+
+
+def test_a_profile_can_be_overridden_in_config_and_garbage_is_ignored(monkeypatch):
+    from stocksage.advisor import profile_for
+
+    monkeypatch.setenv("STOCKSAGE_PROFILE_PERSONAL", "CORE")
+    monkeypatch.setenv("STOCKSAGE_PROFILE_ROTH", "nonsense")
+    assert profile_for("personal") == "core"
+    assert profile_for("roth") == "core", "an unreadable value must fall back, not break"
+
+
+def test_the_strict_gate_is_read_from_the_environment(monkeypatch):
+    from stocksage.advisor import plan_for_account
+    from stocksage.db import Database
+    from stocksage.engine import Engine
+    from tests.test_engine import FakeMarket
+
+    engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
+    monkeypatch.setattr("stocksage.actions.model_trust", lambda rows: FAILING)
+    monkeypatch.delenv("STOCKSAGE_STRICT_GATE", raising=False)
+    loose = plan_for_account(engine, [sug("NEW")], [], 200.0)
+    assert any(a.kind == "ENTER" for a in loose.actions)
+    monkeypatch.setenv("STOCKSAGE_STRICT_GATE", "1")
+    strict = plan_for_account(engine, [sug("NEW")], [], 200.0)
+    assert not any(a.kind == "ENTER" for a in strict.actions)
+
+
+def test_a_position_held_for_months_is_an_investment_not_a_trade():
+    """Without this a personal account's first run would be a wall of SELL
+    lines for things bought last year."""
+    old = date(2025, 11, 3)
+    held = [pos("AAA", shares=1, cost=100, price=80)]       # far below any 2xATR stop
+    plan = plan_for(held, [sug("AAA", action="HOLD")], cash=400, entered={"AAA": old})
+    assert not [a for a in plan.actions if a.kind in ("EXIT_STOP", "EXIT_TIME", "EXIT_TARGET", "HEADS_UP")]
+    fresh = plan_for(held, [sug("AAA", action="HOLD")], cash=400, entered={"AAA": MONDAY_WEEK_AGO})
+    assert ("EXIT_STOP", "AAA") in kinds(fresh), "a recent trade is still stop-checked"
+
+
+def test_the_size_cap_still_binds_a_long_held_position():
+    held = [pos("AAA", shares=1, cost=50, price=90)]
+    plan = plan_for(held, [sug("AAA", action="HOLD")], cash=10, entered={"AAA": date(2025, 1, 6)})
+    assert ("TRIM", "AAA") in kinds(plan)
+
+
+def test_the_personal_account_gets_active_rules_and_the_roth_does_not(monkeypatch):
+    """The owner's choice: personal is traded actively, the Roth is long-term."""
+    from stocksage.advisor import plans_for_accounts
+    from stocksage.db import Database
+    from stocksage.engine import Engine
+    from stocksage.robinhood import Holding, Portfolio
+    from tests.test_engine import FakeMarket
+
+    for role in ("PERSONAL", "ROTH", "AGENTIC"):
+        monkeypatch.delenv(f"STOCKSAGE_PROFILE_{role}", raising=False)
+    monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "123456789")
+    broker = FakeBroker()
+    # The same fresh, underwater trade in the personal and the Roth account.
+    broker.pf["111111111"] = Portfolio([Holding("DROP", 1.0, 100.0, 90.0, 90.0)], 900.0, "111111111")
+    broker.pf["999999999"] = Portfolio([Holding("DROP", 1.0, 100.0, 90.0, 90.0)], 900.0, "999999999")
+    engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
+    from datetime import datetime, timezone
+
+    engine.db.upsert_rh_orders([{"order_id": "o", "ticker": "DROP", "side": "buy", "quantity": 1,
+                                 "price": 100.0, "executed_at": datetime.now(timezone.utc).isoformat()}])
+    out = plans_for_accounts(engine, broker, suggestions=_everything_scanned() + [sug("DROP", price=90)])
+    by = {e["role"]: e for e in out["accounts"]}
+    assert any(a.kind == "EXIT_STOP" for a in by["personal"]["plan"].actions)
+    assert not any(a.kind == "EXIT_STOP" for a in by["roth"]["plan"].actions)

@@ -283,3 +283,66 @@ tells you how to check the same thing from Robinhood's own device list.
 `--signin` answers a specific alert directly.
 
 See the Security section of the README for what is stored where.
+
+---
+
+## Run it in the cloud (no computer needs to be on)
+
+The five scheduled Windows tasks only work while that PC is awake and signed in.
+A GitHub Action can do the market-side work instead: scan, grade, learn, and
+publish the brief and brain to your Drive. It runs on a schedule, on weekdays,
+with nothing of yours switched on.
+
+**What it does not do.** It has no Robinhood access, on purpose: this repository
+and its workflow logs are public, and a broker password has no place in either.
+So the cloud handles the research. Which account holds what is still worked out
+on your own machine and by your routine, where the access is legitimate.
+
+### One-time setup (about 5 minutes)
+
+1. **Copy your Drive token without showing it.** In PowerShell on the machine
+   where `publish-drive` already works:
+   ```
+   Get-Content $env:USERPROFILE\.stocksage\drive_token.json -Raw | Set-Clipboard
+   ```
+   Nothing prints. The token is now on your clipboard. Do not paste it anywhere
+   except the next step, and never into a chat.
+
+2. **Store it as a secret.** On GitHub: your repository -> **Settings** ->
+   **Secrets and variables** -> **Actions** -> **New repository secret**.
+   Name it exactly `STOCKSAGE_DRIVE_TOKEN`, paste, save. GitHub encrypts it and
+   masks it in logs.
+
+3. **Run it once by hand.** **Actions** tab -> **Cloud research** -> **Run
+   workflow**. Open the run and read the step "Can this runner reach market
+   data?". Green checks beside *Market data* mean it works. If it says Yahoo is
+   unreachable, cloud addresses are being throttled and the cloud runner will
+   not be reliable; keep the Windows tasks and tell me.
+
+4. **Watch it for two weekdays**, then turn the Windows tasks off so two machines
+   are not learning at once:
+   ```
+   cd C:\Users\<you>\Stock-project
+   .\start.bat autopilot off
+   ```
+
+### Optional: get told when it goes quiet
+
+Make a free check at healthchecks.io set to expect a ping about every 4 hours on
+weekdays, and store its URL as a second secret named `STOCKSAGE_HEALTHCHECK_URL`.
+The workflow pings it after every good run. If runs stop, you get the email.
+
+### Things worth knowing
+
+- **Times shift by an hour in November.** The schedule is in UTC and was set for
+  Central *daylight* time. After the clocks change, runs land an hour earlier on
+  the wall clock. Edit the cron lines in `.github/workflows/cloud-research.yml`.
+- **GitHub can run a scheduled job several minutes late** under load, and
+  occasionally skips one. That is why the brief carries its own timestamp.
+- **GitHub pauses scheduled jobs on a public repo after 60 days with no
+  activity.** Any commit resets it.
+- **Logs are public.** They contain market research only. They cannot contain your
+  holdings or balances, because the cloud never has access to your accounts.
+- **Use one learner at a time.** If both the cloud and a PC run the daily learning,
+  the later one's weights win a merge. Turn the Windows autopilot off once the
+  cloud run is healthy.

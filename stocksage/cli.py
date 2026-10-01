@@ -415,13 +415,13 @@ def cmd_sync(args) -> int:
     return 0
 
 
-def _sync_and_focus(engine, explicit_tickers, broker: bool = True):
+def _sync_and_focus(engine, explicit_tickers, broker: bool = True, client=None):
     """Capture+grade real trades, then build the ticker list the routine
     cares about most: what it holds, plus the watchlist, plus anything
     named explicitly. Shared by both publish paths."""
     from .advisor import desktop_sync_cycle
 
-    sync = desktop_sync_cycle(engine, broker=broker)
+    sync = desktop_sync_cycle(engine, client=client, broker=broker)
     if sync.get("broker_skipped"):
         print("(Publishing without opening a Robinhood session — --no-broker.)")
     if sync["fills_ingested"] or sync["graded"]:
@@ -471,15 +471,20 @@ def _pull_drive_brain(engine) -> None:
         )
 
 
-def _alert_on(engine, plan_dict) -> None:
-    """Push a phone alert if the plan has something new. Opt-in, never raises."""
-    if not plan_dict:
-        return
-    try:
-        from .actions import Plan
-        from .notify import alert_if_new
+def _alert_all_accounts(engine, client) -> None:
+    """Plan every account and push if something needs the owner. Opt-in.
 
-        alert_if_new(engine.db, Plan.from_dict(plan_dict))
+    Skipped entirely without a topic (so no extra scan is paid for), and it
+    never raises: an alerting problem must not fail a publish.
+    """
+    try:
+        from .advisor import plans_for_accounts
+        from .notify import alert_accounts, topic_from_env
+
+        if client is None or not topic_from_env():
+            return
+        result = plans_for_accounts(engine, client)
+        alert_accounts(engine.db, [(e["title"], e["plan"]) for e in result["accounts"]])
     except Exception:
         pass
 
@@ -590,9 +595,12 @@ def cmd_publish_drive(args) -> int:
     from .advisor import publish_brief_via_api
     from .drive_api import DriveNotConfigured
 
+    from .robinhood import RobinhoodClient
+
     engine = Engine()
     _pull_drive_brain(engine)
-    sync, focus = _sync_and_focus(engine, args.tickers, broker=not args.no_broker)
+    client = None if args.no_broker else RobinhoodClient()
+    sync, focus = _sync_and_focus(engine, args.tickers, broker=not args.no_broker, client=client)
     try:
         result = publish_brief_via_api(
             engine, tickers=focus, max_price=args.max_price,
@@ -609,7 +617,7 @@ def cmd_publish_drive(args) -> int:
         _record_publish(engine, error=f"{type(exc).__name__}: {exc}")
         raise
     _record_publish(engine)
-    _alert_on(engine, result.get("actions"))
+    _alert_all_accounts(engine, client if sync.get("positions") is not None else None)
     print(f"Published directly to Google Drive ({result['candidates']} candidates):")
     for name in result["files"]:
         print(f"  · {name}  (in your Drive's StockSage folder)")

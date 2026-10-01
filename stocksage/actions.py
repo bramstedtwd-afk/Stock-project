@@ -40,6 +40,7 @@ NEAR_STOP = 0.015           # within 1.5% of the stop is worth a warning
 STOP_ATR_MULT = 2.0
 EARNINGS_BLACKOUT_DAYS = 5
 MAX_WATCH = 3
+LONG_HOLD_DAYS = 60          # held this long, it is an investment, not a trade
 CORE_TARGET_POSITIONS = 12   # long-term accounts hold more names than the active one
 
 # Broad index funds are the thing you hold INSTEAD of picking, so the
@@ -230,6 +231,7 @@ def build_plan(
     reliability: dict[str, tuple[int, float | None]] | None = None,
     profile: str = "active",
     tax_note: str | None = None,
+    strict_gate: bool = False,
 ) -> Plan:
     """Rank what to do, given the account and the scan.
 
@@ -238,6 +240,15 @@ def build_plan(
     manage by hand: those would be wrong there (a 10-day exit on a Roth index
     fund is nonsense), so only the concentration cap and the model's own
     opinions are applied.
+
+    A position held longer than LONG_HOLD_DAYS is treated like a core holding
+    even in an active account: a stop anchored to a cost basis from last year,
+    or a 10-day clock on something owned for two, would flood the first run
+    with sell lines for things that were never trades.
+
+    strict_gate=True demotes a failing model's buys to unnumbered "ideas".
+    It is off by default: the owner chose to see the model's buys as normal
+    lines tagged low confidence, with its track record shown above them.
 
     positions: [{ticker, shares, avg_cost, price, equity}] for the account the
     routine trades. cash: settled buying power there. entry_dates: when each
@@ -263,6 +274,9 @@ def build_plan(
         target = round(cost + 2 * (cost - stop), 2) if stop else None
         entered = entry_dates.get(t)
         age = trading_days_between(entered, today) if (entered and active) else None
+        long_held = age is not None and age > LONG_HOLD_DAYS
+        if long_held:
+            stop, target, age = None, None, None
         pnl = (price / cost - 1) if cost else 0.0
         acted = False
 
@@ -376,7 +390,7 @@ def build_plan(
         budget = cash + freed
         cap = MAX_POSITION_FRACTION * total_equity
         picked = ranked[:slots] if slots else []
-        failing = trust.get("level") == "failing"
+        failing = strict_gate and trust.get("level") == "failing"
         watch = 0
         for i, s in enumerate(picked):
             size = min(cap, budget / (len(picked) - i)) if budget > 0 else 0.0
