@@ -221,12 +221,14 @@ def test_the_backtest_command_reports_and_remembers(monkeypatch, tmp_path, capsy
                         lambda market, tickers=None, period="2y": make_samples(signal=0.02, n_dates=140))
     assert cli.main(["backtest", "--years", "2"]) == 0
     out = capsys.readouterr().out
-    assert "DOES THE MODEL HAVE AN EDGE" in out and "VERDICT" in out
+    assert "DO ITS BUY PICKS BEAT THE MARKET" in out and "DO ITS SELL CALLS TRAIL THE MARKET" in out
+    assert out.count("VERDICT") == 2
 
     from stocksage.db import Database
 
     db = Database(tmp_path / "b.db")
     assert db.get_meta("backtest_level") in ("earned", "unproven", "failing")
+    assert db.get_meta("backtest_sell_level") in ("earned", "unproven", "failing")
     assert db.get_meta("backtest_at")
 
 
@@ -242,3 +244,56 @@ def test_the_backtest_command_explains_a_data_failure(monkeypatch, tmp_path, cap
     monkeypatch.setattr(backtest, "collect_samples", boom)
     assert cli.main(["backtest"]) == 1
     assert "Could not run the backtest" in capsys.readouterr().out
+
+
+# ------------------------------------------------------------ the sell side
+
+def test_a_real_signal_shows_up_on_the_sell_side_as_a_positive_edge():
+    """Names the model rates lowest should go on to trail the market, which
+    is a WIN for a sell call: the edge is reported in the direction of the bet."""
+    r = evaluate(make_samples(signal=0.02, n_dates=160), side="sell")
+    assert r.edge > 0.005 and r.level == "earned"
+
+
+def test_an_inverted_signal_is_a_negative_edge_on_the_sell_side_too():
+    r = evaluate(make_samples(signal=-0.02, n_dates=160), side="sell")
+    assert r.edge < 0 and r.level == "failing"
+
+
+def test_noise_is_never_called_a_sell_edge():
+    for seed in range(8):
+        r = evaluate(make_samples(signal=0.0, seed=seed, n_dates=160), side="sell")
+        assert r.level != "earned", f"noise world {seed}"
+
+
+def test_the_sell_side_picks_the_lowest_scoring_names_not_the_highest():
+    s = make_samples(signal=0.01, n_dates=60, seed=3)
+    buys, sells = evaluate(s, side="buy"), evaluate(s, side="sell")
+    shared = set(buys.picks_log) & set(sells.picks_log)
+    assert shared
+    assert all(not set(buys.picks_log[d]) & set(sells.picks_log[d]) for d in shared)
+
+
+def test_the_sell_side_cannot_see_the_future_either():
+    full = make_samples(signal=0.01, n_dates=120, seed=5)
+    cut = sorted({s.date for s in full})[59]
+    early = [s for s in full if s.date <= cut]
+    a, b = evaluate(full, side="sell"), evaluate(early, side="sell")
+    k = len(b.per_period)
+    assert k > 15 and a.per_period[:k] == b.per_period
+
+
+def test_costs_come_off_the_sell_side_too():
+    s = make_samples(signal=0.01, n_dates=100, seed=2)
+    assert evaluate(s, cost=0.0, side="sell").edge - evaluate(s, cost=0.004, side="sell").edge \
+        == pytest.approx(0.004, abs=1e-9)
+
+
+def test_an_unknown_side_is_refused_not_silently_treated_as_buy():
+    with pytest.raises(ValueError):
+        evaluate(make_samples(n_dates=10), side="short")
+
+
+def test_the_report_names_the_side_and_states_which_way_is_good():
+    sells = "\n".join(describe(evaluate(make_samples(signal=0.02, n_dates=140), side="sell"), side="sell"))
+    assert "SELL CALLS TRAIL" in sells and "positive = the sells were right" in sells

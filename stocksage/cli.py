@@ -551,17 +551,20 @@ def cmd_backtest(args) -> int:
         print(f"Could not run the backtest: {exc}")
         return 1
     result = backtest.evaluate(samples, top_n=args.top, cost=args.cost / 100.0)
+    sells = backtest.evaluate(samples, top_n=args.top, cost=args.cost / 100.0, side="sell")
     print("\n".join(backtest.describe(result, period)))
+    print("\n" + "\n".join(backtest.describe(sells, period, side="sell")))
 
     state = Path("~/.stocksage").expanduser()
     try:
         state.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         report = {"at": stamp, "years": args.years, "top_n": args.top,
-                  "cost_pct": args.cost, **result.to_dict()}
+                  "cost_pct": args.cost, **result.to_dict(), "sell_side": sells.to_dict()}
         (state / "backtest.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
         db = Database()
         db.set_meta("backtest_level", result.level)
+        db.set_meta("backtest_sell_level", sells.level)
         db.set_meta("backtest_at", stamp)
         db.close()
         print(f"\n(Saved to {state / 'backtest.json'})")

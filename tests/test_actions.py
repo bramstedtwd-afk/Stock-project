@@ -671,3 +671,63 @@ def test_the_personal_account_gets_active_rules_and_the_roth_does_not(monkeypatc
     by = {e["role"]: e for e in out["accounts"]}
     assert any(a.kind == "EXIT_STOP" for a in by["personal"]["plan"].actions)
     assert not any(a.kind == "EXIT_STOP" for a in by["roth"]["plan"].actions)
+
+
+# ------------------------------------------------- sells are judged by their own direction
+
+def _call(action, realized, bench=0.0, score=None):
+    s = score if score is not None else (0.4 if "BUY" in action else -0.4)
+    return {"action": action, "score": s, "realized_return": realized, "benchmark_return": bench}
+
+
+def test_a_sell_that_fell_below_the_market_is_a_win_not_a_loss():
+    """The bug: sells were counted with the buy sign, so a correct SELL (the
+    stock fell while the market was flat) read as a -2% failure."""
+    rows = [_call("SELL", -0.02) for _ in range(40)]
+    trust = model_trust(rows)
+    assert trust["edge"] == pytest.approx(0.02)
+    assert trust["level"] != "failing"
+
+
+def test_a_sell_that_rose_is_a_loss():
+    assert model_trust([_call("SELL", +0.02) for _ in range(40)])["edge"] == pytest.approx(-0.02)
+
+
+def test_buys_are_unchanged():
+    assert model_trust([_call("BUY", 0.02) for _ in range(40)])["edge"] == pytest.approx(0.02)
+    assert model_trust([_call("STRONG BUY", -0.02) for _ in range(40)])["edge"] == pytest.approx(-0.02)
+
+
+def test_good_buys_and_good_sells_together_are_not_cancelled_out():
+    """Mixing the two used to make a model that was right on both sides look
+    like it was losing on half of them."""
+    rows = [_call("BUY", 0.015) for _ in range(30)] + [_call("SELL", -0.015) for _ in range(30)]
+    assert model_trust(rows)["edge"] == pytest.approx(0.015)
+
+
+def test_a_model_whose_sells_work_is_not_called_failing_because_its_buys_do_not():
+    buys = [_call("BUY", -0.0076 + (i % 5 - 2) * 0.004) for i in range(251)]
+    sells = [_call("SELL", -0.019 + (i % 5 - 2) * 0.004) for i in range(213)]
+    assert model_trust(buys)["level"] == "failing"          # buys alone: genuinely behind
+    assert model_trust(buys + sells)["edge"] > model_trust(buys)["edge"]
+    assert model_trust(buys + sells)["level"] != "failing"
+
+
+def test_direction_falls_back_to_the_action_and_then_to_buy():
+    from stocksage.actions import _direction
+
+    assert _direction({"action": "STRONG SELL"}) == -1.0
+    assert _direction({"action": "BUY"}) == 1.0
+    assert _direction({}) == 1.0
+    assert _direction({"score": -0.3, "action": "BUY"}) == -1.0, "the score is the truer record of the bet"
+
+
+def test_it_reads_real_database_rows(tmp_path):
+    from stocksage.db import Database
+
+    db = Database(tmp_path / "b.db")
+    for action, score, realized in (("SELL", -0.4, -0.03), ("BUY", 0.4, 0.03)):
+        sid = db.record_suggestion("AAA", action, score, 100.0, {"x": 0.1}, 5)
+        db.mark_evaluated(sid, realized, True, 0.0)
+    trust = model_trust(db.evaluated_suggestions())
+    assert trust["n"] == 2 and trust["edge"] == pytest.approx(0.03)

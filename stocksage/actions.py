@@ -111,17 +111,40 @@ class Plan:
 # --- model trust -------------------------------------------------------------
 
 
+def _direction(row) -> float:
+    """+1 for a call that bets on a stock rising, -1 for one that bets on a fall.
+
+    A call is right when the stock went the way it said RELATIVE to the market,
+    so a SELL that fell 2% while SPY was flat earned +2%, not -2%. Counting
+    sell calls with the buy sign once made a model whose sells were working
+    look like it was losing, and a "failing" verdict was handed out on it.
+    Rows without a score or action (older fixtures) are treated as buys.
+    """
+    for key in ("score", "action"):
+        try:
+            value = row[key]
+        except (KeyError, IndexError):
+            continue
+        if value is None:
+            continue
+        if key == "score":
+            return -1.0 if value < 0 else 1.0
+        return -1.0 if value in SELLISH else 1.0
+    return 1.0
+
+
 def model_trust(rows) -> dict:
     """How much the model's measured edge over the market can be believed.
 
     Uses only calls that were actually measured against SPY — a call with no
-    benchmark says nothing about edge. The standard error here treats calls
+    benchmark says nothing about edge — and judges each in the direction it
+    bet: buys by how much they beat the market, sells by how much they trailed it. The standard error here treats calls
     as independent, which they are not (they cluster on the same days and
     sectors), so it is optimistic; that is why "earned" demands both a large
     sample and a stricter threshold than "failing" does.
     """
     edges = [
-        r["realized_return"] - r["benchmark_return"]
+        _direction(r) * (r["realized_return"] - r["benchmark_return"])
         for r in rows
         if r["benchmark_return"] is not None and r["realized_return"] is not None
     ]

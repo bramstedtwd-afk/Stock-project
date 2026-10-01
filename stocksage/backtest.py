@@ -36,7 +36,7 @@ from . import universe
 from .actions import trust_level
 from .indicators import MIN_HISTORY_ROWS, compute_features
 from .learning import update_weights, weighted_score
-from .scoring import BUY_THRESHOLD, risk_multiplier
+from .scoring import BUY_THRESHOLD, SELL_THRESHOLD, risk_multiplier
 
 DEFAULT_TOP_N = 5
 DEFAULT_COST = 0.001        # 10 bps round trip per pick: spread + slippage
@@ -145,8 +145,16 @@ def evaluate(
     cost: float = DEFAULT_COST,
     learn: bool = True,
     seed: int = 7,
+    side: str = "buy",
 ) -> Result:
     """Walk forward through time, picking as the live system would.
+
+    side="buy" tests the names the model likes (did they beat the market?).
+    side="sell" tests the names it rates SELL (did they trail it?). The two
+    are different claims — a model can be useless at picking winners and still
+    be good at flagging names to get out of — and the sell side is the one the
+    app mostly ACTS on, since exits are risk rules fed by it. The edge is
+    reported in the direction of the bet: positive means the call was right.
 
     At each date: first learn from outcomes that are already resolved (those
     from the previous date, which finished exactly now), then score every
@@ -159,6 +167,9 @@ def evaluate(
         by_date.setdefault(s.date, []).append(s)
     dates = sorted(by_date)
 
+    if side not in ("buy", "sell"):
+        raise ValueError("side must be 'buy' or 'sell'")
+    sign = 1.0 if side == "buy" else -1.0
     rng = random.Random(seed)
     weights: dict[str, float] = {}
     model_edges: list[float] = []
@@ -178,19 +189,22 @@ def evaluate(
 
         scored = sorted(
             ((weighted_score(s.features, weights) * risk_multiplier(s.vol), s) for s in today),
-            key=lambda x: x[0], reverse=True,
+            key=lambda x: x[0], reverse=(side == "buy"),
         )
-        chosen = [s for score, s in scored if score >= BUY_THRESHOLD][:top_n]
+        if side == "buy":
+            chosen = [s for score, s in scored if score >= BUY_THRESHOLD][:top_n]
+        else:
+            chosen = [s for score, s in scored if score <= SELL_THRESHOLD][:top_n]
         if not chosen:
             no_signal += 1
             continue
         k = len(chosen)
         picks_total += k
         picks_log[d] = [s.ticker for s in chosen]
-        model_edges.append(sum(s.excess for s in chosen) / k - cost)
-        universe_edges.append(sum(s.excess for s in today) / len(today))
+        model_edges.append(sign * sum(s.excess for s in chosen) / k - cost)
+        universe_edges.append(sign * sum(s.excess for s in today) / len(today))
         draws = [
-            sum(s.excess for s in rng.sample(today, min(k, len(today)))) / min(k, len(today))
+            sign * sum(s.excess for s in rng.sample(today, min(k, len(today)))) / min(k, len(today))
             for _ in range(RANDOM_DRAWS)
         ]
         random_edges.append(sum(draws) / len(draws) - cost)
@@ -219,8 +233,10 @@ def _pct(x: float | None) -> str:
     return "n/a" if x is None or (isinstance(x, float) and math.isnan(x)) else f"{x * 100:+.2f}%"
 
 
-def describe(r: Result, years: str = "2y") -> list[str]:
-    out = ["BACKTEST: DOES THE MODEL HAVE AN EDGE?", "-" * 62,
+def describe(r: Result, years: str = "2y", side: str = "buy") -> list[str]:
+    title = ("BACKTEST: DO ITS BUY PICKS BEAT THE MARKET?" if side == "buy"
+             else "BACKTEST: DO ITS SELL CALLS TRAIL THE MARKET?")
+    out = [title, "-" * 62,
            f"History: {years}, decided once per {HORIZON} trading days, no overlap.",
            "Weights re-learned as time passed, using only outcomes already known",
            "at each date. Every pick pays a round-trip cost.", ""]
@@ -233,9 +249,9 @@ def describe(r: Result, years: str = "2y") -> list[str]:
         return out
     out += [
         f"Periods tested:           {r.periods}  ({r.picks} picks, {r.no_signal_periods} periods with no signal)",
-        f"Model, per period:        {_pct(r.edge)} versus SPY, after costs",
+        f"Model, per period:        {_pct(r.edge)} {'versus SPY' if side == 'buy' else '(positive = the sells were right)'}, after costs",
         f"  95% interval:           {_pct(r.ci_low)} to {_pct(r.ci_high)}",
-        f"  beat SPY in:            {r.hit_rate * 100:.0f}% of periods",
+        f"  right in:               {r.hit_rate * 100:.0f}% of periods",
         f"Random picks, same dates: {_pct(r.random_edge)}",
         f"Skill beyond luck:        {_pct(r.vs_random)}",
         f"Whole universe, equal:    {_pct(r.universe_edge)}",
