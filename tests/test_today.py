@@ -346,7 +346,7 @@ def test_trend_lines_name_which_asset_classes_are_up_and_which_are_down():
     lines = today.core_trend_lines({"SPY": _hist(True), "EFA": _hist(True), "AGG": _hist(False),
                                     "GLD": _hist(True), "VNQ": _hist(False)})
     assert "3 of 5" in lines[0] and "up: US stocks" in lines[0] and "down: bonds, real estate" in lines[0]
-    assert "not an order" in lines[1], "must never read as an instruction"
+    assert "not an order" in " ".join(lines), "must never read as an instruction"
 
 
 def test_trend_lines_skip_what_has_no_data_and_say_nothing_if_nothing_does():
@@ -435,3 +435,50 @@ def test_tracking_stores_the_trend_state_and_a_plain_run_does_not():
     import json
     state = json.loads(db.get_meta("trend_state"))
     assert state["since"] == "2026-10-06" and "bonds" not in state["above"]
+
+
+# ------------------------------------------------------------ a missing account is never silent
+
+def test_an_account_that_cannot_be_read_is_called_out_not_dropped_quietly(real_book):
+    class Flaky(FakeBroker):
+        def portfolio_for(self, number):
+            if number == "999999999":
+                raise RuntimeError("hiccup")
+            return super().portfolio_for(number)
+
+    engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
+    sheet = today.build_sheet(engine, Flaky(), suggestions=default_suggestions(STRONG),
+                              book=real_book, news=False, now=NOW)
+    text = today.render_text(sheet)
+    assert "HEADS UP  Could not read Roth IRA ••••9999 this run" in text
+    assert "ACCOUNTS READ  " in text and "Roth IRA" not in text.split("HEADS UP")[0].split("ACCOUNTS READ")[1]
+
+
+def test_a_configured_routine_account_that_robinhood_did_not_return_is_flagged(monkeypatch, real_book):
+    monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "555555555")
+    engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
+    sheet = today.build_sheet(engine, FakeBroker(), suggestions=default_suggestions(STRONG),
+                              book=real_book, news=False, now=NOW)
+    assert any("••••5555" in w and "doctor" in w and "\\\\" not in w for w in sheet.warnings)
+
+
+def test_robinhoods_own_roth_type_string_is_recognised(monkeypatch):
+    from stocksage.advisor import plans_for_accounts
+    from stocksage.robinhood import Account
+
+    broker = FakeBroker()
+    broker.accts[2] = Account("999999999", "ira_roth", 120.0, 120.0)
+    engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
+    out = plans_for_accounts(engine, broker, suggestions=default_suggestions(STRONG))
+    assert [e["role"] for e in out["accounts"]] == ["agentic", "personal", "roth"]
+
+
+def test_a_trim_says_it_is_about_size_and_the_model_read_is_not_labelled_a_buying_case(real_book):
+    s = default_suggestions(STRONG)
+    for x in s:
+        x.why = f"Buying case for {x.ticker}: a solid long-term uptrend"
+    _, sheet = sheet_for(real_book, s)
+    ctx = [c for a in sheet.accounts for d in a.directives if d.verb == "TRIM" for c in d.context]
+    assert "This is about size, not a verdict on the stock." in ctx
+    assert any(c.startswith("The model's read: a solid") for c in ctx)
+    assert not any("Buying case" in c for c in ctx)

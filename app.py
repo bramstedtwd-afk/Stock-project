@@ -153,6 +153,8 @@ def _render_plans(plans):
                 st.caption(note)
             with st.expander("Full sheet with news, trends and look-alike evidence"):
                 st.code(today.render_text(sheet), language=None)
+        for warning in plans.get("warnings", []):
+            st.warning(warning)
         accounts = plans["accounts"]
         if len(accounts) == 1:
             _render_plan_body(accounts[0]["plan"], accounts[0]["manual"])

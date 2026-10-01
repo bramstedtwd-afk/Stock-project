@@ -80,12 +80,13 @@ class Sheet:
     generated_at: str
     market: list[str] = field(default_factory=list)
     trend: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     accounts: list[AccountSheet] = field(default_factory=list)
     overall_notes: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return {"generated_at": self.generated_at, "market": self.market, "trend": self.trend,
+        return {"generated_at": self.generated_at, "market": self.market, "trend": self.trend, "warnings": self.warnings,
                 "accounts": [a.to_dict() for a in self.accounts],
                 "overall_notes": self.overall_notes, "notes": self.notes}
 
@@ -195,8 +196,8 @@ def core_trend_lines(histories: dict, previous: dict | None = None) -> list[str]
                + (f" (up: {', '.join(above)}" if above else " (")
                + (f"{'; ' if above else ''}down: {', '.join(below)}" if below else "")
                + ").")
-    out.append("TREND  In 20 years of tests, selling what falls below its trend cut the worst "
-               "drops a lot but trailed buy-and-hold in strong years: a risk dial, not an order.")
+    out.append("TREND  Tests: this cut big drops but trailed buy-and-hold in strong years.")
+    out.append("TREND  A risk dial, not an order.")
     return out
 
 
@@ -247,7 +248,9 @@ def _trend_lines(sug, sector_trends: dict[str, float]) -> list[str]:
     if sug is None:
         return out
     if getattr(sug, "why", ""):
-        out.append(f"Why: {sug.why}")
+        why = sug.why
+        prefix = f"Buying case for {sug.ticker}: "
+        out.append("The model's read: " + (why[len(prefix):] if why.startswith(prefix) else why))
     if sug.earnings_days is not None and sug.earnings_days <= 14:
         out.append(f"Earnings in {sug.earnings_days} days: a big move either way is possible.")
     vol = (getattr(sug, "risk", None) or {}).get("annualized_vol")
@@ -371,7 +374,8 @@ def build_sheet(engine, client, suggestions=None, book="auto", news: bool = True
         sector_trends = {}
 
     sheet = Sheet(generated_at=now.strftime("%a %d %b %Y, %H:%M"),
-                  market=_market_lines(engine), trend=_core_trend(engine, track, now), overall_notes=list(result.get("overall_notes", [])))
+                  market=_market_lines(engine), trend=_core_trend(engine, track, now), warnings=list(result.get("warnings", [])),
+                  overall_notes=list(result.get("overall_notes", [])))
     if book is None:
         sheet.notes.append(
             "Look-alike history is not built yet, so no BUY can be stated plainly. "
@@ -403,6 +407,8 @@ def build_sheet(engine, client, suggestions=None, book="auto", news: bool = True
             elif ev is not None:
                 d.evidence = ev.sentence()
             d.context.append(a.why)
+            if d.verb == "TRIM":
+                d.context.append("This is about size, not a verdict on the stock.")
             d.context += _trend_lines(sug, sector_trends)
             if news and news_budget > 0 and d.ticker not in news_cache:
                 news_cache[d.ticker] = _news_line(engine, d.ticker)
@@ -454,6 +460,9 @@ def render_text(sheet: Sheet) -> str:
     for m in sheet.market:
         lines.append(f"MARKET  {m}")
     lines += sheet.trend
+    lines.append("ACCOUNTS READ  " + (", ".join(a.label for a in sheet.accounts) or "none"))
+    for w in sheet.warnings:
+        lines.append(f"HEADS UP  {w}")
     lines += ["", "BOTTOM LINE", "-" * 66]
     # Concentration across every account is the largest risk that needs no model
     # to see, so it leads.

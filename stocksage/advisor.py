@@ -623,6 +623,7 @@ def plans_for_accounts(engine: Engine, client, suggestions: list | None = None,
         accounts = []
 
     entries: list[tuple[str, str, object, str]] = []   # (role, label, portfolio, kind)
+    warnings: list[str] = []      # an account that is silently missing is worse than a failed run
     if not accounts:
         pf = _agentic_portfolio(client)
         if pf is not None:
@@ -640,13 +641,20 @@ def plans_for_accounts(engine: Engine, client, suggestions: list | None = None,
                 pf = client.portfolio_for(acct.number)
             except Exception as exc:
                 log.warning("could not read account %s: %s", acct.number[-4:], exc)
+                warnings.append(f"Could not read {acct.label} this run, so it is missing from this sheet.")
                 continue
             if pf is None:
+                warnings.append(f"Could not read {acct.label} this run, so it is missing from this sheet.")
                 continue
             is_agentic = acct.number == (agentic or default_number)
-            role = "agentic" if is_agentic else ("roth" if (acct.kind or "").lower() == "roth" else "personal")
+            role = "agentic" if is_agentic else ("roth" if "roth" in (acct.kind or "").lower() else "personal")
             entries.append((role, acct.label, pf, acct.kind or ""))
         entries.sort(key=lambda e: (e[0] != "agentic", e[0]))
+        if agentic and not any(a.number == agentic for a in accounts):
+            warnings.append(
+                f"Your routine's account (••••{agentic[-4:]}) was not among the accounts Robinhood "
+                "returned, so it is missing from this sheet. Run .\\start.bat doctor."
+            )
 
     # Scan every held name the daily scan missed ONCE, up front, so each
     # account's plan sees it and the caller gets one suggestion per ticker.
@@ -691,7 +699,7 @@ def plans_for_accounts(engine: Engine, client, suggestions: list | None = None,
                 notes.append(
                     f"{ticker} is {value / total:.0%} of everything you own across all your accounts."
                 )
-    return {"accounts": out, "overall_notes": notes,
+    return {"accounts": out, "overall_notes": notes, "warnings": warnings,
             "suggestions": {s.ticker: s for s in suggestions}}
 
 
