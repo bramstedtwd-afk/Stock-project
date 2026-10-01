@@ -616,12 +616,12 @@ def test_the_actions_command_labels_each_account_and_how_to_act(monkeypatch, cap
 
 # ------------------------------------------------- owner's profile choices
 
-def test_personal_is_active_and_roth_is_core_by_default(monkeypatch):
+def test_agentic_is_active_personal_is_stops_and_roth_is_core_by_default(monkeypatch):
     from stocksage.advisor import profile_for
 
     for role in ("agentic", "personal", "roth"):
         monkeypatch.delenv(f"STOCKSAGE_PROFILE_{role.upper()}", raising=False)
-    assert [profile_for(r) for r in ("agentic", "personal", "roth")] == ["active", "active", "core"]
+    assert [profile_for(r) for r in ("agentic", "personal", "roth")] == ["active", "stops", "core"]
 
 
 def test_a_profile_can_be_overridden_in_config_and_garbage_is_ignored(monkeypatch):
@@ -906,3 +906,84 @@ def test_the_brief_is_sized_from_cash_not_buying_power(monkeypatch):
     monkeypatch.delenv("STOCKSAGE_AGENTIC_ACCOUNT", raising=False)
     engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
     assert desktop_sync_cycle(engine, client=Client())["buying_power"] == 75.0
+
+
+# ------------------------------------------------- the "stops" profile (personal account)
+
+def test_the_stops_profile_has_no_ten_day_clock():
+    held = [pos("AAA", shares=1, cost=100, price=100)]
+    plan = plan_for(held, [sug("AAA", action="HOLD")], cash=900,
+                    entered={"AAA": LONG_AGO}, profile="stops")
+    assert not [a for a in plan.actions if a.kind in ("EXIT_TIME", "HOLD_PAST_TIME")]
+    active = plan_for(held, [sug("AAA", action="HOLD")], cash=900, entered={"AAA": LONG_AGO})
+    assert ("EXIT_TIME", "AAA") in kinds(active), "the agentic account keeps its clock"
+
+
+def test_the_stops_profile_has_no_profit_target_exit():
+    held = [pos("AAA", cost=100, price=109)]                  # would hit a 108 target
+    assert ("EXIT_TARGET", "AAA") not in kinds(plan_for(held, [sug("AAA")], cash=900, profile="stops"))
+    assert ("EXIT_TARGET", "AAA") in kinds(plan_for(held, [sug("AAA")], cash=900, profile="active"))
+
+
+def test_the_stops_profile_still_exits_a_real_stop_breach():
+    held = [pos("AAA", cost=100, price=90)]
+    plan = plan_for(held, [sug("AAA", atr=0.02)], cash=900, profile="stops")
+    stop = next(a for a in plan.actions if a.kind == "EXIT_STOP")
+    assert stop.urgency == 1 and stop.target is None
+
+
+def test_the_stops_profile_still_warns_near_the_stop_and_still_caps_size():
+    near = plan_for([pos("AAA", cost=100, price=97)], [sug("AAA", atr=0.02)], cash=900, profile="stops")
+    assert ("HEADS_UP", "AAA") in kinds(near)
+    big = plan_for([pos("AAA", shares=1, cost=80, price=80)], [sug("AAA", action="HOLD")],
+                   cash=20, profile="stops")
+    assert any(a.kind == "TRIM" for a in big.actions)
+
+
+def test_a_stocks_account_holds_more_names_than_the_four_of_the_small_one():
+    held = [pos(f"P{i}", price=10, cost=10) for i in range(6)]
+    book = [sug(h["ticker"], action="HOLD") for h in held] + [sug("NEW", price=20)]
+    assert any(a.kind == "ENTER" for a in plan_for(held, book, cash=900, profile="stops", entries="always").actions)
+    assert not any(a.kind == "ENTER" for a in plan_for(held, book, cash=900, profile="active", entries="always").actions)
+
+
+def test_stops_is_a_valid_override_and_garbage_still_falls_back(monkeypatch):
+    from stocksage.advisor import profile_for
+
+    monkeypatch.setenv("STOCKSAGE_PROFILE_ROTH", "STOPS")
+    assert profile_for("roth") == "stops"
+    monkeypatch.setenv("STOCKSAGE_PROFILE_ROTH", "swing")
+    assert profile_for("roth") == "core"
+
+
+def test_the_five_sells_that_prompted_this_do_not_all_appear_for_the_personal_account(monkeypatch):
+    """Only genuine stop breaches survive; positions that were merely ten-plus
+    days old no longer produce 'SELL all' lines."""
+    from stocksage.advisor import plans_for_accounts
+    from stocksage.db import Database
+    from stocksage.engine import Engine
+    from stocksage.robinhood import Holding, Portfolio
+    from tests.test_engine import FakeMarket
+    from datetime import datetime, timedelta, timezone
+
+    for r in ("PERSONAL", "ROTH", "AGENTIC"):
+        monkeypatch.delenv(f"STOCKSAGE_PROFILE_{r}", raising=False)
+    monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "123456789")
+    broker = FakeBroker()
+    broker.pf["111111111"] = Portfolio([
+        Holding("STOPPED", 1.0, 100.0, 90.0, 90.0),     # a real stop breach
+        Holding("OLDISH", 1.0, 100.0, 97.0, 97.0),      # held 19 days, slightly down
+        Holding("FLAT", 1.0, 100.0, 99.0, 99.0),        # held 27 days, flat
+    ], 900.0, "111111111")
+    engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
+    for oid, t, days in (("a", "STOPPED", 5), ("b", "OLDISH", 27), ("c", "FLAT", 40)):
+        engine.db.upsert_rh_orders([{"order_id": oid, "ticker": t, "side": "buy", "quantity": 1,
+                                     "price": 100.0,
+                                     "executed_at": (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()}])
+    scanned = _everything_scanned() + [sug("STOPPED", price=90), sug("OLDISH", action="HOLD", price=97),
+                                       sug("FLAT", action="HOLD", price=99)]
+    out = plans_for_accounts(engine, broker, suggestions=scanned)
+    personal = next(e for e in out["accounts"] if e["role"] == "personal")
+    sells = {a.ticker: a.kind for a in personal["plan"].actions if a.side == "SELL"}
+    assert sells.get("STOPPED") == "EXIT_STOP"
+    assert "OLDISH" not in sells and "FLAT" not in sells

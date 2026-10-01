@@ -582,15 +582,17 @@ def entries_policy() -> str:
 
 ROLE_LABELS = {"agentic": "Agentic", "personal": "Personal", "roth": "Roth IRA"}
 
-# Which rules each kind of account gets. The owner's answer: the personal
-# brokerage is actively traded like the agentic one; the Roth is long-term.
+# Which rules each kind of account gets. The owner's answers: the agentic
+# account is day-traded (stops, targets, 10-day clock); the personal brokerage
+# is run by hand with stop-loss exits and the size cap but no clock; the Roth
+# is long-term.
 # Override per role with STOCKSAGE_PROFILE_PERSONAL=core, etc.
-PROFILE_DEFAULTS = {"agentic": "active", "personal": "active", "roth": "core"}
+PROFILE_DEFAULTS = {"agentic": "active", "personal": "stops", "roth": "core"}
 
 
 def profile_for(role: str) -> str:
     chosen = (os.environ.get(f"STOCKSAGE_PROFILE_{role.upper()}") or "").strip().lower()
-    return chosen if chosen in ("active", "core") else PROFILE_DEFAULTS[role]
+    return chosen if chosen in ("active", "stops", "core") else PROFILE_DEFAULTS[role]
 CONCENTRATION_NOTE_AT = 0.15
 
 

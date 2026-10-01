@@ -299,7 +299,8 @@ def build_plan(
     held name was last bought (for the time exit).
     """
     today = today or date.today()
-    active = profile == "active"
+    active = profile in ("active", "stops")   # has stops at all
+    clock = profile == "active"               # also the 10-day clock and targets
     reliability = reliability or {}
     by_ticker = {s.ticker: s for s in suggestions}
     plan = Plan(trust=trust, sell_trust=sell_trust or {})
@@ -317,9 +318,9 @@ def build_plan(
         s = by_ticker.get(t)
         atr = _atr_pct(s) if s else None
         stop = round(cost * (1 - STOP_ATR_MULT * atr), 2) if (atr and active) else None
-        target = round(cost + 2 * (cost - stop), 2) if stop else None
+        target = round(cost + 2 * (cost - stop), 2) if (stop and clock) else None
         entered = entry_dates.get(t)
-        age = trading_days_between(entered, today) if (entered and active) else None
+        age = trading_days_between(entered, today) if (entered and clock) else None
         long_held = age is not None and age > LONG_HOLD_DAYS
         if long_held:
             stop, target, age = None, None, None
@@ -423,7 +424,7 @@ def build_plan(
         )
     else:
         kept = len(positions) - len(exited)
-        slots = max(0, (TARGET_POSITIONS if active else CORE_TARGET_POSITIONS) - kept)
+        slots = max(0, (TARGET_POSITIONS if clock else CORE_TARGET_POSITIONS) - kept)
         held = {p["ticker"] for p in positions}
         ranked = sorted(
             (
