@@ -308,7 +308,9 @@ def build_sheet(engine, client, suggestions=None, book="auto", news: bool = True
 
 def _bottom_line(a: AccountSheet) -> list[str]:
     how = "you reply 'confirm' in the routine" if not a.manual else "you place these yourself"
-    out = [f"{a.title.upper()}  ({how})"]
+    # The label (e.g. "Margin ••••1234") tells two accounts of the same role apart.
+    head = f"{a.title.upper()}  {a.label}".rstrip()
+    out = [f"{head}  ({how})"]
     sells = [d for d in a.directives if d.verb in ("SELL", "TRIM")]
     buys = [d for d in a.directives if d.verb == "BUY"]
     for d in sells + buys:

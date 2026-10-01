@@ -323,3 +323,10 @@ def test_the_lab_tests_the_lookalike_filter_and_remembers_whether_it_passed(monk
     monkeypatch.setenv("USERPROFILE", str(today.state_dir()))
     assert cli.main(["lab"]) == 0
     assert today.LAB_FILTER_NAME in capsys.readouterr().out
+
+
+def test_two_accounts_of_the_same_role_can_be_told_apart_in_the_bottom_line():
+    a = today.AccountSheet(role="personal", title="Personal", label="Margin ••••2885", manual=True)
+    b = today.AccountSheet(role="personal", title="Personal", label="Margin ••••7354", manual=True)
+    assert today._bottom_line(a)[0] != today._bottom_line(b)[0]
+    assert "••••2885" in today._bottom_line(a)[0]
