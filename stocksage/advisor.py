@@ -257,6 +257,7 @@ def build_brief(
     congress_summary: dict | None = None,
     holdings: list[str] | None = None,
     buying_power: float | None = None,
+    positions: list[dict] | None = None,
 ) -> dict:
     """One research packet: verdicts on `tickers`, plus ranked candidates.
 
@@ -334,8 +335,18 @@ def build_brief(
     buys, avoided = paper_trades(engine.db.evaluated_suggestions())
     ledger = profit_stats(buys, avoided)
 
+    packet_actions = None
+    if positions is not None and buying_power is not None:
+        try:
+            packet_actions = plan_for_account(
+                engine, list(by_ticker.values()), positions, buying_power
+            ).to_dict()
+        except Exception as exc:  # a planning bug must never cost the whole brief
+            log.warning("could not build today's actions: %s", exc)
+
     return {
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "actions": packet_actions,
         "snapshot_absorbed": snapshot,
         "graded_this_call": graded_now,
         "market_mood": engine.sector_trends(),
@@ -516,6 +527,45 @@ def _agentic_portfolio(client):
     return client.portfolio()
 
 
+
+def plan_for_account(engine: Engine, suggestions: list, positions: list[dict],
+                     cash: float):
+    """Today's ranked actions for the account the routine trades.
+
+    One function used by the CLI, the dashboard and the published brief, so
+    all three show the owner the same thing. Everything it needs comes from
+    the brain: when each name was bought (the broker mirror), how much the
+    model's edge can be believed, and the owner's on/off switch.
+    """
+    from .actions import build_plan, entry_dates_from_orders, model_trust
+
+    # The daily scan covers the universe, the watchlist and the DEFAULT
+    # account's holdings. A name held only in the account the routine trades
+    # may be in none of those, and without a scan it has no ATR, so no stop,
+    # so a stop breach would pass silently. Scan any held name that is missing.
+    have = {s.ticker for s in suggestions}
+    missing = [p["ticker"] for p in positions if p["ticker"] not in have]
+    if missing:
+        suggestions = list(suggestions) + engine.scan(
+            tickers=missing, capture_context=False, record=False
+        ).suggestions
+
+    held = {p["ticker"] for p in positions}
+    entered = entry_dates_from_orders(
+        [dict(r) for r in engine.db.rh_orders()], held
+    )
+    reliability = {}
+    for s in suggestions:
+        graded, hit, _ = engine.db.ticker_track_record(s.ticker)
+        reliability[s.ticker] = (graded, hit)
+    return build_plan(
+        positions, cash, suggestions, entered,
+        model_trust(engine.db.evaluated_suggestions()),
+        suggestions_enabled=engine.db.model_suggestions_enabled(),
+        reliability=reliability,
+    )
+
+
 def desktop_sync_cycle(engine: Engine, client=None, broker: bool = True) -> dict:
     """The full desktop-side heartbeat that keeps the brain current.
 
@@ -553,6 +603,11 @@ def desktop_sync_cycle(engine: Engine, client=None, broker: bool = True) -> dict
         portfolio = _agentic_portfolio(client)
         if portfolio is not None:
             stats["holdings"] = [h.ticker for h in portfolio.holdings]
+            stats["positions"] = [
+                {"ticker": h.ticker, "shares": h.shares, "avg_cost": h.avg_buy_price,
+                 "price": h.current_price, "equity": h.equity}
+                for h in portfolio.holdings
+            ]
             stats["buying_power"] = portfolio.buying_power
             stats["account_number"] = portfolio.account_number
     except Exception as exc:  # never let a broker hiccup block grading/publish
@@ -571,6 +626,7 @@ def publish_brief(
     include_snapshot: bool = True,
     holdings: list[str] | None = None,
     buying_power: float | None = None,
+    positions: list[dict] | None = None,
 ) -> dict:
     """Write a fresh research packet into a folder for the routine to read.
 
@@ -591,7 +647,7 @@ def publish_brief(
     focus = tickers if tickers is not None else engine.db.watchlist()
     packet = build_brief(
         engine, tickers=focus, max_price=max_price, top=top, holdings=holdings,
-        buying_power=buying_power,
+        buying_power=buying_power, positions=positions,
     )
 
     brief_path = out_dir / f"StockSage Brief - {date.today().isoformat()}.json"
@@ -622,6 +678,7 @@ def publish_brief_via_api(
     top: int = 8,
     holdings: list[str] | None = None,
     buying_power: float | None = None,
+    positions: list[dict] | None = None,
 ) -> dict:
     """Push research straight to Google Drive via the API — no desktop
     sync client, no admin rights, nothing installed on the machine beyond
@@ -640,7 +697,7 @@ def publish_brief_via_api(
     focus = tickers if tickers is not None else engine.db.watchlist()
     packet = build_brief(
         engine, tickers=focus, max_price=max_price, top=top, holdings=holdings,
-        buying_power=buying_power,
+        buying_power=buying_power, positions=positions,
     )
     playbook_text = playbook_for_publishing()
     # Same reasoning as publish_brief: export outside the repo tree so an
@@ -650,6 +707,7 @@ def publish_brief_via_api(
     )
     result = publish_via_api(json.dumps(packet, indent=2), playbook_text, snap)
     result["candidates"] = len(packet["candidates"])
+    result["actions"] = packet.get("actions")
     return result
 
 

@@ -213,3 +213,71 @@ def test_sidebar_reports_broker_sessions_and_exposure(seeded_brain, tmp_path, mo
     assert "publish-drive" in sidebar
     # The password-plus-TOTP-seed exposure must be stated, not buried.
     assert "two-factor" in sidebar.lower()
+
+
+def _plan_page(monkeypatch, tmp_path, held_price, planner_raises=False, shares=2.0):
+    from stocksage.engine import ScanResult
+    from stocksage.robinhood import Account, Holding, Portfolio
+    from stocksage.scoring import Suggestion
+
+    pf = Portfolio([Holding("ZZZ", shares, 100.0, held_price, shares * held_price)], 40.0, "123456789")
+
+    class FakeClient:
+        @staticmethod
+        def credentials_available():
+            return True
+
+        def accounts(self):
+            return [Account("123456789", "individual", 40.0, 40.0)]
+
+        def portfolio(self):
+            return pf
+
+        def portfolio_for(self, number):
+            return pf
+
+        def sync_history(self, db):
+            return None
+
+    monkeypatch.setattr("stocksage.robinhood.RobinhoodClient", FakeClient)
+    monkeypatch.setenv("STOCKSAGE_DB", str(tmp_path / "brain.db"))
+    monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "123456789")
+    if planner_raises:
+        def boom(*a, **k):
+            raise RuntimeError("planner exploded")
+
+        monkeypatch.setattr("stocksage.advisor.plan_for_account", boom)
+
+    db = Database(tmp_path / "brain.db")
+    db.set_meta("last_daily_run", date.today().isoformat())
+    db.close()
+    held = Suggestion(
+        ticker="ZZZ", action="HOLD", score=0.0, risk_adjusted_score=0.0,
+        price=held_price, signals={}, risk={"atr_pct": 0.02}, stop_price=held_price * 0.96,
+    )
+    at = AppTest.from_file(APP)
+    at.session_state["scan_result"] = ScanResult(suggestions=[held], portfolio=pf, sector_trends={})
+    at.run(timeout=RUN_TIMEOUT)
+    return at
+
+
+def test_dashboard_leads_with_what_to_do_when_a_stop_is_hit(monkeypatch, tmp_path):
+    at = _plan_page(monkeypatch, tmp_path, held_price=90.0)   # cost 100, stop 96
+    assert not at.exception, at.exception
+    shown = " ".join(str(e.value) for e in at.error)
+    assert "SELL all of ZZZ" in shown and "hit its stop" in shown
+    assert any("What to do today" in str(m.value) for m in at.markdown)
+    assert any("never places orders" in c.value for c in at.caption)
+
+
+def test_dashboard_says_so_when_there_is_nothing_to_do(monkeypatch, tmp_path):
+    at = _plan_page(monkeypatch, tmp_path, held_price=101.0, shares=0.1)  # ~20% of the account
+    assert not at.exception, at.exception
+    assert not at.error
+    assert any("Nothing to do today" in str(s.value) for s in at.success)
+
+
+def test_a_broken_planner_never_takes_the_dashboard_down(monkeypatch, tmp_path):
+    at = _plan_page(monkeypatch, tmp_path, held_price=90.0, planner_raises=True)
+    assert not at.exception, at.exception
+    assert not any("What to do today" in str(m.value) for m in at.markdown)

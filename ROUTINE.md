@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v11, 2026-08-10)
+# Agentic Trading Routine — Playbook (v12, 2026-10-01)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from the **"StockSage" Drive folder, file "StockSage Routine
@@ -7,6 +7,14 @@ Playbook.md" — exact folder + exact filename, never a bare title search**
 publishing this file every run. Improving the routine = editing this file;
 the next publish propagates it. The routine states at the top of each run
 which playbook version it loaded, straight from this file's own header.
+
+**What changed in v12 — the brief now arrives with proposed actions.**
+The brief carries an `actions` block: the desktop has already applied this
+playbook's own rules (stop, target, 10-day exit, 25% cap, $15 floor, 3-4
+names) to the account it believes you trade and ranked what to do. Start
+from it instead of re-deriving it — but it is a proposal, never an order, and
+your own live pull always wins (see the `actions` bullet under the brief).
+No change to the confirm gate or any hard safety rule.
 
 **What changed in v11 — the brief may describe a different account.**
 The desktop that builds the brief signs in to Robinhood separately from
@@ -158,6 +166,20 @@ have Google Drive + Robinhood, but no terminal/repo).**
   and `model_stats` (graded_calls, hit_rate, paper_profit_factor,
   avg_return_per_call — all scale-free; there is no dollar P&L because a
   fixed-stake figure would mislead next to a small account).
+- **Use `actions` as a head start, and verify every line.** `actions.actions`
+  is ranked most-urgent first; each has a `kind` (EXIT_STOP, EXIT_TARGET,
+  EXIT_TIME, TRIM, ENTER, WATCH...), `dollars`/`shares`, `stop`, `target`,
+  and for entries a `confidence`. Before proposing any of it, check it
+  against YOUR OWN live pull of the agentic account: the desktop read the
+  account minutes to hours earlier, from completed bars, and may have read
+  the wrong account. If a position, price, or cash figure disagrees, your
+  live data wins — say what differed. Risk exits (EXIT_STOP, EXIT_TARGET,
+  EXIT_TIME, TRIM) do not depend on the model being right, so give them
+  priority even when the model's record is poor. ENTER lines do depend on
+  it: read `actions.model_trust` and `actions.notes`, and when the model's
+  level is `failing` say so in the card instead of presenting the entry as a
+  strong signal. `no_action_needed` lists positions the rules found nothing
+  to do about. Every action still needs the order-specific "confirm".
 - **Respect `model_suggestions_enabled`.** When it is `false` the owner has
   switched the engine's picks off as *offers*: every buy comes back with
   `actionable: false` and you must not propose an entry from the brief. The

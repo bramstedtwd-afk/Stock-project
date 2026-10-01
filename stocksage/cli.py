@@ -444,6 +444,7 @@ def cmd_publish(args) -> int:
     result = publish_brief(
         engine, args.drive_folder, tickers=focus, max_price=args.max_price,
         holdings=sync.get("holdings"), buying_power=sync.get("buying_power"),
+            positions=sync.get("positions"),
     )
     print(f"Published research to {result['folder']}:")
     for path in result["written"]:
@@ -468,6 +469,47 @@ def _pull_drive_brain(engine) -> None:
             f"(Caught up from Drive: +{stats['suggestions_added']} suggestions, "
             f"+{stats['move_events_added']} move events.)"
         )
+
+
+def _alert_on(engine, plan_dict) -> None:
+    """Push a phone alert if the plan has something new. Opt-in, never raises."""
+    if not plan_dict:
+        return
+    try:
+        from .actions import Plan
+        from .notify import alert_if_new
+
+        alert_if_new(engine.db, Plan.from_dict(plan_dict))
+    except Exception:
+        pass
+
+
+def cmd_actions(args) -> int:
+    """What to do today, in plain language."""
+    from .actions import Plan, format_plan
+    from .advisor import build_brief
+
+    engine = Engine()
+    sync, focus = _sync_and_focus(engine, args.tickers)
+    if sync.get("positions") is None or sync.get("buying_power") is None:
+        print(
+            "Robinhood is not linked on this computer, so StockSage cannot see "
+            "what you hold.\nLink it from the dashboard's Portfolio tab, then "
+            "run this again."
+        )
+        if sync.get("sync_error"):
+            print(f"(Last attempt said: {sync['sync_error']})")
+        return 1
+    brief = build_brief(
+        engine, tickers=focus, buying_power=sync["buying_power"],
+        positions=sync["positions"],
+    )
+    if not brief.get("actions"):
+        print("Could not work out today's actions - run  .\\start.bat doctor  to see why.")
+        return 1
+    print("\n".join(format_plan(Plan.from_dict(brief["actions"]))))
+    _alert_on(engine, brief["actions"])
+    return 0
 
 
 def _record_publish(engine, error: str | None = None) -> None:
@@ -502,6 +544,7 @@ def cmd_publish_drive(args) -> int:
         result = publish_brief_via_api(
             engine, tickers=focus, max_price=args.max_price,
             holdings=sync.get("holdings"), buying_power=sync.get("buying_power"),
+            positions=sync.get("positions"),
         )
     except DriveNotConfigured as exc:
         _record_publish(engine, error=str(exc))
@@ -513,6 +556,7 @@ def cmd_publish_drive(args) -> int:
         _record_publish(engine, error=f"{type(exc).__name__}: {exc}")
         raise
     _record_publish(engine)
+    _alert_on(engine, result.get("actions"))
     print(f"Published directly to Google Drive ({result['candidates']} candidates):")
     for name in result["files"]:
         print(f"  · {name}  (in your Drive's StockSage folder)")
@@ -1066,6 +1110,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--limit", type=int, default=25)
     p.set_defaults(func=cmd_security)
+
+    p = sub.add_parser(
+        "actions", help="what to do today: sells, trims and entries, in plain language"
+    )
+    p.add_argument("tickers", nargs="*", help="extra tickers to look at")
+    p.set_defaults(func=cmd_actions)
 
     p = sub.add_parser(
         "setup", help="guided first run on a new machine: brain, settings, checks"

@@ -71,6 +71,66 @@ def _congress_top():
         return []
 
 
+
+def _todays_plan(scan):
+    """Today's actions for the account the routine trades, or None.
+
+    Computed once per scan and remembered, because it talks to the broker.
+    Wrapped so that nothing about it — no broker hiccup, no planning bug —
+    can stop the rest of the dashboard from rendering.
+    """
+    cached = st.session_state.get("todays_plan")
+    if cached is not None and cached[0] is scan:
+        return cached[1]
+    plan = None
+    try:
+        from stocksage.advisor import _agentic_portfolio, plan_for_account
+        from stocksage.robinhood import RobinhoodClient
+
+        client = RobinhoodClient()
+        if client.credentials_available():
+            pf = _agentic_portfolio(client)
+            if pf is not None:
+                positions = [
+                    {"ticker": h.ticker, "shares": h.shares, "avg_cost": h.avg_buy_price,
+                     "price": h.current_price, "equity": h.equity}
+                    for h in pf.holdings
+                ]
+                plan = plan_for_account(
+                    get_engine(), scan.suggestions, positions, pf.buying_power
+                )
+    except Exception:
+        plan = None
+    st.session_state["todays_plan"] = (scan, plan)
+    return plan
+
+
+def _render_plan(plan):
+    """The plan, loudest first. One glance should say what to do."""
+    from stocksage.actions import FYI, URGENT, trust_sentence
+
+    doing = [a for a in plan.actions if a.kind not in ("WATCH", "HEADS_UP", "HOLD_PAST_TIME")]
+    context = [a for a in plan.actions if a.kind in ("WATCH", "HEADS_UP", "HOLD_PAST_TIME")]
+    with st.container(border=True):
+        st.markdown("### ✅ What to do today")
+        if not doing:
+            st.success("Nothing to do today. Holding and waiting is a decision too.")
+        for a in doing:
+            box = st.error if a.urgency == URGENT else (st.info if a.urgency >= FYI else st.warning)
+            tag = f"  ·  _{a.confidence} confidence_" if a.confidence else ""
+            box(f"**{a.headline}**{tag}")
+            st.caption(a.why)
+        for a in context:
+            st.caption(f"· {a.headline}")
+        if plan.quiet:
+            st.caption(f"No action needed: {', '.join(plan.quiet)}")
+        st.caption(trust_sentence(plan.trust))
+        st.caption(
+            "StockSage never places orders — your routine proposes each one and "
+            "waits for your confirm."
+        )
+
+
 def run_daily_cycle():
     engine = get_engine()
     first_run = engine.db.get_meta("bootstrap_done") is None
@@ -241,6 +301,10 @@ result = st.session_state.get("scan_result")
 
 if result is not None:
     from stocksage.briefing import briefing_lines, build_briefing
+
+    _plan = _todays_plan(result)
+    if _plan is not None:
+        _render_plan(_plan)
 
     briefing = build_briefing(result, get_engine().db)
     mood_icon = {"bullish": "🟢", "bearish": "🔴", "mixed": "🟡"}[briefing["mood"]]
