@@ -50,7 +50,7 @@ rather than giving them instructions.
 
 ## Commands (via ./start.sh or .\start.bat)
 
-`(none)`=app window · `today` (alias `actions`) · `analogs` · `research [--draws N]` · `backtest [--years N]` · `lab [--years N]` · `setup` (new machine) · `web` · `phone` · `install` · `autopilot [off|status]` ·
+`(none)`=app window · `today` (alias `actions`) · `alerts [test|off]` · `analogs` · `research [--draws N]` · `backtest [--years N]` · `lab [--years N]` · `setup` (new machine) · `web` · `phone` · `install` · `autopilot [off|status]` ·
 `update` · `doctor` · `daily` · `suggest [TICKERS]` · `sectors` · `portfolio` ·
 `moves` · `performance` · `profit` · `watch add|remove|list` ·
 `congress` · `bootstrap` · `brain export|import|sync|info|audit|repair` ·

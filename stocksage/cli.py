@@ -515,6 +515,55 @@ def cmd_research(args) -> int:
     return 0
 
 
+def cmd_alerts(args) -> int:
+    """Set up (or test, or turn off) phone alerts through the free ntfy app."""
+    import secrets
+
+    from . import envfile, notify
+
+    topic = notify.topic_from_env()
+    if args.action == "off":
+        envfile.save_env({"STOCKSAGE_NTFY_TOPIC": ""})
+        os.environ.pop("STOCKSAGE_NTFY_TOPIC", None)
+        print("Phone alerts are off. Nothing will be sent until you run  .\\start.bat alerts  again.")
+        return 0
+
+    if args.action == "test":
+        if not topic:
+            print("Alerts are not set up yet. Run  .\\start.bat alerts  first.")
+            return 1
+        try:
+            notify._post(notify.NTFY_URL.format(topic=topic),
+                         b"If you can read this, StockSage alerts work.",
+                         {"Title": "StockSage test", "Tags": "white_check_mark"})
+        except Exception as exc:
+            print(f"The test did not go through ({exc}). Check this computer's internet and try again.")
+            return 1
+        print("Sent. It should appear on your phone within a few seconds.")
+        print("If it did not: open the ntfy app, make sure you are subscribed to the topic below.")
+        print(f"  topic: {topic}")
+        return 0
+
+    created = False
+    if not topic:
+        topic = "stocksage-" + "".join(secrets.choice("abcdefghjkmnpqrstuvwxyz23456789") for _ in range(16))
+        envfile.save_env({"STOCKSAGE_NTFY_TOPIC": topic})
+        created = True
+    print("PHONE ALERTS" + ("  (just created)" if created else "  (already set up)"))
+    print("=" * 50)
+    print("1. On your phone, install the free app  ntfy  (App Store or Google Play).")
+    print("2. Open it, tap  +  (Subscribe to topic), and type exactly:")
+    print(f"\n      {topic}\n")
+    print("   Leave 'Use another server' off. Allow notifications when it asks.")
+    print("3. Back here, send yourself a test:")
+    print("\n      .\\start.bat alerts test\n")
+    print("What you will get: a loud buzz right away if a stop is breached, and ONE quiet")
+    print("daily message with everything else. Messages name a ticker, an action and the")
+    print("account type only: never an amount, a balance or an account number.")
+    print("Treat the topic name like a password: anyone who knows it can read your alerts.")
+    return 0
+
+
 def cmd_analogs(args) -> int:
     """Build the look-alike history that lets a BUY be stated plainly."""
     from . import backtest
@@ -1356,6 +1405,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--draws", type=int, default=2000, help="bootstrap draws (more = steadier p-values)")
     p.add_argument("--top", type=int, default=12, help="how many candidates to list")
     p.set_defaults(func=cmd_research)
+
+    p = sub.add_parser(
+        "alerts", help="set up phone alerts (free ntfy app): urgent now, everything else once a day"
+    )
+    p.add_argument("action", nargs="?", default="setup", choices=["setup", "test", "off"])
+    p.set_defaults(func=cmd_alerts)
 
     p = sub.add_parser(
         "analogs",

@@ -273,6 +273,19 @@ at the top of the dashboard, and each scheduled run on your computer saves it
 and puts a copy in your Drive folder as **StockSage Today** so you can read it on
 your phone. StockSage never places an order; you do that yourself.
 
+## Phone alerts
+
+```
+cd C:\Users\<you>\Stock-project
+.\start.bat alerts          (makes a private topic name and tells you what to type in the app)
+.\start.bat alerts test     (sends a test to your phone)
+.\start.bat alerts off
+```
+
+Install the free **ntfy** app, subscribe to the topic it prints, and you get a loud
+buzz when a stop is breached and one quiet daily message with everything else.
+Messages carry a ticker, an action and the account type only, never an amount.
+
 ## If anything seems off
 
 ```bash
