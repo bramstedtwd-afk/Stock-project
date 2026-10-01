@@ -31,6 +31,15 @@ PYTHON="$(command -v python3 || true)"
   || fail "Python 3.10+ is required (found $($PYTHON --version 2>&1))."
 
 # --- 2. Virtualenv -----------------------------------------------------------
+# BEGIN heal-venv
+# A virtualenv is a pointer to the Python it was built from. If that Python is
+# later moved or removed the pointer still exists but nothing runs, and the
+# "does it exist" check below would never rebuild it.
+if [ -x .venv/bin/python ] && ! .venv/bin/python -c 'import sys' >/dev/null 2>&1; then
+  say "The Python this setup was built on has been moved or removed - rebuilding it..."
+  rm -rf .venv
+fi
+# END heal-venv
 if [ ! -x .venv/bin/python ]; then
   say "First run: creating virtual environment..."
   "$PYTHON" -m venv .venv

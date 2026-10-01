@@ -25,6 +25,19 @@ if errorlevel 1 (
     exit /b 1
 )
 
+rem BEGIN heal-venv
+rem A virtualenv is a pointer to the Python it was built from. If that Python
+rem is later moved or removed the pointer survives but nothing runs, and the
+rem exist check below would never rebuild it.
+if exist .venv\Scripts\python.exe (
+    .venv\Scripts\python.exe -c "import sys" >nul 2>nul
+    if errorlevel 1 (
+        echo [stocksage] The Python this setup was built on has been moved or removed - rebuilding it...
+        rmdir /s /q .venv
+    )
+)
+rem END heal-venv
+
 if not exist .venv\Scripts\python.exe (
     echo [stocksage] First run: creating virtual environment...
     python -m venv .venv || exit /b 1
