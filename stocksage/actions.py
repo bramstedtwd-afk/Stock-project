@@ -377,7 +377,10 @@ def build_plan(
             acted = True
 
         capped = not (profile == "core" and t in INDEX_FUNDS)
-        if t not in exited and total_equity > 0 and capped:
+        # A full sell already answers an oversized position: trimming a name the
+        # same sheet says to sell entirely is two contradictory orders.
+        selling_all = s is not None and s.action in SELLISH
+        if t not in exited and total_equity > 0 and capped and not selling_all:
             over = equity - MAX_POSITION_FRACTION * total_equity
             if over >= MIN_ORDER:
                 plan.actions.append(Action(

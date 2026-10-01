@@ -987,3 +987,17 @@ def test_the_five_sells_that_prompted_this_do_not_all_appear_for_the_personal_ac
     sells = {a.ticker: a.kind for a in personal["plan"].actions if a.side == "SELL"}
     assert sells.get("STOPPED") == "EXIT_STOP"
     assert "OLDISH" not in sells and "FLAT" not in sells
+
+
+def test_a_name_the_model_says_to_sell_is_not_also_trimmed():
+    """Two orders for one name (trim $7, then sell all $32) contradict each other."""
+    plan = plan_for([pos("AAA", shares=3, cost=100, price=100), pos("BBB", shares=1, cost=100, price=100)],
+                    [sug("AAA", action="SELL", price=100), sug("BBB", action="HOLD", price=100)], cash=0)
+    mine = [a.kind for a in plan.actions if a.ticker == "AAA"]
+    assert "EXIT_SIGNAL" in mine and "TRIM" not in mine
+
+
+def test_an_oversized_name_the_model_still_likes_is_trimmed():
+    plan = plan_for([pos("AAA", shares=3, cost=100, price=100), pos("BBB", shares=1, cost=100, price=100)],
+                    [sug("AAA", action="HOLD", price=100), sug("BBB", action="HOLD", price=100)], cash=0)
+    assert [a.kind for a in plan.actions if a.ticker == "AAA"] == ["TRIM"]

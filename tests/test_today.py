@@ -546,3 +546,21 @@ def test_a_routine_account_that_cannot_be_read_at_all_is_explained_not_faked(mon
     out = plans_for_accounts(engine, Empty(), suggestions=default_suggestions(STRONG))
     assert "agentic" not in [e["role"] for e in out["accounts"]]
     assert any("••••0111" in w and "reads that account itself" in w for w in out["warnings"])
+
+
+# ------------------------------------------------------------ readable headings and honest tags
+
+def test_headings_do_not_say_the_account_type_twice():
+    roth = today.AccountSheet(role="roth", title="Roth IRA", label="Roth IRA ••••9999", manual=True)
+    pers = today.AccountSheet(role="personal", title="Personal", label="Margin ••••1111", manual=True)
+    assert today._heading(roth) == "ROTH IRA ••••9999"
+    assert today._heading(pers) == "PERSONAL  Margin ••••1111"
+
+
+def test_a_model_sell_that_look_alikes_do_not_back_says_so_in_its_tag():
+    bad = today.Directive("SELL", "DE", "SELL ALL DE", "model call",
+                          evidence="Look-alikes: ... History does NOT back this call.")
+    good = today.Directive("SELL", "DE", "SELL ALL DE", "model call", evidence="... History BACKS this call.")
+    rule = today.Directive("SELL", "DE", "SELL ALL DE", "risk rule")
+    assert today._tag(bad) == "MODEL, look-alikes do not back it"
+    assert today._tag(good) == "MODEL" and today._tag(rule) == "RULE"

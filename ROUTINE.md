@@ -595,6 +595,7 @@ the trimmed slice only, and state what remains after: "leaves 0.05 shares
   least four names, which is why the posture below says 3–4 rather than
   2–3. Raising this back toward 50% re-permits a two-name book and
   re-accepts single-name gap risk on most of the account.)
+- A name being sold in full is not also trimmed: one order per name, the sale.
 - Max 4 new positions per day across all runs.
 - Every entry has a stop and a target at ≥2:1 reward-to-risk (subject to
   the fractional-position handling below).

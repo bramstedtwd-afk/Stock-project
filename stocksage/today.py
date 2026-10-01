@@ -431,16 +431,29 @@ def build_sheet(engine, client, suggestions=None, book="auto", news: bool = True
 # --- rendering ----------------------------------------------------------------
 
 
+def _heading(a: AccountSheet) -> str:
+    """'PERSONAL  Margin ••••2885', without saying 'Roth IRA' twice."""
+    if a.label.lower().startswith(a.title.lower()):
+        return a.label.upper()
+    return f"{a.title.upper()}  {a.label}".rstrip()
+
+
+def _tag(d: Directive) -> str:
+    if d.basis == "risk rule":
+        return "RULE"
+    if d.evidence and "does NOT back" in d.evidence:
+        return "MODEL, look-alikes do not back it"
+    return "MODEL"
+
+
 def _bottom_line(a: AccountSheet) -> list[str]:
     how = "you reply 'confirm' in the routine" if not a.manual else "you place these yourself"
     # The label (e.g. "Margin ••••1234") tells two accounts of the same role apart.
-    head = f"{a.title.upper()}  {a.label}".rstrip()
-    out = [f"{head}  ({how})"]
+    out = [f"{_heading(a)}  ({how})"]
     sells = [d for d in a.directives if d.verb in ("SELL", "TRIM")]
     buys = [d for d in a.directives if d.verb == "BUY"]
     for d in sells + buys:
-        tag = "RULE" if d.basis == "risk rule" else "MODEL"
-        out.append(f"  {d.text}   [{tag}]")
+        out.append(f"  {d.text}   [{_tag(d)}]")
     if not buys:
         if a.ideas:
             out.append(f"  BUY: nothing. Ideas history does not back: {', '.join(a.ideas)}.")
@@ -474,7 +487,7 @@ def render_text(sheet: Sheet) -> str:
         lines += _bottom_line(a) + [""]
     lines += ["", "DETAIL", "-" * 66]
     for a in sheet.accounts:
-        lines.append(f"{a.title.upper()}  {a.label}")
+        lines.append(_heading(a))
         if not a.directives and not a.watch:
             lines.append("  Nothing to do.")
         for d in a.directives:
