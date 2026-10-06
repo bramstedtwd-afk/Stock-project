@@ -510,6 +510,32 @@ def cmd_dipbuy(args) -> int:
     return 0
 
 
+def cmd_timing(args) -> int:
+    """~50 ways to hold one fund (trend, momentum, leverage, dips) on ~30 ETFs."""
+    import json
+    from datetime import datetime, timezone
+
+    from . import timing, today
+
+    print("Testing every timing rule on about 30 sector and industry ETFs (a few minutes)...\n")
+    try:
+        prices, rate = timing.load_prices(cache_path=today.state_dir() / "timing_prices.parquet")
+    except Exception as exc:
+        print(f"Could not get the price history: {exc}")
+        return 1
+    res = timing.run(prices, rate, draws=args.draws)
+    print("\n".join(timing.describe(res, top=args.top)))
+    try:
+        base = today.state_dir()
+        base.mkdir(parents=True, exist_ok=True)
+        res["at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        (base / "timing.json").write_text(json.dumps(res, indent=1, default=float), encoding="utf-8")
+        print(f"\n(Saved to {base / 'timing.json'})")
+    except OSError:
+        pass
+    return 0
+
+
 def cmd_research(args) -> int:
     """Test ~60 rules honestly: does anything beat just holding the market?"""
     import json
@@ -1447,6 +1473,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--draws", type=int, default=100, help="random-day comparisons per buy rule")
     p.add_argument("--top", type=int, default=5, help="how many combinations to list per ticker")
     p.set_defaults(func=cmd_dipbuy)
+
+    p = sub.add_parser(
+        "timing",
+        help="test ~50 ways to time or lever one fund on ~30 sector and industry ETFs",
+    )
+    p.add_argument("--draws", type=int, default=1000, help="bootstrap draws (more = steadier p-values)")
+    p.add_argument("--top", type=int, default=15, help="how many rules to list")
+    p.set_defaults(func=cmd_timing)
 
     p = sub.add_parser(
         "alerts", help="set up phone alerts (free ntfy app): urgent now, everything else once a day"

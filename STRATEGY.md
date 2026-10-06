@@ -65,6 +65,38 @@ knowing they won; SPY and QQQ are the fair tickers.
 Profit targets and green-day exits are risk tools; never present one as a way to
 earn more than holding.
 
+## Timing one fund: 50 rules on 32 ETFs (run `.\start.bat timing`; last run 2026-10-06)
+
+Trend filters (50-250 day, checked daily or monthly), golden cross, 6/12-month
+momentum, volatility targeting, leverage (1.5x, 2x, "2x above trend, 1x below"),
+leveraging into dips, RSI(2) and after-red-days mean reversion. Each on 7 broad
+funds, the 9 sector SPDRs and 16 industry funds, from each fund's start.
+Leverage pays T-bills + 0.75% + 0.9% fee per unit borrowed, calibrated to the
+real SSO/QLD within 0.15 point a year. **Edge = return over holding the same
+fund at the same volatility** (a constant exposure), so leverage alone does not
+count as skill. White's Reality Check across all 50; ranked on years before
+2017, then checked on 2017+ and on the industry funds that were never used to choose.
+
+| Finding | Evidence |
+|---|---|
+| **No rule passed** | Best corrected p 0.31; pass line 0.10 |
+| Most consistent: 2x above the 200-day, 1x below (monthly) | +1.6 pts/yr risk-matched (pre-2017 +2.0, after +0.8, industry funds +0.7), ahead on 23/32 funds and all 7 broad ones; typical worst drop 74% vs 64% holding; p 0.44 |
+| 200-day trend at 1x, monthly = crash insurance | Typical worst drop 40% vs 64%, costs ~1.3 pts/yr of growth; wins in long bears (2008, 2000-02), loses in V-crashes (2020) and bull markets |
+| Check monthly, never daily | Every daily trend rule trailed the same-risk hold (-0.8 to -5.2 pts/yr) |
+| Edges fade | RSI(2) dip-buying: positive before 2017, negative after |
+| Leverage into dips | Worst idea tested: behind, typical worst drop 86% |
+| Real funds, Apr 2007-2026 | SSO above 200d / SPY below 16.4% vs SPY 11.0% (worst 59% vs 55%); QLD/QQQ switch 24.9% vs holding QLD 25.4% |
+
+Where trend rules help: diversified indexes with long bear markets. On narrow
+industries they are a coin flip (good on semis, banks, energy; bad on gold
+miners, software, transports, homebuilders, small biotech).
+
+**Policy consequence:** unchanged core (hold a broad index). The monthly trend
+line stays context, checked on the first trading day of the month. "2x above
+200d, 1x below" on SPY is the one rule on watch: at most a 5-10% slice of the
+Roth if the owner chooses, never a sheet instruction, until it passes this lab
+on a later re-run or earns it on the forward scorecard.
+
 ## The owner's goal (2026-10-01)
 
 **Maximum growth: hold the market, manage risk only.** The trend rules are
