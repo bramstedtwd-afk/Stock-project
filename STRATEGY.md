@@ -35,6 +35,36 @@ using it (-1.39% a period, all below zero). Treat anything on stocks with
 extra suspicion: the stock universe is today's winners, which flatters every
 momentum test (survivorship).
 
+## Buying red days and selling green days (run `.\start.bat dipbuy`; last run 2026-10-06)
+
+The owner asked: buy $500 on every red day, sell each buy after a green day once
+it is up X%, what does that return? Tested on SPY, QQQ, AAPL, MSFT and NVDA over
+each one's full daily history (SPY 1993, AAPL 1980, MSFT 1986, QQQ and NVDA
+1999): 5 buy rules (every red day, down 1%+, down 2%+, second red day in a row,
+red day 10%+ under the 52-week high) x 20 sell rules (never; each buy at +1% to
++50%; everything on a +1/2/3% day; whole position at +5/10/20%; targets with
+stops or time limits; a plain 20-day exit). Every buy is new money, so all sell
+rules on one buy rule put in the same dollars on the same days. 5 bps slippage,
+idle cash at the T-bill rate, no taxes.
+
+| Question | Answer |
+|---|---|
+| Does any sell rule beat holding the same buys? | **No: 0 of 475**, with fills at the close or the next open, and with sale money in T-bills or SPY. Example: SPY, $1.92M in over 3,834 red days, held = $17.4M (10.9% a year); each buy sold at +2% = $2.8M (2.2% a year) |
+| Why does a 100% win rate lose? | Losers are never sold; they wait (one SPY buy 6.6 years, one QQQ buy ~15 years). Between trades the money sits in cash: the SPY +2% rule had ~3% of its money invested on an average day and earned ~$1,400 a year from trading |
+| Sale money into SPY instead? | On SPY it just matches holding, minus costs. On the stocks, 10-13% a year against 15-37% for holding them |
+| Stops / sell-on-a-big-green-day? | Cut the worst open loss (to ~4% with a -5% stop) but still 2-3% a year; win rates 56-68% |
+| Is buying on red days better than any day? | No. Within 0.15 point a year of buying daily. With the waiting time charged (same savings every day, held in T-bills until the signal), waiting for 2%+ drops or 10% corrections never beat buying daily by more than 0.01 point and lost up to 0.5 point (SPY corrections 10.39% vs 10.87%) |
+| Any decade where selling won? | Only 2000-2009 on SPY (holding 1.4% a year, profits parked in T-bills 2.3-4.9%) |
+
+Trap to remember: a per-buy IRR makes "wait for a correction" look +0.5 point
+better on SPY, because it never charges for the months the cash waited.
+`dipbuy.paced` is the fair test. Survivorship: AAPL, MSFT and NVDA were chosen
+knowing they won; SPY and QQQ are the fair tickers.
+
+**Policy consequence:** none new. It backs "hold the market, manage risk only".
+Profit targets and green-day exits are risk tools; never present one as a way to
+earn more than holding.
+
 ## The owner's goal (2026-10-01)
 
 **Maximum growth: hold the market, manage risk only.** The trend rules are

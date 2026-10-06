@@ -481,6 +481,35 @@ def _keep_lookalikes(samples) -> None:
         pass     # a cache that can't be written must never fail the command
 
 
+def cmd_dipbuy(args) -> int:
+    """Buy $500 on red days, sell on green-day rules: every combination, full history."""
+    import json
+    from datetime import datetime, timezone
+
+    from . import dipbuy, today
+
+    tickers = [t.upper() for t in args.tickers] or dipbuy.DEFAULT_TICKERS
+    print(f"Backtesting {len(dipbuy.BUY_RULES)} buy rules x {len(dipbuy.SELL_RULES)} sell rules "
+          f"on {', '.join(tickers)} (a few minutes)...\n")
+    try:
+        prices = dipbuy.load_prices(tickers, today.state_dir() / "dipbuy_prices.parquet")
+    except Exception as exc:
+        print(f"Could not get the price history: {exc}")
+        return 1
+    res = dipbuy.run(prices, tickers, fill=args.fill, dest=args.proceeds,
+                     draws=args.draws, curves=False)
+    print("\n".join(dipbuy.describe(res, top=args.top)))
+    try:
+        base = today.state_dir()
+        base.mkdir(parents=True, exist_ok=True)
+        res["at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        (base / "dipbuy.json").write_text(json.dumps(res, indent=1), encoding="utf-8")
+        print(f"(Saved to {base / 'dipbuy.json'})")
+    except OSError:
+        pass
+    return 0
+
+
 def cmd_research(args) -> int:
     """Test ~60 rules honestly: does anything beat just holding the market?"""
     import json
@@ -1405,6 +1434,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--draws", type=int, default=2000, help="bootstrap draws (more = steadier p-values)")
     p.add_argument("--top", type=int, default=12, help="how many candidates to list")
     p.set_defaults(func=cmd_research)
+
+    p = sub.add_parser(
+        "dipbuy",
+        help="backtest buying $500 on red days and selling on green-day rules, full history",
+    )
+    p.add_argument("tickers", nargs="*", help="tickers to test (default SPY QQQ AAPL MSFT NVDA)")
+    p.add_argument("--fill", choices=["close", "next_open"], default="close",
+                   help="trade at the signal day's close, or the next morning's open")
+    p.add_argument("--proceeds", choices=["cash", "spy"], default="cash",
+                   help="where sale money waits: T-bill cash, or an S&P 500 fund")
+    p.add_argument("--draws", type=int, default=100, help="random-day comparisons per buy rule")
+    p.add_argument("--top", type=int, default=5, help="how many combinations to list per ticker")
+    p.set_defaults(func=cmd_dipbuy)
 
     p = sub.add_parser(
         "alerts", help="set up phone alerts (free ntfy app): urgent now, everything else once a day"
