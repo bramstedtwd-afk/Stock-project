@@ -619,6 +619,13 @@ def cmd_alerts(args) -> int:
     return 0
 
 
+def cmd_mobile(args) -> int:
+    """The always-on phone page: link, auto-start, off."""
+    from . import mobile
+
+    return mobile.main([args.action])
+
+
 def cmd_analogs(args) -> int:
     """Build the look-alike history that lets a BUY be stated plainly."""
     from . import backtest
@@ -1487,6 +1494,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("action", nargs="?", default="setup", choices=["setup", "test", "off"])
     p.set_defaults(func=cmd_alerts)
+
+    p = sub.add_parser(
+        "mobile", help="your phone page: today's sheet, always on, one tap (link, install, off)"
+    )
+    p.add_argument("action", nargs="?", default="link", choices=["link", "install", "off", "serve"])
+    p.set_defaults(func=cmd_mobile)
 
     p = sub.add_parser(
         "analogs",

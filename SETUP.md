@@ -273,6 +273,19 @@ at the top of the dashboard, and each scheduled run on your computer saves it
 and puts a copy in your Drive folder as **StockSage Today** so you can read it on
 your phone. StockSage never places an order; you do that yourself.
 
+## Your phone page (always on, opens instantly)
+
+```
+cd C:\Users\<you>\Stock-project
+.\start.bat mobile install
+```
+
+Scan the code once, add it to your home screen, and from then on it is one tap.
+It starts by itself when you sign in to the computer and shows today's sheet as
+last saved by a scheduled run (the computer must be on and on your Wi-Fi). The
+link contains a private key: treat it like a password. `.\start.bat mobile`
+shows the link again; `.\start.bat mobile off` stops it starting.
+
 ## Phone alerts
 
 ```
