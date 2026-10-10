@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from stocksage import cli, envfile, notify
@@ -11,7 +13,10 @@ from stocksage import cli, envfile, notify
 def private_env(monkeypatch, tmp_path):
     monkeypatch.setattr(envfile, "ENV_PATH", tmp_path / ".env")
     monkeypatch.delenv("STOCKSAGE_NTFY_TOPIC", raising=False)
-    return tmp_path / ".env"
+    yield tmp_path / ".env"
+    # save_env writes os.environ directly; do not let the topic leak into other tests.
+    os.environ.pop("STOCKSAGE_NTFY_TOPIC", None)
+    os.environ.pop("STOCKSAGE_PHONE_KEY", None)
 
 
 def test_setup_creates_a_long_random_topic_and_saves_it_privately(capsys, private_env):

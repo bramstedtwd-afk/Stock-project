@@ -213,6 +213,28 @@ def publish_text(name: str, text: str) -> str:
     return upload_or_update(service, name, text, "text/plain", folder_id)
 
 
+def modified_time(name: str):
+    """When a file in the StockSage Drive folder was last written (UTC), or None
+    if the folder or file does not exist. Read-only."""
+    from datetime import datetime, timezone
+
+    service = get_service()
+    folder = find_file(service, FOLDER_NAME)
+    if folder is None:
+        return None
+    res = (
+        service.files()
+        .list(q=f"name = '{_escape(name)}' and trashed = false and '{folder}' in parents",
+              spaces="drive", fields="files(id, modifiedTime)", pageSize=1)
+        .execute()
+    )
+    files = res.get("files", [])
+    if not files or not files[0].get("modifiedTime"):
+        return None
+    raw = files[0]["modifiedTime"].replace("Z", "+00:00")
+    return datetime.fromisoformat(raw).astimezone(timezone.utc)
+
+
 def download_file(service, name: str, folder_id: str) -> bytes | None:
     """Raw bytes of a file in the StockSage Drive folder, or None if no
     file by that name has been published there yet."""

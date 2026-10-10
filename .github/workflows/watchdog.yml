@@ -1,0 +1,37 @@
+# Watchdog: tells your phone if the always-on computer stops updating the sheet.
+#
+# Only your own computer can see your Robinhood accounts, so only it writes
+# "StockSage Today" to Drive. This job just looks at when that file last
+# changed. It holds no broker credentials: the Drive token (read-only use here)
+# and the private alert topic are its only secrets.
+
+name: Watchdog
+
+on:
+  schedule:
+    - cron: "30 15 * * 1-5"   # 10:30 CT, after the 08:30 and 09:45 runs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      STOCKSAGE_DRIVE_TOKEN: ${{ secrets.STOCKSAGE_DRIVE_TOKEN }}
+      STOCKSAGE_NTFY_TOPIC: ${{ secrets.STOCKSAGE_NTFY_TOPIC }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Is the sheet still being updated?
+        run: python -m stocksage watchdog

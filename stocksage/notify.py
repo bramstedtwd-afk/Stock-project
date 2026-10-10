@@ -37,7 +37,7 @@ NTFY_URL = "https://ntfy.sh/{topic}"
 ALERT_KINDS = ("EXIT_STOP", "EXIT_TARGET", "EXIT_TIME", "TRIM", "ENTER")
 URGENT_SIGNATURE_KEY = "last_urgent_signature"
 DIGEST_DATE_KEY = "last_digest_date"
-DEFAULT_DIGEST_HOUR = 9
+DEFAULT_DIGEST_HOUR = 8     # so the 08:30 run delivers the morning message
 
 
 def topic_from_env() -> str | None:
@@ -142,8 +142,25 @@ def alert_accounts(db, account_plans, topic: str | None = None, post=_post,
             and now.hour >= digest_hour()
             and (db.get_meta(DIGEST_DATE_KEY) or "") != today
         )
-        if not urgent_new and not digest_due:
+        # A quiet day still gets a message: "nothing to do" is the answer most days,
+        # and a tool that only speaks when something is wrong cannot be told apart
+        # from one that has stopped working.
+        all_clear_due = (
+            not pairs and bool(account_plans)
+            and (os.environ.get("STOCKSAGE_ALL_CLEAR") or "on").strip().lower() != "off"
+            and now.hour >= digest_hour()
+            and (db.get_meta(DIGEST_DATE_KEY) or "") != today
+        )
+        if not urgent_new and not digest_due and not all_clear_due:
             return False
+        if all_clear_due:
+            post(
+                NTFY_URL.format(topic=topic),
+                b"Nothing needs doing today. Every account was checked.",
+                {"Title": "StockSage today: all clear", "Priority": "low", "Tags": "white_check_mark"},
+            )
+            db.set_meta(DIGEST_DATE_KEY, today)
+            return True
 
         # Loud only for a breach the owner has not been told about. A digest
         # that merely repeats a known one is a summary, and summaries do not shout.

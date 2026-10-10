@@ -15,7 +15,7 @@ from stocksage.actions import Action, Plan
 from stocksage.db import Database
 
 URGENCY = {"EXIT_STOP": 1, "EXIT_TARGET": 2, "EXIT_TIME": 2, "TRIM": 3, "ENTER": 3}
-MORNING = datetime(2026, 10, 6, 7, 30)     # before the 9:00 digest hour
+MORNING = datetime(2026, 10, 6, 6, 30)     # before the 8:00 digest hour
 LATER = datetime(2026, 10, 6, 10, 15)      # after it
 NEXT_DAY = LATER + timedelta(days=1)
 
@@ -64,7 +64,7 @@ def test_the_same_breach_does_not_buzz_again_on_every_run(db):
     the daily digest, then silence again."""
     rec, p = Recorder(), plans(act("EXIT_STOP", "AAA"))
     notify.alert_accounts(db, p, "t", rec, MORNING)
-    for minutes in (30, 60, 80):                       # all still before 9:00
+    for minutes in (30, 60, 80):                       # all still before 8:00
         assert notify.alert_accounts(db, p, "t", rec, MORNING + timedelta(minutes=minutes)) is False
     assert [s[2]["Title"].split(":")[0] for s in rec.sent] == ["StockSage URGENT"]
     notify.alert_accounts(db, p, "t", rec, LATER)      # the day's digest
@@ -113,9 +113,33 @@ def test_the_digest_is_sent_once_a_day_not_once_a_run(db):
     assert notify.alert_accounts(db, p, "t", rec, NEXT_DAY) is True, "a new day, a new digest"
 
 
-def test_a_quiet_day_sends_nothing(db):
+def test_a_quiet_day_sends_one_all_clear_not_silence(db):
+    """Silence is indistinguishable from a tool that has stopped working."""
     rec = Recorder()
-    assert notify.alert_accounts(db, [("Agentic", Plan())], "t", rec, LATER) is False
+    assert notify.alert_accounts(db, [("Agentic", Plan())], "t", rec, MORNING) is False, "not before the hour"
+    assert notify.alert_accounts(db, [("Agentic", Plan())], "t", rec, LATER) is True
+    assert "all clear" in rec.sent[0][2]["Title"] and rec.sent[0][2]["Priority"] == "low"
+    assert notify.alert_accounts(db, [("Agentic", Plan())], "t", rec, LATER + timedelta(hours=3)) is False
+    assert notify.alert_accounts(db, [("Agentic", Plan())], "t", rec, NEXT_DAY) is True
+
+
+def test_the_all_clear_can_be_switched_off_and_never_names_anything(db, monkeypatch):
+    rec = Recorder()
+    notify.alert_accounts(db, [("Agentic", Plan())], "t", rec, LATER)
+    assert not re.search(r"[A-Z]{2,5}:|\$|\d{3}", rec.sent[0][1])
+    monkeypatch.setenv("STOCKSAGE_ALL_CLEAR", "off")
+    assert notify.alert_accounts(db, [("Agentic", Plan())], "t", rec, NEXT_DAY) is False
+
+
+def test_with_no_accounts_read_there_is_no_all_clear(db):
+    """An all-clear that rests on reading nothing would be a lie."""
+    assert notify.alert_accounts(db, [], "t", Recorder(), LATER) is False
+
+
+def test_a_quiet_day_sends_nothing_without_a_topic(db, monkeypatch):
+    monkeypatch.delenv("STOCKSAGE_NTFY_TOPIC", raising=False)
+    rec = Recorder()
+    assert notify.alert_accounts(db, [("Agentic", Plan())], None, rec, LATER) is False
     assert not rec.sent
 
 
@@ -126,7 +150,7 @@ def test_the_digest_hour_is_configurable_and_garbage_falls_back(db, monkeypatch)
     assert notify.alert_accounts(db, p, "t", rec, LATER.replace(hour=14)) is True
     for bad in ("", "noon", "25", "-1"):
         monkeypatch.setenv("STOCKSAGE_DIGEST_HOUR", bad)
-        assert notify.digest_hour() == 9
+        assert notify.digest_hour() == 8
 
 
 def test_a_breach_and_a_due_digest_are_one_message_not_two(db):
@@ -154,7 +178,8 @@ def test_low_confidence_ideas_and_watch_lines_never_interrupt(db):
     rec = Recorder()
     p = plans(act("ENTER", "AAA", confidence="low"), act("WATCH", "BBB"),
               act("HEADS_UP", "CCC"), act("EXIT_SIGNAL", "DDD"), act("IDEA", "EEE"))
-    assert notify.alert_accounts(db, p, "t", rec, LATER) is False and not rec.sent
+    notify.alert_accounts(db, p, "t", rec, LATER)
+    assert len(rec.sent) == 1 and "all clear" in rec.sent[0][2]["Title"], "none of those may interrupt"
 
 
 def test_a_medium_confidence_entry_waits_for_the_digest(db):

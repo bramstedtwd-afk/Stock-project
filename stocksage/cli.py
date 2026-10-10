@@ -626,6 +626,13 @@ def cmd_mobile(args) -> int:
     return mobile.main([args.action])
 
 
+def cmd_watchdog(args) -> int:
+    """Used by the scheduled cloud job: warn the phone if the sheet has gone stale."""
+    from . import watchdog
+
+    return watchdog.run()
+
+
 def cmd_analogs(args) -> int:
     """Build the look-alike history that lets a BUY be stated plainly."""
     from . import backtest
@@ -1500,6 +1507,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("action", nargs="?", default="link", choices=["link", "install", "off", "serve"])
     p.set_defaults(func=cmd_mobile)
+
+    p = sub.add_parser(
+        "watchdog", help="warn your phone if the always-on computer has stopped updating the sheet"
+    )
+    p.set_defaults(func=cmd_watchdog)
 
     p = sub.add_parser(
         "analogs",
