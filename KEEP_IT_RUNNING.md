@@ -8,28 +8,20 @@ Three layers, each with one job:
 | **Cloud runner** | Learns and publishes market-side research with your computer off. Holds no broker login | Your computer still works alone |
 | **Watchdog** (cloud) | Checks every weekday that the sheet is still being updated | You get a "has gone quiet" push |
 
-## Part 1: set up the always-on computer (once, about 30 minutes)
+## Part 1: make THIS computer the always-on one (about 10 minutes)
 
-This becomes THE machine. Do not leave scheduled jobs running on two computers:
-you would get double alerts and two diverging copies of what StockSage learned.
+StockSage is already installed here (`C:\Users\student\Stock-project`), so there is
+nothing to clone, import or retire. Do not delete that folder: your `.env`
+(Robinhood login, alert topic, phone key) lives in it.
 
-1. **Install** Python 3.12 (python.org, tick "Add to PATH") and Git (git-scm.com).
-2. **Get the code.** In PowerShell:
+1. **Update and check.** In PowerShell:
    ```
-   cd C:\Users\<you>
-   git clone https://github.com/bramstedtwd-afk/Stock-project.git
-   cd Stock-project
+   cd C:\Users\student\Stock-project
+   .\start.bat update
+   .\start.bat doctor
    ```
-3. **Bring over what it learned.** In your Google Drive's `StockSage` folder, download
-   `brain-snapshot.db` into this computer's Downloads folder.
-4. **Guided setup.**
-   ```
-   .\start.bat setup
-   ```
-   It finds the brain file, imports it, and runs the checks. When it asks you to link
-   Robinhood, open the dashboard's Portfolio tab and type the login there yourself
-   (never into a chat). Approve the sign-in on your phone.
-5. **Turn everything on**:
+   Fix anything marked `[!]` first (the `doctor` line tells you how).
+2. **Turn everything on:**
    ```
    .\start.bat autopilot publish-drive
    .\start.bat autopilot
@@ -37,19 +29,21 @@ you would get double alerts and two diverging copies of what StockSage learned.
    .\start.bat alerts
    .\start.bat alerts test
    ```
-   `alerts` prints a new topic: subscribe to it in the ntfy app (and delete the old one).
-6. **Make it stay on.** Settings > System > Power & battery > Screen and sleep: set
-   "When plugged in, put my device to sleep after" to **Never**. Set Windows Update
-   "Active hours" to your waking hours. Lock the screen with Win+L but never sign out:
-   the scheduled jobs run only while you are signed in. (If you want it to survive an
-   update restart on its own, Windows can sign in automatically: run `netplwiz`. The
-   trade-off is that anyone at the keyboard gets in.)
-7. **Retire the old computer's jobs** (on the old one):
-   ```
-   .\start.bat autopilot off
-   .\start.bat mobile off
-   ```
-   Then `.\start.bat doctor` on the new one. It should be all green.
+   `alerts` prints a private topic. Subscribe to it in the ntfy app (a topic you may
+   have made earlier is also fine: `alerts` keeps an existing one).
+3. **Check it took:** `.\start.bat autopilot status` should show both the daily
+   learning job and the publishing jobs as ON.
+4. **Make it stay on.** Settings > System > Power & battery > Screen and sleep: set
+   "When plugged in, put my device to sleep after" to **Never** (and hibernate to
+   Never). On a laptop, also Control Panel > Power Options > "Choose what closing the
+   lid does" > **Do nothing** when plugged in. Set Windows Update "Active hours" to
+   your waking hours. Lock the screen with Win+L but never sign out: the scheduled
+   jobs run only while you are signed in. (To survive an update restart by itself,
+   Windows can sign in automatically: run `netplwiz`. The trade-off is that anyone at
+   the keyboard gets in.)
+5. **Leave it signed in and plugged in.** The first real test is tomorrow morning: you
+   should get the 08:30 message, and the Drive file "StockSage Today" should show
+   that day's time.
 
 ## Part 2: add the watchdog (5 minutes, once)
 
@@ -80,11 +74,24 @@ you would get double alerts and two diverging copies of what StockSage learned.
 | Every quarter | 5 minutes | Read the scorecard at the bottom of the sheet. Re-run `.\start.bat research` |
 | Every year | 30 minutes | Update Windows and Python, restart, run `doctor`. Change your Robinhood password and re-link. Confirm the Drive snapshot is recent. Decide whether any idea has earned trust (see STRATEGY.md) |
 
-## Part 5: if the computer dies
+## Part 5: if this computer dies or you replace it
 
-On any new Windows computer repeat Part 1. The brain in Drive is refreshed on every
-publish, so you lose at most a few hours of learning. The sheet history (the live
-scorecard) travels in that brain too.
+On the new Windows computer:
+
+1. Install Python 3.12 (python.org, tick "Add to PATH") and Git (git-scm.com).
+2. `cd C:\Users\<you>` then `git clone https://github.com/bramstedtwd-afk/Stock-project.git`
+   and `cd Stock-project`.
+3. Download `brain-snapshot.db` from your Drive's `StockSage` folder into Downloads.
+4. `.\start.bat setup`. It finds and imports the brain and runs the checks. Type your
+   Robinhood login into the dashboard's Portfolio tab yourself (never into a chat) and
+   approve the sign-in on your phone.
+5. Repeat Part 1 steps 2 to 4 on the new computer. If the old one still works, run
+   `.\start.bat autopilot off` and `.\start.bat mobile off` on it, so two computers do
+   not run the same jobs.
+
+The brain in Drive is refreshed on every publish, so you lose at most a few hours of
+learning. The live scorecard travels in it too. Re-run Part 2 only if the alert topic
+changed (update the `STOCKSAGE_NTFY_TOPIC` secret).
 
 ## Never change these
 
