@@ -345,3 +345,45 @@ def test_an_alerting_failure_can_never_fail_a_publish(monkeypatch, tmp_path):
 
     monkeypatch.setattr("stocksage.advisor.plans_for_accounts", boom)
     assert cli.main(["publish-drive"]) == 0
+
+
+# ------------------------------------------------------------ a lapsed broker sign-in
+
+def test_a_lapsed_sign_in_pushes_once_a_day_with_the_command_to_paste(db):
+    rec = Recorder()
+    assert notify.needs_signin(db, "t", rec, LATER) is True
+    url, body, headers = rec.sent[0]
+    assert ".\\start.bat portfolio" in body and "\\\\" not in body
+    assert "sign in" in headers["Title"] and headers["Priority"] == "high"
+    assert notify.needs_signin(db, "t", rec, LATER + timedelta(hours=3)) is False
+    assert notify.needs_signin(db, "t", rec, NEXT_DAY) is True
+
+
+def test_the_sign_in_push_names_no_account_and_no_amount_and_needs_a_topic(db, monkeypatch):
+    rec = Recorder()
+    notify.needs_signin(db, "t", rec, LATER)
+    assert not re.search(r"\$|\d{4}", rec.sent[0][1])
+    monkeypatch.delenv("STOCKSAGE_NTFY_TOPIC", raising=False)
+    assert notify.needs_signin(db, None, Recorder(), NEXT_DAY) is False
+
+
+def test_a_failed_push_is_retried_not_recorded(db):
+    assert notify.needs_signin(db, "t", Recorder(fail=True), LATER) is False
+    assert notify.needs_signin(db, "t", Recorder(), LATER) is True
+
+
+def test_a_scheduled_publish_with_no_broker_read_sends_the_sign_in_push(monkeypatch, tmp_path):
+    from stocksage import cli
+    from stocksage.db import Database
+    from tests.test_notify import _publish_env
+
+    cli_mod = _publish_env(monkeypatch, tmp_path, topic="t")
+    sent = []
+    monkeypatch.setattr(notify, "_post", lambda u, d, h: sent.append(h["Title"]))
+    monkeypatch.setattr("stocksage.advisor.desktop_sync_cycle",
+                        lambda *a, **k: {"fills_ingested": 0, "graded": 0, "holdings": [],
+                                         "positions": None, "sync_error": "login failed"})
+    assert cli_mod.main(["publish-drive"]) == 0
+    assert "StockSage needs you to sign in" in sent
+    assert Database(tmp_path / "b.db").get_meta(notify.SIGNIN_ALERT_KEY)
+    assert cli is cli_mod

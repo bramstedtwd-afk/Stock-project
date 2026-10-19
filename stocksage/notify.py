@@ -104,6 +104,37 @@ def _post(url: str, data: bytes, headers: dict) -> None:
         pass
 
 
+SIGNIN_ALERT_KEY = "last_signin_alert_date"
+
+
+def needs_signin(db, topic: str | None = None, post=None, now: datetime | None = None) -> bool:
+    """Tell the phone the Robinhood sign-in has lapsed. Once a day, never raises.
+
+    A scheduled run cannot approve a new sign-in for you, and the research
+    brief still publishes without it, so nothing else would say the sheet has
+    stopped until the watchdog noticed days later.
+    """
+    topic = topic or topic_from_env()
+    if not topic:
+        return False
+    post = post or _post
+    try:
+        today = (now or datetime.now()).date().isoformat()
+        if (db.get_meta(SIGNIN_ALERT_KEY) or "") == today:
+            return False
+        post(
+            NTFY_URL.format(topic=topic),
+            b"StockSage could not read your accounts, so your sheet has stopped updating. "
+            b"At the always-on computer run  .\\start.bat portfolio  and approve the sign-in "
+            b"on your phone.",
+            {"Title": "StockSage needs you to sign in", "Priority": "high", "Tags": "key"},
+        )
+        db.set_meta(SIGNIN_ALERT_KEY, today)
+        return True
+    except Exception:
+        return False
+
+
 def alert_if_new(db, plan: Plan, topic: str | None = None, post=_post,
                  now: datetime | None = None) -> bool:
     """Single-account form of alert_accounts."""

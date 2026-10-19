@@ -23,7 +23,9 @@ log = logging.getLogger(__name__)
 # Ask for a longer-lived session token. Every time the cached token expires
 # the next run signs in from scratch, which is both a Robinhood alert and a
 # brand-new device fingerprint; a longer token means fewer of those.
-SESSION_SECONDS = 7 * 24 * 60 * 60
+# 30 days: the owner chose fewer phone approvals over a shorter-lived token (the
+# token file is permission-hardened, and a lapse sends a "sign in" push).
+SESSION_SECONDS = 30 * 24 * 60 * 60
 
 # robin_stocks says this in the response when it reused the cached session
 # instead of authenticating. Version-tolerant substring, not an exact match.

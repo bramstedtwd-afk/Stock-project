@@ -908,6 +908,9 @@ def cmd_publish_drive(args) -> int:
         if sync.get("positions") is None:
             _record_sheet(engine, error=sync.get("sync_error")
                           or "Robinhood could not be read, so no sheet was built")
+            from .notify import needs_signin
+
+            needs_signin(engine.db)
         elif done["sheet"] is None:
             _record_sheet(engine, error=done["error"] or "the sheet could not be built")
         else:
