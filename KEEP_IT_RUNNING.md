@@ -10,13 +10,13 @@ Three layers, each with one job:
 
 ## Part 1: make THIS computer the always-on one (about 10 minutes)
 
-StockSage is already installed here (`C:\Users\student\Stock-project`), so there is
+StockSage is already installed here (`C:\Users\<you>\Stock-project`), so there is
 nothing to clone, import or retire. Do not delete that folder: your `.env`
 (Robinhood login, alert topic, phone key) lives in it.
 
 1. **Update and check.** In PowerShell:
    ```
-   cd C:\Users\student\Stock-project
+   cd C:\Users\<you>\Stock-project
    .\start.bat update
    .\start.bat doctor
    ```
