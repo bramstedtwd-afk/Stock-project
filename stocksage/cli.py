@@ -855,6 +855,25 @@ def _record_publish(engine, error: str | None = None) -> None:
         pass
 
 
+def _record_sheet(engine, error: str | None = None) -> None:
+    """Remember whether the last scheduled run actually built the sheet.
+
+    The research brief publishes without Robinhood, so a lapsed broker sign-in
+    leaves publishing looking healthy while the sheet quietly stops. Doctor reads
+    these keys. Bookkeeping only: it must never make a publish fail.
+    """
+    from datetime import datetime, timezone
+
+    try:
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        if error is None:
+            engine.db.set_meta("last_sheet_ok", now)
+        else:
+            engine.db.set_meta("last_sheet_error", f"{now}|{error[:300]}")
+    except Exception:
+        pass
+
+
 def cmd_publish_drive(args) -> int:
     from .advisor import publish_brief_via_api
     from .drive_api import DriveNotConfigured
@@ -885,6 +904,14 @@ def cmd_publish_drive(args) -> int:
                           rebuild_book=True)
     if done["error"]:
         print(f"(Today's sheet: {done['error']})")
+    if not args.no_broker:
+        if sync.get("positions") is None:
+            _record_sheet(engine, error=sync.get("sync_error")
+                          or "Robinhood could not be read, so no sheet was built")
+        elif done["sheet"] is None:
+            _record_sheet(engine, error=done["error"] or "the sheet could not be built")
+        else:
+            _record_sheet(engine)
     print(f"Published directly to Google Drive ({result['candidates']} candidates):")
     for name in result["files"]:
         print(f"  · {name}  (in your Drive's StockSage folder)")

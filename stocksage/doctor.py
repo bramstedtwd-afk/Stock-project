@@ -288,6 +288,47 @@ def check_publish_freshness(now=None) -> dict:
     )
 
 
+def check_sheet_freshness(now=None) -> dict:
+    """Is the sheet itself being rebuilt? (Publishing the brief can succeed while
+    the sheet fails, because only the sheet needs the broker sign-in.)"""
+    from datetime import datetime, timezone
+
+    from .db import Database
+
+    now = now or datetime.now(timezone.utc)
+    try:
+        db = Database()
+        last_ok = db.get_meta("last_sheet_ok")
+        last_err = db.get_meta("last_sheet_error")
+        db.close()
+    except Exception:
+        return _check("Sheet", PASS, "skipped: brain unreadable (see Brain above)")
+    fix = (
+        "Run '.\\start.bat portfolio' and approve the sign-in on your phone if it "
+        "asks, then run '.\\start.bat publish-drive' and read what it says. A "
+        "Robinhood sign-in that has lapsed cannot be renewed by a scheduled job."
+    )
+    reason = ""
+    if last_err and "|" in last_err:
+        err_at, _, err_msg = last_err.partition("|")
+        if not last_ok or err_at > last_ok:
+            reason = f" The last attempt said: {err_msg}"
+    if not last_ok:
+        return _check("Sheet", WARN, "no scheduled run has built the sheet yet." + reason, fix)
+    try:
+        last = datetime.fromisoformat(last_ok)
+    except ValueError:
+        return _check("Sheet", WARN, "the last-sheet record is unreadable", fix)
+    behind = business_days_since(last, now)
+    if behind >= 2:
+        return _check(
+            "Sheet", WARN,
+            f"the sheet was last built {last.astimezone():%a %d %b %H:%M}, {behind} weekdays ago, "
+            "so your phone page and alerts are out of date." + reason, fix,
+        )
+    return _check("Sheet", PASS, f"last built {last.astimezone():%a %d %b %H:%M}")
+
+
 def check_update_channel() -> dict:
     import subprocess
 
@@ -373,6 +414,7 @@ ALL_CHECKS = (
     check_account_security,
     check_routine_account,
     check_publish_freshness,
+    check_sheet_freshness,
     check_update_channel,
     check_autopilot,
 )

@@ -242,3 +242,52 @@ def test_recording_a_publish_can_never_break_one():
                 raise RuntimeError("disk full")
 
     cli._record_publish(Broken)  # must not raise
+
+
+def _sheet_brain(tmp_path, monkeypatch, ok=None, err=None):
+    from stocksage.db import Database
+
+    monkeypatch.setenv("STOCKSAGE_DB", str(tmp_path / "b.db"))
+    db = Database(tmp_path / "b.db")
+    if ok:
+        db.set_meta("last_sheet_ok", ok)
+    if err:
+        db.set_meta("last_sheet_error", err)
+    db.close()
+
+
+def test_a_sheet_that_stopped_while_publishing_carried_on_is_caught(tmp_path, monkeypatch):
+    """The case the watchdog found: the brief kept publishing (no broker needed)
+    while the sheet, which needs the Robinhood sign-in, went stale."""
+    from stocksage.doctor import WARN, check_sheet_freshness
+
+    _sheet_brain(tmp_path, monkeypatch, ok="2026-09-28T19:30:00+00:00",
+                 err="2026-09-30T13:30:00+00:00|login failed: verification needed")
+    r = check_sheet_freshness(now=_at(2026, 9, 30, 18))
+    assert r["status"] == WARN and "verification needed" in r["detail"]
+    assert ".\\start.bat portfolio" in r["fix"] and ".\\\\start.bat" not in r["fix"]
+
+
+def test_a_recent_sheet_is_healthy_and_a_never_built_one_warns(tmp_path, monkeypatch):
+    from stocksage.doctor import PASS, WARN, check_sheet_freshness
+
+    _sheet_brain(tmp_path, monkeypatch, ok="2026-09-29T19:30:00+00:00")
+    assert check_sheet_freshness(now=_at(2026, 9, 30))["status"] == PASS
+    (tmp_path / "fresh").mkdir()
+    _sheet_brain(tmp_path / "fresh", monkeypatch)
+    assert check_sheet_freshness(now=_at(2026, 9, 30))["status"] == WARN
+
+
+def test_a_scheduled_publish_records_whether_the_sheet_was_built(monkeypatch, tmp_path):
+    from stocksage import cli
+    from stocksage.db import Database
+    from tests.test_notify import _publish_env
+
+    cli_mod = _publish_env(monkeypatch, tmp_path, topic=None)
+    monkeypatch.setattr("stocksage.advisor.desktop_sync_cycle",
+                        lambda *a, **k: {"fills_ingested": 0, "graded": 0, "holdings": [],
+                                         "positions": None, "sync_error": "login failed"})
+    assert cli_mod.main(["publish-drive"]) == 0
+    db = Database(tmp_path / "b.db")
+    assert "login failed" in db.get_meta("last_sheet_error") and not db.get_meta("last_sheet_ok")
+    assert cli is cli_mod
