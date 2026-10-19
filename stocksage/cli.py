@@ -690,6 +690,7 @@ def _refresh_today(engine, client, upload: bool = True, rebuild_book: bool = Fal
                 from .drive_api import publish_text
 
                 publish_text(today.DRIVE_NAME, text)
+                out["uploaded"] = True
             except Exception as exc:           # Drive is optional for the sheet
                 out["error"] = f"could not upload the sheet to Drive: {exc}"
         if topic_from_env():
@@ -918,6 +919,8 @@ def cmd_publish_drive(args) -> int:
     print(f"Published directly to Google Drive ({result['candidates']} candidates):")
     for name in result["files"]:
         print(f"  · {name}  (in your Drive's StockSage folder)")
+    if done.get("uploaded"):
+        print("  · StockSage Today.txt  (in your Drive's StockSage folder)")
     print("No desktop app or sync client involved — this went straight to Drive's API.")
     return 0
 

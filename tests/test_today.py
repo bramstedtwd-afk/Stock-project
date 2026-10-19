@@ -258,10 +258,11 @@ def _publish(monkeypatch, tmp_path, uploads, upload_fails=False, no_broker=False
     return cli.main(["publish-drive"] + (["--no-broker"] if no_broker else []))
 
 
-def test_the_scheduled_run_puts_the_sheet_in_drive_for_the_phone(monkeypatch, tmp_path):
+def test_the_scheduled_run_puts_the_sheet_in_drive_for_the_phone(monkeypatch, tmp_path, capsys):
     uploads = []
     assert _publish(monkeypatch, tmp_path, uploads) == 0
     assert [n for n, _ in uploads] == ["StockSage Today.txt"]
+    assert "StockSage Today.txt" in capsys.readouterr().out, "the owner can see it was uploaded"
     assert "SELL ALL AAA" in uploads[0][1]
 
 
