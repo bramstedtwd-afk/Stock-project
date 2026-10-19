@@ -387,3 +387,35 @@ def test_a_scheduled_publish_with_no_broker_read_sends_the_sign_in_push(monkeypa
     assert "StockSage needs you to sign in" in sent
     assert Database(tmp_path / "b.db").get_meta(notify.SIGNIN_ALERT_KEY)
     assert cli is cli_mod
+
+
+# ------------------------------------------------------------ the monthly scorecard push
+
+def _db_with_calls():
+    db = Database(":memory:")
+    db.conn.execute(
+        "INSERT INTO sheet_calls (call_date, ticker, kind, horizon_days, evaluated, ret, bench_ret)"
+        " VALUES ('2026-09-01', 'AAA', 'trim', 10, 1, 0.01, 0.0)")
+    db.conn.commit()
+    return db
+
+
+def test_the_monthly_scorecard_goes_out_once_a_month_after_the_morning_hour():
+    db, rec = _db_with_calls(), Recorder()
+    assert notify.monthly_scorecard(db, "t", rec, MORNING) is False, "not before the hour"
+    assert notify.monthly_scorecard(db, "t", rec, LATER) is True
+    assert rec.sent[0][2]["Title"] == "StockSage monthly scorecard"
+    assert notify.monthly_scorecard(db, "t", rec, LATER + timedelta(days=3)) is False
+    assert notify.monthly_scorecard(db, "t", rec, LATER + timedelta(days=30)) is True
+
+
+def test_no_logged_calls_or_no_topic_means_no_monthly_push(monkeypatch):
+    assert notify.monthly_scorecard(Database(":memory:"), "t", Recorder(), LATER) is False
+    monkeypatch.delenv("STOCKSAGE_NTFY_TOPIC", raising=False)
+    assert notify.monthly_scorecard(_db_with_calls(), None, Recorder(), LATER) is False
+
+
+def test_a_failed_monthly_push_is_retried_later():
+    db = _db_with_calls()
+    assert notify.monthly_scorecard(db, "t", Recorder(fail=True), LATER) is False
+    assert notify.monthly_scorecard(db, "t", Recorder(), LATER) is True

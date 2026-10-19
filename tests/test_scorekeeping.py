@@ -195,3 +195,30 @@ def test_an_older_brain_without_the_table_still_merges(tmp_path):
     Database(tmp_path / "new.db").close()
     stats = brain.merge_brains(tmp_path / "new.db", tmp_path / "old.db")
     assert "sheet_calls_added" not in stats
+
+
+# ------------------------------------------------------------ the monthly message
+
+def test_the_monthly_report_is_aggregates_only_and_honest_about_being_early():
+    db = Database(":memory:")
+    assert sk.monthly_report(db) is None
+    _seed_graded(db, "trim", [0.01, 0.02, -0.01])
+    sk.record(db, tiny_sheet(idea=["ZZZ"]), date(2026, 10, 6))
+    title, body = sk.monthly_report(db)
+    assert title == "StockSage monthly scorecard"
+    assert "3 graded, 1 still waiting" in body and "too early to call" in body
+    assert "buys stay as ideas" in body
+    assert "ZZZ" not in body and "$" not in body, "no tickers or amounts in a push"
+
+
+def test_a_buy_kind_that_earned_trust_is_flagged_for_review_not_promoted():
+    db = Database(":memory:")
+    _seed_graded(db, "idea", list(np.random.default_rng(0).normal(0.02, 0.01, 120)))
+    body = sk.monthly_report(db)[1]
+    assert "EARNED" in body and "ask Claude to review" in body and "Nothing changes until you decide" in body
+
+
+def test_a_failing_kind_is_named_failing():
+    db = Database(":memory:")
+    _seed_graded(db, "idea", list(np.random.default_rng(0).normal(-0.02, 0.01, 120)))
+    assert "FAILING" in sk.monthly_report(db)[1]

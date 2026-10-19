@@ -695,6 +695,9 @@ def _refresh_today(engine, client, upload: bool = True, rebuild_book: bool = Fal
                 out["error"] = f"could not upload the sheet to Drive: {exc}"
         if topic_from_env():
             alert_accounts(engine.db, [(a.title, a.plan) for a in sheet.accounts if a.plan])
+            from .notify import monthly_scorecard
+
+            monthly_scorecard(engine.db)
     except Exception as exc:
         out["error"] = f"{type(exc).__name__}: {exc}"
     return out

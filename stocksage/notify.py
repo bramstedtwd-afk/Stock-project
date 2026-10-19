@@ -135,6 +135,35 @@ def needs_signin(db, topic: str | None = None, post=None, now: datetime | None =
         return False
 
 
+MONTHLY_KEY = "last_monthly_report"
+
+
+def monthly_scorecard(db, topic: str | None = None, post=None, now: datetime | None = None) -> bool:
+    """Send the monthly scorecard once per calendar month, after the morning hour.
+    Never raises. Nothing to say (no calls logged yet) sends nothing."""
+    topic = topic or topic_from_env()
+    if not topic:
+        return False
+    post = post or _post
+    try:
+        from .scorekeeping import monthly_report
+
+        now = now or datetime.now()
+        month = now.strftime("%Y-%m")
+        if now.hour < digest_hour() or (db.get_meta(MONTHLY_KEY) or "") == month:
+            return False
+        report = monthly_report(db)
+        if report is None:
+            return False
+        title, body = report
+        post(NTFY_URL.format(topic=topic), body.encode("utf-8"),
+             {"Title": title, "Priority": "default", "Tags": "bar_chart"})
+        db.set_meta(MONTHLY_KEY, month)
+        return True
+    except Exception:
+        return False
+
+
 def alert_if_new(db, plan: Plan, topic: str | None = None, post=_post,
                  now: datetime | None = None) -> bool:
     """Single-account form of alert_accounts."""

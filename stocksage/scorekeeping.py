@@ -161,6 +161,33 @@ def lines(db) -> list[str]:
     return out
 
 
+def monthly_report(db) -> tuple[str, str] | None:
+    """(title, body) for the once-a-month phone message, or None if nothing has
+    been logged. Aggregates only: no tickers, amounts or accounts."""
+    card = scorecard(db)
+    if not card:
+        return None
+    graded = sum(e["graded"] for e in card.values())
+    waiting = sum(e["waiting"] for e in card.values())
+    body = [f"Graded against SPY after {HORIZON} trading days. {graded} graded, {waiting} still waiting."]
+    earned = []
+    for kind, e in card.items():
+        if e["edge"] is None:
+            body.append(f"- {LABEL[kind]}: {e['waiting']} waiting to mature")
+            continue
+        verdict = {"earned": "EARNED", "failing": "FAILING"}.get(e["level"], "too early to call")
+        if e["graded"] < MIN_N_FAILING and e["level"] == "unproven":
+            verdict = "too early to call"
+        body.append(f"- {LABEL[kind]}: {e['graded']} graded, {e['edge'] * 100:+.2f}% vs the market per call ({verdict})")
+        if e["level"] == "earned" and kind in ("buy", "idea"):
+            earned.append(LABEL[kind])
+    if earned:
+        body.append("A buy kind has EARNED trust: ask Claude to review promoting it. Nothing changes until you decide.")
+    else:
+        body.append("Nothing has earned trust to buy yet, so buys stay as ideas and the rules keep running.")
+    return "StockSage monthly scorecard", "\n".join(body)
+
+
 def update(engine, sheet, today: date | None = None) -> list[str]:
     """Log today's calls, grade the matured ones, return the scorecard lines.
     Never raises: bookkeeping must not break the sheet."""
