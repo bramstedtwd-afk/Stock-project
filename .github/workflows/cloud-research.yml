@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   research:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # pinned: "latest" moves to Ubuntu 26 from 2026-10-19
     timeout-minutes: 25
     env:
       STOCKSAGE_DRIVE_TOKEN: ${{ secrets.STOCKSAGE_DRIVE_TOKEN }}
