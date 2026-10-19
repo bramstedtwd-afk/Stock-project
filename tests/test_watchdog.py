@@ -101,3 +101,22 @@ def test_it_runs_weekdays_only_and_can_be_run_by_hand():
     for t in triggers["schedule"]:
         assert t["cron"].split()[4] == "1-5"
     assert "python -m stocksage watchdog" in TEXT
+
+
+def test_the_watchdog_keeps_both_scheduled_jobs_switched_on():
+    """GitHub disables scheduled workflows after 60 days of repository silence;
+    this is what makes the calendar reminder unnecessary."""
+    wf = yaml.safe_load(TEXT)
+    assert wf["permissions"]["actions"] == "write"
+    step = next(s for s in wf["jobs"]["watch"]["steps"] if "Keep the scheduled" in s.get("name", ""))
+    assert step["continue-on-error"] is True, "a keep-alive hiccup must not fail the watchdog"
+    assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    for name in ("watchdog.yml", "cloud-research.yml"):
+        assert name in step["run"]
+        assert (PATH.parent / name).exists(), f"{name} is not a real workflow file"
+    assert "enable" in step["run"] and "--method PUT" in step["run"]
+
+
+def test_no_third_party_action_is_trusted_with_the_write_permission():
+    uses = [s["uses"] for s in yaml.safe_load(TEXT)["jobs"]["watch"]["steps"] if "uses" in s]
+    assert all(u.startswith("actions/") for u in uses)

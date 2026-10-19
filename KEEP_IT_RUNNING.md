@@ -56,10 +56,12 @@ nothing to clone, import or retire. Do not delete that folder: your `.env`
 
 ## Part 3: two traps that quietly kill things after months
 
-- **GitHub switches scheduled jobs off after 60 days without any repository activity.**
-  You get an email. Fix: Actions tab > pick the workflow > **Enable workflow**. A commit
-  from you (even a small note) resets the clock. Put a reminder in your calendar every
-  45 days until I make this automatic.
+- **GitHub switches scheduled jobs off after 60 days without repository activity.**
+  The Watchdog now re-enables both scheduled jobs every weekday, which resets that
+  clock, so you should never need to. If you ever get GitHub's "scheduled workflows
+  disabled" email anyway, open the Actions tab, pick the workflow, and click
+  **Enable workflow**; then tell me, because the keep-alive step failed (its log line
+  says which).
 - **Google test-mode tokens expire in 7 days.** If the cloud runner worked at first and
   then fails weekly with `invalid_grant`, the Google "OAuth consent screen" is still in
   *Testing*. In Google Cloud Console set its publishing status to **In production**, then

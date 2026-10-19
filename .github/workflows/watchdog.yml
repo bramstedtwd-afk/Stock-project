@@ -12,8 +12,12 @@ on:
     - cron: "30 15 * * 1-5"   # 10:30 CT, after the 08:30 and 09:45 runs
   workflow_dispatch:
 
+# actions: write lets the keep-alive step below re-enable the scheduled jobs.
+# GitHub switches scheduled workflows off in a public repo after 60 days with no
+# repository activity; re-enabling them every weekday resets that clock.
 permissions:
   contents: read
+  actions: write
 
 jobs:
   watch:
@@ -35,3 +39,17 @@ jobs:
 
       - name: Is the sheet still being updated?
         run: python -m stocksage watchdog
+
+      - name: Keep the scheduled jobs switched on
+        # A reminder in your calendar is replaced by this. It must never fail the
+        # watchdog, so a problem here is reported but not fatal.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          for wf in watchdog.yml cloud-research.yml; do
+            gh api --method PUT "repos/$REPO/actions/workflows/$wf/enable" \
+              && echo "kept $wf enabled" \
+              || echo "could not re-enable $wf (check the Actions tab)"
+          done
