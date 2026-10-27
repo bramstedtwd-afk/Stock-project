@@ -751,6 +751,75 @@ def cmd_drivers(args) -> int:
     return 0
 
 
+def _save_lab(name: str, res: dict, winners: list) -> None:
+    import json
+    from datetime import datetime, timezone
+
+    from . import today
+    from .db import Database
+
+    try:
+        base = today.state_dir()
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        report = {"at": stamp, **{k: v for k, v in res.items() if k != "rows"},
+                  "rows": [r.to_dict() for r in res["rows"]]}
+        (base / f"{name}.json").write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+        db = Database()
+        db.set_meta(f"{name}_at", stamp)
+        db.set_meta(f"{name}_winners", ",".join(w.name for w in winners))
+        db.close()
+        print(f"\n(Saved to {base / (name + '.json')})")
+    except OSError:
+        pass
+
+
+def cmd_groups(args) -> int:
+    """Rules across industry, country and style funds, plus calendar effects."""
+    from . import groups, today
+
+    print("Groups lab: about 75 funds, 50+ rules (about a minute)...\n")
+    try:
+        px = groups.load_prices(today.state_dir() / "groups.parquet")
+    except Exception as exc:
+        print(f"Could not get prices: {exc}")
+        return 1
+    res = groups.run(px, draws=args.draws)
+    print("\n".join(groups.describe(res, top=args.top)))
+    _save_lab("groups", res, groups.strong(res["rows"]))
+    return 0
+
+
+def cmd_earnings(args) -> int:
+    """Post-earnings drift on S&P 500 companies, industry by industry."""
+    from . import earnings, today
+
+    base = today.state_dir()
+    print("Earnings lab: earnings history for ~500 companies. The first run downloads it")
+    print("(about 30 minutes, resumable); later runs use the saved copy.\n")
+    try:
+        uni = earnings.load_universe(base / "sp500.csv")
+        tickers = sorted(set(uni["ticker"]))
+        px = earnings.load_prices(tickers + ["SPY"] + list(earnings.SECTOR_ETF.values()), base / "eq_prices.parquet")
+        raw = earnings.load_events(tickers, base / "eq_events.parquet")
+    except Exception as exc:
+        print(f"Could not get the data: {exc}")
+        return 1
+    ev = earnings.build_events(raw, uni, px)
+    import pandas as pd
+
+    from . import research
+    cash = pd.Series(0.0, index=px.index)
+    try:
+        etf = research.load_prices(base / "research_prices.parquet")
+        cash = etf[research.CASH].pct_change().reindex(px.index).fillna(0.0)
+    except Exception:
+        pass
+    res = earnings.run(ev, px, cash, draws=args.draws)
+    print("\n".join(earnings.describe(res, top=args.top)))
+    _save_lab("earnings", res, earnings.strong(res["rows"]))
+    return 0
+
+
 def cmd_analogs(args) -> int:
     """Build the look-alike history that lets a BUY be stated plainly."""
     from . import backtest
@@ -1694,6 +1763,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--latest", action="store_true",
                    help="use today's revised economic figures instead of as-published ones (optimistic)")
     p.set_defaults(func=cmd_drivers)
+
+    p = sub.add_parser("groups", help="rules across industries, countries and styles, plus calendar effects")
+    p.add_argument("--draws", type=int, default=2000)
+    p.add_argument("--top", type=int, default=15)
+    p.set_defaults(func=cmd_groups)
+
+    p = sub.add_parser("earnings", help="do stocks keep moving after an earnings surprise? (by industry)")
+    p.add_argument("--draws", type=int, default=2000)
+    p.add_argument("--top", type=int, default=15)
+    p.set_defaults(func=cmd_earnings)
 
     p = sub.add_parser(
         "analogs",

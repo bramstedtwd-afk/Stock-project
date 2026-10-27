@@ -164,6 +164,34 @@ riskiest-30% rules were also run in the contrarian direction.
 **Verdict:** understanding why markets moved is real and useful context, so it
 is on the sheet as `DRIVER` lines. Trading on it did not beat holding the index.
 
+## Earnings drift, industry by industry (run `.\start.bat earnings`; last run 2026-10-27)
+
+31,764 earnings reports (yfinance: dates, analyst estimates, surprises) from
+today's S&P 500 companies, 2003-2026, each counted only after the company
+joined the index. Bought at the close of the session after the reaction; 34
+rules (big beats, strong reactions, beat-and-rose, both, contrarian misses;
+20 or 60 days; each of 11 sectors).
+
+- **Before 2015 it worked.** Ten rules passed the luck-corrected test (best:
+  top 30% on surprise AND reaction, +8.3% a year alpha, t = 5).
+- **After 2015 it did not.** Every survivor fell to +0.4% to +2.6% alpha, t of
+  0.1 to 0.7, against a bar of 2.8.
+- **Most of the early edge was not the earnings at all.** Buying after EVERY
+  report, good or bad, earned +4.9% a year before 2015 (today's survivors and
+  equal weighting). The drift itself added +4.0% a year then (t = 2.5) and +1.5%
+  since (t = 1.2): a published anomaly that has faded, as the research literature
+  reports.
+
+## Industries, countries, styles and the calendar (run `.\start.bat groups`; last run 2026-10-27)
+
+51 rules on ~75 funds (40 US industries, 25 countries, 9 styles), 2007-2026,
+judged against SPY AND the group held passively: 12-1, 6- and 3-month
+momentum, last month's losers, nearness to the 52-week high, lowest
+volatility (each with and without a beat-cash filter), turn of the month,
+November-April only, the session before holidays. One passed before 2016 (the
+three calmest industries, when they beat cash); after 2016 it earned 3.7% a
+year with negative alpha. Nothing cleared the bar.
+
 ## The owner's goal (2026-10-01)
 
 **Maximum growth: hold the market, manage risk only.** The trend rules are
