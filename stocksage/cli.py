@@ -715,7 +715,7 @@ def cmd_drivers(args) -> int:
 
     base = today.state_dir()
     print("Gathering 17 forces from FRED and, the first time, every past release of the revised ones")
-    print("from ALFRED (about 5-10 minutes once, then cached for a week)...\n")
+    print("from ALFRED (about 15 minutes the first time, then cached for a week)...\n")
     try:
         raw = drivers.load_fred(base / "fred.parquet")
         rt = drivers.load_realtime(base / "fred_realtime.parquet")

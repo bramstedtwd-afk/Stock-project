@@ -135,6 +135,35 @@ controls hundreds of thousands of dollars (XSP, the mini, about $77,000), and a
 covered call needs 100 shares, so at current account sizes these strategies
 cannot be placed as tested.
 
+## Why the market moves: news, the economy and the consumer (run `.\start.bat drivers`; last run 2026-10-27)
+
+**Explaining is easy.** Same-month changes in 8 forces (volatility, credit
+spreads, the 10-year yield, newspaper-measured policy uncertainty, oil, consumer
+sentiment, the yield curve, jobless claims) line up with **59% of the S&P 500's
+monthly moves** since 1997. Volatility and credit spreads do most of it: a
+normal-sized jump in the VIX goes with about -2.8% that month, a widening in
+credit spreads about -0.8%. The other ~40% is what no public number explains.
+This is hindsight: it says why a month went the way it did.
+
+**Predicting is not.** 78 rules stood aside (in cash) whenever a force known
+beforehand was in its riskiest 30%, or the opposite. The forces were 17 series,
+including the newspaper-based uncertainty indexes, plus a combined score. Each
+rule was applied to the S&P 500 and to the real put-write index, and the
+riskiest-30% rules were also run in the contrarian direction.
+
+- **On today's revised data, one rule looked like a winner:** the put-write
+  with an exit on a high combined score earned +3.1% a year alpha in 2012-2026
+  with a -9% worst drop.
+- **On the figures as they were first published (ALFRED archive), it vanished.**
+  Nothing passed even the development test (best p = 0.18). The "edge" was
+  hindsight: later revisions to production, permits, retail sales and money
+  supply that nobody could have traded on.
+- Rules built only on never-revised daily data (markets and the news indexes)
+  had no edge either.
+
+**Verdict:** understanding why markets moved is real and useful context, so it
+is on the sheet as `DRIVER` lines. Trading on it did not beat holding the index.
+
 ## The owner's goal (2026-10-01)
 
 **Maximum growth: hold the market, manage risk only.** The trend rules are
