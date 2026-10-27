@@ -923,7 +923,7 @@ def _refresh_today(engine, client, upload: bool = True, rebuild_book: bool = Fal
             except Exception as exc:           # Drive is optional for the sheet
                 out["error"] = f"could not upload the sheet to Drive: {exc}"
         if topic_from_env():
-            alert_accounts(engine.db, [(a.title, a.plan) for a in sheet.accounts if a.plan])
+            alert_accounts(engine.db, [(a.title, a.plan) for a in sheet.accounts if a.plan], news=sheet.news)
             from .notify import monthly_scorecard
 
             monthly_scorecard(engine.db)
@@ -1877,21 +1877,9 @@ def _report_unpriceable() -> None:
     if not missing:
         return
     names = ", ".join(missing)
-    print(
-        f"\nNote: no price data for {names} — delisted, renamed, or not carried "
-        f"by Yahoo Finance."
-    )
-    print(
-        "      Left out of this run's analysis. If you no longer follow "
-        f"{missing[0]}:"
-    )
-    print(f"        .\\start.bat watch remove {missing[0]}      (Windows)")
-    print(f"        ./start.sh watch remove {missing[0]}        (Mac/Linux)")
-    print(
-        "      If you hold it at your broker it is scanned automatically and "
-        "cannot be removed from the watchlist — this note is just telling you "
-        "it has no signals today."
-    )
+    print(f"\nNote: no price data for {names} (delisted, renamed or not on Yahoo), so it was left out.")
+    print(f"      To stop following it:  .\\start.bat watch remove {missing[0]}   "
+          "(if you still hold it, there is nothing to do)")
 
 
 def main(argv: list[str] | None = None) -> int:

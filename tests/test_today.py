@@ -155,18 +155,45 @@ def test_an_account_with_nothing_to_do_says_so_bluntly():
     assert any("Ideas history does not back: ZZZ" in ln for ln in today._bottom_line(with_ideas))
 
 
-def test_news_is_attached_to_a_call_but_does_not_change_it(real_book):
-    class Gloomy(FakeMarket):
-        def news(self, ticker, limit=8):
-            return [{"title": f"{ticker} faces lawsuit and downgrade", "publisher": "T", "link": ""}]
+def _gloomy_feed(url):
+    from datetime import timedelta, timezone
 
-    _, quiet = sheet_for(real_book, news=False)
-    _, loud = sheet_for(real_book, market=Gloomy({}))
+    when = (NOW.astimezone(timezone.utc) - timedelta(hours=2)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    return ('<?xml version="1.0"?><rss><channel><item><title>Company faces lawsuit and downgrade - Wire</title>'
+            f"<link>x</link><pubDate>{when}</pubDate><source>Wire</source></item></channel></rss>")
+
+
+def test_news_is_attached_to_a_call_but_does_not_change_it(real_book):
+    engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
+    quiet = today.build_sheet(engine, FakeBroker(), suggestions=default_suggestions(STRONG), book=real_book,
+                              news=False, now=NOW)
+    loud = today.build_sheet(engine, FakeBroker(), suggestions=default_suggestions(STRONG), book=real_book,
+                             news=True, now=NOW, news_fetch=_gloomy_feed)
     calls = lambda s: [(a.title, d.text) for a in s.accounts for d in a.directives]   # noqa: E731
     assert calls(quiet) == calls(loud), "headlines are context, not a veto"
     ctx = [c for a in loud.accounts for d in a.directives for c in d.context]
-    assert any(c.startswith("News:") and "lawsuit" in c for c in ctx)
-    assert not any(c.startswith("News:") for a in quiet.accounts for d in a.directives for c in d.context)
+    assert any(c.startswith("News today, 2h ago") and "lawsuit" in c for c in ctx)
+    assert not any(c.startswith("News") for a in quiet.accounts for d in a.directives for c in d.context)
+
+
+def test_every_holding_gets_a_news_line_on_the_sheet(real_book):
+    engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
+    sheet = today.build_sheet(engine, FakeBroker(), suggestions=default_suggestions(STRONG), book=real_book,
+                              news=True, now=NOW, news_fetch=_gloomy_feed)
+    text = today.render_text(sheet)
+    section = text[text.index("NEWS ON WHAT YOU OWN"):text.index("DETAIL")]
+    for held in ("ACT", "PERS", "VTI", "ROTH"):
+        assert f"  {held}" in section
+    assert "[TODAY 2h ago] Company faces lawsuit and downgrade (Wire)" in section
+    assert set(sheet.news) >= {"ACT", "PERS", "VTI", "ROTH"}
+
+
+def test_the_model_record_is_said_once_not_per_account(real_book):
+    _, sheet = sheet_for(real_book)
+    for a in sheet.accounts:
+        a.notes.append("Model's BUY calls: trailing.")
+    text = today.render_text(sheet)
+    assert text.count("Model's BUY calls: trailing.") == 1 and "MODEL RECORD (all accounts)" in text
 
 
 def test_a_news_feed_that_blows_up_does_not_break_the_sheet(real_book):

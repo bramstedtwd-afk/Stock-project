@@ -155,6 +155,9 @@ def _render_plans(plans):
                 st.code(today.render_text(sheet), language=None)
         for warning in plans.get("warnings", []):
             st.warning(warning)
+        if sheet is not None and sheet.news_lines:
+            with st.expander("News on what you own (last day, then the week)"):
+                st.code("\n".join(sheet.news_lines), language=None)
         accounts = plans["accounts"]
         if len(accounts) == 1:
             _render_plan_body(accounts[0]["plan"], accounts[0]["manual"])

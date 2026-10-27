@@ -74,7 +74,7 @@ def test_a_skipped_ticker_is_reported_once_with_the_fix(capsys):
     assert out.count("BMWYY") >= 1
     assert "no price data for BMWYY" in out
     assert ".\\start.bat watch remove BMWYY" in out
-    assert "delisted, renamed, or not carried" in out
+    assert "delisted, renamed or not on Yahoo" in out and out.count("\n") <= 4, "short: two lines"
 
 
 def test_nothing_is_printed_on_a_clean_run(capsys):

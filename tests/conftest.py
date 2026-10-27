@@ -69,3 +69,15 @@ def _no_economic_data_downloads(monkeypatch):
 
     monkeypatch.setattr(drivers, "load_fred", fred)
     monkeypatch.setattr(drivers, "load_realtime", rt)
+
+
+@pytest.fixture(autouse=True)
+def _no_news_downloads(monkeypatch):
+    """Headlines come from Google News and yfinance; no test may reach either."""
+    from stocksage import news
+
+    def offline(*a, **k):
+        raise RuntimeError("offline in tests")
+
+    monkeypatch.setattr(news, "_get", offline)
+    monkeypatch.setattr(news, "lookup_name", lambda t: "")

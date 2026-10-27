@@ -27,6 +27,7 @@ and low-confidence buys belong on the dashboard, not on a lock screen.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import urllib.request
 from datetime import datetime
@@ -173,13 +174,55 @@ def alert_if_new(db, plan: Plan, topic: str | None = None, post=_post,
     return alert_accounts(db, [("Agentic", plan)], topic, post, now)
 
 
+NEWS_SEEN_KEY = "news_seen"
+MAX_BODY = 3500                 # ntfy's limit is 4096 bytes
+
+
+def news_enabled() -> bool:
+    return (os.environ.get("STOCKSAGE_NEWS_IN_ALERTS") or "on").strip().lower() != "off"
+
+
+def _news_block(db, news: dict | None, now: datetime, only: list[str] | None = None,
+                header: str = "News on your holdings, last 24 hours:") -> tuple[str, set]:
+    """Recent headlines for the push. Public headlines and tickers only: never an
+    amount or an account. Returns the text and the headline ids it shows."""
+    if not news or not news_enabled():
+        return "", set()
+    from datetime import timezone
+
+    from .news import push_lines
+
+    try:
+        seen = set(json.loads(db.get_meta(NEWS_SEEN_KEY) or "[]"))
+    except Exception:
+        seen = set()
+    now_utc = now.astimezone(timezone.utc) if now.tzinfo else now.astimezone().astimezone(timezone.utc)
+    lines, shown = push_lines(news, now_utc, seen, only=only)
+    if not lines:
+        return ("\nNo fresh news on your holdings in the last 24 hours." if only is None else ""), set()
+    return "\n" + header + "\n" + "\n".join(lines), shown
+
+
+def _remember_news(db, shown: set) -> None:
+    if not shown:
+        return
+    try:
+        seen = json.loads(db.get_meta(NEWS_SEEN_KEY) or "[]")
+    except Exception:
+        seen = []
+    seen = (seen + [h for h in shown if h not in seen])[-400:]
+    db.set_meta(NEWS_SEEN_KEY, json.dumps(seen))
+
+
 def alert_accounts(db, account_plans, topic: str | None = None, post=_post,
-                   now: datetime | None = None) -> bool:
+                   now: datetime | None = None, news: dict | None = None) -> bool:
     """Send at most one push for this run. True if one was sent.
 
-    account_plans: [(role label, Plan)]. Never raises: a flaky network must not
-    break a publish. If sending fails nothing is recorded as sent, so the next
-    run tries again.
+    account_plans: [(role label, Plan)]. `news`: ticker -> recent headlines (see
+    stocksage.news); the daily message lists the last day's headlines on every
+    holding, and an urgent message carries the latest headline on the stocks it
+    is about. Never raises: a flaky network must not break a publish. If sending
+    fails nothing is recorded as sent, so the next run tries again.
     """
     topic = topic or topic_from_env()
     if not topic:
@@ -217,12 +260,14 @@ def alert_accounts(db, account_plans, topic: str | None = None, post=_post,
         if not urgent_new and not digest_due and not all_clear_due:
             return False
         if all_clear_due:
+            extra, shown = _news_block(db, news, now)
+            body = ("Nothing needs doing today. Every account was checked." + extra)[:MAX_BODY]
             post(
-                NTFY_URL.format(topic=topic),
-                b"Nothing needs doing today. Every account was checked.",
+                NTFY_URL.format(topic=topic), body.encode("utf-8"),
                 {"Title": "StockSage today: all clear", "Priority": "low", "Tags": "white_check_mark"},
             )
             db.set_meta(DIGEST_DATE_KEY, today)
+            _remember_news(db, shown)
             return True
 
         # Loud only for a breach the owner has not been told about. A digest
@@ -232,6 +277,12 @@ def alert_accounts(db, account_plans, topic: str | None = None, post=_post,
             [a for _, a in chosen], [r for r, _ in chosen],
             digest=digest_due and not urgent_new,
         )
+        if digest_due:
+            extra, shown = _news_block(db, news, now)
+        else:
+            extra, shown = _news_block(db, news, now, only=sorted({a.ticker for _, a in chosen}),
+                                       header="Latest news on these:")
+        body = (body + extra)[:MAX_BODY]
         post(
             NTFY_URL.format(topic=topic), body.encode("utf-8"),
             {"Title": title, "Priority": "high" if urgent_new else "default",
@@ -242,6 +293,7 @@ def alert_accounts(db, account_plans, topic: str | None = None, post=_post,
             db.set_meta(URGENT_SIGNATURE_KEY, urgent_sig)
         if digest_due:
             db.set_meta(DIGEST_DATE_KEY, today)
+        _remember_news(db, shown)
         return True
     except Exception:
         return False

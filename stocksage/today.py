@@ -82,6 +82,8 @@ class Sheet:
     market: list[str] = field(default_factory=list)
     trend: list[str] = field(default_factory=list)
     drivers: list[str] = field(default_factory=list)
+    news_lines: list[str] = field(default_factory=list)
+    news: dict = field(default_factory=dict)          # ticker -> headlines (for alerts; not saved)
     warnings: list[str] = field(default_factory=list)
     tax_notes: list[str] = field(default_factory=list)
     invest: str | None = None
@@ -90,7 +92,7 @@ class Sheet:
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return {"generated_at": self.generated_at, "market": self.market, "trend": self.trend, "drivers": self.drivers, "warnings": self.warnings, "tax_notes": self.tax_notes, "invest": self.invest,
+        return {"generated_at": self.generated_at, "market": self.market, "trend": self.trend, "drivers": self.drivers, "news_lines": self.news_lines, "warnings": self.warnings, "tax_notes": self.tax_notes, "invest": self.invest,
                 "accounts": [a.to_dict() for a in self.accounts],
                 "overall_notes": self.overall_notes, "notes": self.notes}
 
@@ -261,21 +263,49 @@ def pd_read_parquet(path):
     return pd.read_parquet(path)
 
 
-def _news_line(engine, ticker: str) -> str | None:
-    from .context import tag_reasons
+MAX_NEWS_TICKERS = 30
+
+
+def gather_news(engine, tickers: list[str], now_utc, fetch=None, lookup=None) -> dict[str, list[dict]]:
+    """Last-7-days headlines for each ticker (Google News by company name, plus
+    yfinance when it answers). Never raises; a failed source is just empty."""
+    from . import news as news_mod
 
     try:
-        items = engine.market.news(ticker, limit=6) or []
+        names = news_mod.company_names(tickers, state_dir() / "names.json", lookup)
     except Exception:
-        return None
+        names = {}
+    out = {}
+    for t in tickers[:MAX_NEWS_TICKERS]:
+        try:
+            out[t] = news_mod.holding_news(t, names.get(t), engine.market, now_utc, fetch)
+        except Exception:
+            out[t] = []
+    return out
+
+
+def last_moves(engine, tickers: list[str]) -> dict[str, float]:
+    moves = {}
+    for t in tickers:
+        try:
+            df = engine.market.history(t)
+            if df is not None and len(df) >= 2:
+                moves[t] = float(df["Close"].iloc[-1] / df["Close"].iloc[-2] - 1.0)
+        except Exception:
+            pass
+    return moves
+
+
+def _news_context(items: list[dict] | None, now_utc) -> str:
+    from . import news as news_mod
+
     if not items:
-        return "News: nothing notable this week."
-    themes = tag_reasons(items)
-    head = (items[0].get("title") or "").strip()
-    if len(head) > HEADLINE_CHARS:
-        head = head[: HEADLINE_CHARS - 1] + "…"
-    theme_txt = f"; themes: {', '.join(themes)}" if themes else ""
-    return f"News: {len(items)} recent stories{theme_txt}. Latest: \"{head}\""
+        return "News: nothing in the last 7 days."
+    it = items[0]
+    tag = "today" if now_utc - it["published"] <= news_mod.DAY else "this week"
+    src = f" ({it['publisher']})" if it.get("publisher") else ""
+    more = f" (+{len(items) - 1} more this week)" if len(items) > 1 else ""
+    return f"News {tag}, {news_mod.age(it['published'], now_utc)}: \"{news_mod.short(it['title'])}\"{src}{more}"
 
 
 def _trend_lines(sug, sector_trends: dict[str, float]) -> list[str]:
@@ -461,7 +491,7 @@ def lab_status(db) -> str:
 
 def build_sheet(engine, client, suggestions=None, book="auto", news: bool = True,
                 now: datetime | None = None, plans: dict | None = None,
-                track: bool = False) -> Sheet:
+                track: bool = False, news_fetch=None, name_lookup=None) -> Sheet:
     """Assemble the sheet for every account under the login."""
     from .advisor import plans_for_accounts
 
@@ -499,8 +529,15 @@ def build_sheet(engine, client, suggestions=None, book="auto", news: bool = True
         sheet.notes.append(
             f"Look-alike history is {book.age_days:.0f} days old; refresh it with .\\start.bat analogs.")
 
-    news_budget = MAX_CONTEXT_TICKERS
-    news_cache: dict[str, str | None] = {}
+    from datetime import timezone
+
+    from . import news as news_mod
+
+    now_utc = (now.astimezone(timezone.utc) if now.tzinfo else now.astimezone().astimezone(timezone.utc))
+    held = sorted({p["ticker"] for e in result["accounts"] for p in e.get("positions", [])})
+    if news:
+        sheet.news = gather_news(engine, held, now_utc, news_fetch, name_lookup)
+        sheet.news_lines = news_mod.sheet_lines(sheet.news, last_moves(engine, held), now_utc)
     for entry in result["accounts"]:
         positions_by = {p["ticker"]: p for p in entry.get("positions", [])}
         filtered = apply_evidence(entry["plan"], evidence_for)
@@ -529,11 +566,10 @@ def build_sheet(engine, client, suggestions=None, book="auto", news: bool = True
             if d.verb == "TRIM":
                 d.context.append("This is about size, not a verdict on the stock.")
             d.context += _trend_lines(sug, sector_trends)
-            if news and news_budget > 0 and d.ticker not in news_cache:
-                news_cache[d.ticker] = _news_line(engine, d.ticker)
-                news_budget -= 1
-            if news_cache.get(d.ticker):
-                d.context.append(news_cache[d.ticker])
+            if news:
+                if d.ticker not in sheet.news and len(sheet.news) < MAX_NEWS_TICKERS:
+                    sheet.news.update(gather_news(engine, [d.ticker], now_utc, news_fetch, name_lookup))
+                d.context.append(_news_context(sheet.news.get(d.ticker), now_utc))
             acct.directives.append(d)
         acct.directives.sort(key=lambda d: d.urgency)
         acct.reinvest = _reinvest(acct)
@@ -611,6 +647,15 @@ def render_text(sheet: Sheet) -> str:
         lines.append("")
     for a in sheet.accounts:
         lines += _bottom_line(a) + [""]
+    if sheet.news_lines:
+        lines += ["NEWS ON WHAT YOU OWN  (last 24 hours marked TODAY, then the past week)", "-" * 66]
+        lines += sheet.news_lines + [""]
+    # The model's track record is the same for every account: say it once.
+    record = []
+    for a in sheet.accounts:
+        for n in a.notes:
+            if n.startswith(("Model's BUY calls", "Model's SELL calls")) and n not in record:
+                record.append(n)
     lines += ["", "DETAIL", "-" * 66]
     for a in sheet.accounts:
         lines.append(_heading(a))
@@ -629,8 +674,12 @@ def render_text(sheet: Sheet) -> str:
         if a.quiet:
             lines.append(f"  No action needed: {', '.join(a.quiet)}")
         for n in a.notes:
-            lines.append(f"  {n}")
+            if n not in record:
+                lines.append(f"  {n}")
         lines.append("")
+    if record:
+        lines.append("MODEL RECORD (all accounts)")
+        lines += [f"  {n}" for n in record] + [""]
     for n in sheet.notes:
         lines.append(n)
     lines += ["", "StockSage never places orders. Context (news, sector) is shown for you to weigh; "
