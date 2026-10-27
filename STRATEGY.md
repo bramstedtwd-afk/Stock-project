@@ -192,6 +192,19 @@ November-April only, the session before holidays. One passed before 2016 (the
 three calmest industries, when they beat cash); after 2016 it earned 3.7% a
 year with negative alpha. Nothing cleared the bar.
 
+## Insider buying (run `.\start.bat insiders`; last run 2026-10-27)
+
+Every open-market purchase by officers and directors reported to the SEC
+(Form 4, SEC quarterly data sets, 2006-2026: 828,235 purchases), dated when it
+became public. 7,330 filing days at today's S&P 500 companies (after each
+joined); 15 rules (any purchase, $100k+, 3+ insiders within 30 days, CEO/CFO,
+directors only; 20/60/120 days). **Nothing passed the development test.** The
+control (own every company equally) already earned +4.3% a year before 2016,
+and the signals barely added to it; insider clusters looked largest (+12.8%,
+t = 1.8 on 1,098 events) but within luck. Research finds the effect mostly in
+small companies, where free prices exist only for survivors, so a small-cap
+test here would be flattered and was not run.
+
 ## The owner's goal (2026-10-01)
 
 **Maximum growth: hold the market, manage risk only.** The trend rules are

@@ -262,8 +262,9 @@ def run(ev: pd.DataFrame, prices: pd.DataFrame, cash: pd.Series, draws: int = 20
     from .research import reality_check
 
     ev = ev.copy()
-    ev["surprise_rank"] = past_rank(ev, "surprise")
-    ev["reaction_rank"] = past_rank(ev, "reaction")
+    for col in ("surprise", "reaction"):           # other labs reuse this with their own event columns
+        if col in ev:
+            ev[f"{col}_rank"] = past_rank(ev, col)
     sigs = sigs if sigs is not None else signals(sorted(ev["sector"].dropna().unique()))
     days = prices.loc[start:].index
     spy = prices["SPY"].pct_change().reindex(days)
@@ -299,7 +300,7 @@ def run(ev: pd.DataFrame, prices: pd.DataFrame, cash: pd.Series, draws: int = 20
     # How strong is the drift itself? Average 60-day move after the top vs bottom fifth (vs SPY).
     drift = {}
     R = prices.pct_change()
-    for label, m in (("top fifth by surprise", ev["surprise_rank"] >= 0.8),
+    for label, m in [] if "surprise_rank" not in ev else (("top fifth by surprise", ev["surprise_rank"] >= 0.8),
                      ("bottom fifth by surprise", ev["surprise_rank"] <= 0.2)):
         moves = []
         for e in ev[m.fillna(False)].itertuples(index=False):

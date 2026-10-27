@@ -820,6 +820,42 @@ def cmd_earnings(args) -> int:
     return 0
 
 
+def cmd_insiders(args) -> int:
+    """Do companies' own insiders buying their stock predict anything? (SEC Form 4 data)"""
+    import pandas as pd
+
+    from . import earnings, envfile, insiders, research, today
+
+    if args.contact:
+        if "@" not in args.contact:
+            print("That does not look like an email address.")
+            return 1
+        envfile.save_env({insiders.CONTACT_VAR: args.contact.strip()})
+        print("Saved your SEC contact email in .env (sent only to sec.gov with each download).")
+    base = today.state_dir()
+    print("Insider lab: every open-market insider purchase since 2006 from the SEC. The first run")
+    print("downloads about 1 GB in quarterly files (resumable, 20-40 minutes); later runs reuse it.\n")
+    try:
+        uni = earnings.load_universe(base / "sp500.csv")
+        tickers = sorted(set(uni["ticker"]))
+        px = earnings.load_prices(tickers + ["SPY"] + list(earnings.SECTOR_ETF.values()), base / "eq_prices.parquet")
+        buys = insiders.load_purchases(base / "insider_buys.parquet")
+    except Exception as exc:
+        print(f"Could not get the data: {exc}")
+        return 1
+    cash = pd.Series(0.0, index=px.index)
+    try:
+        etf = research.load_prices(base / "research_prices.parquet")
+        cash = etf[research.CASH].pct_change().reindex(px.index).fillna(0.0)
+    except Exception:
+        pass
+    ev = insiders.build_events(buys, uni, px)
+    res = insiders.run(ev, px, cash, uni, draws=args.draws)
+    print("\n".join(insiders.describe(res, top=args.top)))
+    _save_lab("insiders", res, earnings.strong(res["rows"]))
+    return 0
+
+
 def cmd_analogs(args) -> int:
     """Build the look-alike history that lets a BUY be stated plainly."""
     from . import backtest
@@ -1773,6 +1809,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--draws", type=int, default=2000)
     p.add_argument("--top", type=int, default=15)
     p.set_defaults(func=cmd_earnings)
+
+    p = sub.add_parser("insiders", help="do officers and directors buying their own stock predict anything?")
+    p.add_argument("--contact", help="your email, which the SEC requires with each download (saved in .env)")
+    p.add_argument("--draws", type=int, default=2000)
+    p.add_argument("--top", type=int, default=15)
+    p.set_defaults(func=cmd_insiders)
 
     p = sub.add_parser(
         "analogs",
