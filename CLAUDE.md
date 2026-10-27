@@ -33,7 +33,7 @@ rather than giving them instructions.
 - `stocksage/brain.py` — brain export / merging import / cloud-folder sync (merges only ever add)
 - `stocksage/data.py` — yfinance with parquet cache + stale fallback
 - `stocksage/desktop.py` — app-window/web/phone launch modes + desktop icon install
-- `stocksage/autopilot.py` — OS-scheduler registration (launchd/cron/Task Scheduler)
+- `stocksage/autopilot.py` — OS-scheduler registration (launchd/cron/Task Scheduler). Self-update (`autopilot auto-update`, weekdays 08:10, a SEPARATE job running `start.bat update`) is OPT-IN ONLY: it runs whatever is on main on the machine holding the broker login, so no code path may switch it on except the owner's command (`test_self_update_is_only_ever_switched_on_by_the_owners_command`)
 - `stocksage/update.py` — safe self-update (ff-only, refuses dirty tree)
 - `stocksage/doctor.py` — 11-point self-diagnosis with fixes (incl. whether publishing is actually *happening*, not just scheduled)
 - `stocksage/actions.py` — the plan: pure rules (stop, target, 10-day exit, 25% cap, $15 floor, 3-4 slots) → ranked sells/trims/entries, each entry carrying the model's measured edge. Mirrors ROUTINE.md; change both together. `stocksage/notify.py` — opt-in ntfy phone alert, once per change, tickers+verbs only (no amounts/account)
@@ -60,7 +60,7 @@ rather than giving them instructions.
 
 ## Commands (via ./start.sh or .\start.bat)
 
-`(none)`=app window · `today` (alias `actions`) · `alerts [test|off]` · `invest [AMOUNT|off] [--account roth|personal] [--fund VTI]` · `mobile [install|off]` · `analogs` · `research [--draws N]` · `dipbuy [TICKERS] [--fill next_open] [--proceeds spy]` · `timing [--draws N]` · `options [--draws N]` · `drivers [--latest]` · `earnings` · `groups` · `insiders [--contact EMAIL]` · `backtest [--years N]` · `lab [--years N]` · `setup` (new machine) · `web` · `phone` · `install` · `autopilot [off|status]` ·
+`(none)`=app window · `today` (alias `actions`) · `alerts [test|off]` · `invest [AMOUNT|off] [--account roth|personal] [--fund VTI]` · `mobile [install|off]` · `analogs` · `research [--draws N]` · `dipbuy [TICKERS] [--fill next_open] [--proceeds spy]` · `timing [--draws N]` · `options [--draws N]` · `drivers [--latest]` · `earnings` · `groups` · `insiders [--contact EMAIL]` · `backtest [--years N]` · `lab [--years N]` · `setup` (new machine) · `web` · `phone` · `install` · `autopilot [off|status|auto-update]` ·
 `update` · `doctor` · `daily` · `suggest [TICKERS]` · `sectors` · `portfolio` ·
 `moves` · `performance` · `profit` · `watch add|remove|list` ·
 `congress` · `bootstrap` · `brain export|import|sync|info|audit|repair` ·

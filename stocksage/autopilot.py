@@ -78,6 +78,18 @@ PUBLISH_LAUNCHD_PLIST = Path(
 PUBLISH_CRON_TAG = "# stocksage-publish"
 PUBLISH_SCHTASK_NAME = "StockSage Publish"
 
+# Self-update, OPT-IN ONLY (`autopilot auto-update`, run by the owner at the
+# computer): a SEPARATE weekday job before the first publish. It runs whatever
+# is on the default branch on the machine holding the broker login, so it is
+# never switched on automatically. Separate because cmd reads start.bat by byte
+# offset while it runs; replacing the file mid-run executes a stray fragment.
+UPDATE_TIME = (8, 10)
+UPDATE_SCHTASK_NAME = "StockSage Update"
+UPDATE_CRON_TAG = "# stocksage-update"
+UPDATE_LAUNCHD_LABEL = "local.stocksage.update"
+UPDATE_LAUNCHD_PLIST = Path(f"~/Library/LaunchAgents/{UPDATE_LAUNCHD_LABEL}.plist").expanduser()
+UPDATE_LOG = Path("~/.stocksage/update.log").expanduser()
+
 
 def say(msg: str) -> None:
     print(f"[stocksage] {msg}")
@@ -203,6 +215,39 @@ def publish_schtasks_cmds(folder: str | None = None) -> list[list[str]]:
         ]
         for h, m in PUBLISH_TIMES
     ]
+
+
+def update_schtasks_cmd() -> list[str]:
+    h, m = UPDATE_TIME
+    return ["schtasks", "/Create", "/F", "/TN", UPDATE_SCHTASK_NAME,
+            "/TR", f'"{PROJECT_ROOT / "start.bat"}" update',
+            "/SC", "WEEKLY", "/D", "MON,TUE,WED,THU,FRI", "/ST", f"{h:02d}:{m:02d}"]
+
+
+def update_cron_line() -> str:
+    h, m = UPDATE_TIME
+    return f'{m} {h} * * 1-5 "{PROJECT_ROOT}/start.sh" update >> "{UPDATE_LOG}" 2>&1 {UPDATE_CRON_TAG}'
+
+
+def update_launchd_plist() -> str:
+    h, m = UPDATE_TIME
+    intervals = "\n".join(
+        f"    <dict><key>Weekday</key><integer>{d}</integer><key>Hour</key><integer>{h}</integer>"
+        f"<key>Minute</key><integer>{m}</integer></dict>" for d in range(1, 6))
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>{UPDATE_LAUNCHD_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>{PROJECT_ROOT}/start.sh</string><string>update</string></array>
+  <key>StartCalendarInterval</key>
+  <array>
+{intervals}
+  </array>
+  <key>StandardOutPath</key><string>{UPDATE_LOG}</string>
+  <key>StandardErrorPath</key><string>{UPDATE_LOG}</string>
+</dict></plist>
+"""
 
 
 # --- platform appliers ----------------------------------------------------------
@@ -341,20 +386,59 @@ def _remove_publish_jobs() -> None:
             )
 
 
+def _update_on() -> bool:
+    try:
+        if sys.platform == "darwin":
+            return UPDATE_LAUNCHD_PLIST.exists()
+        if sys.platform.startswith("win"):
+            return subprocess.run(["schtasks", "/Query", "/TN", UPDATE_SCHTASK_NAME],
+                                  capture_output=True).returncode == 0
+        return UPDATE_CRON_TAG in _current_crontab()
+    except Exception:
+        return False
+
+
+def turn_on_update() -> int:
+    """Owner-run only: weekdays at 08:10, the same safe `update` (fast-forward
+    only; refuses if anything was changed locally)."""
+    UPDATE_LOG.parent.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "darwin":
+        UPDATE_LAUNCHD_PLIST.parent.mkdir(parents=True, exist_ok=True)
+        UPDATE_LAUNCHD_PLIST.write_text(update_launchd_plist(), encoding="utf-8")
+        subprocess.run(["launchctl", "unload", str(UPDATE_LAUNCHD_PLIST)], capture_output=True)
+        result = subprocess.run(["launchctl", "load", str(UPDATE_LAUNCHD_PLIST)], capture_output=True, text=True)
+    elif sys.platform.startswith("win"):
+        result = subprocess.run(update_schtasks_cmd(), capture_output=True, text=True)
+    else:
+        keep = [ln for ln in _current_crontab().splitlines() if UPDATE_CRON_TAG not in ln]
+        ok = _write_crontab("\n".join(keep + [update_cron_line()]) + "\n", fallback_lines=[update_cron_line()])
+        result = subprocess.CompletedProcess([], 0 if ok else 1, "", "")
+    if result.returncode != 0:
+        say(f"Could not schedule self-updates: {(result.stderr or '').strip()}")
+        return 1
+    h, m = UPDATE_TIME
+    say(f"Self-update ON: improvements arrive on their own every weekday at {h:02d}:{m:02d}.")
+    say("It runs whatever is on GitHub main on this computer. Turn it off any time: .\\start.bat autopilot off")
+    return 0
+
+
 def turn_off() -> int:
     if sys.platform == "darwin":
         subprocess.run(["launchctl", "unload", str(LAUNCHD_PLIST)], capture_output=True)
         LAUNCHD_PLIST.unlink(missing_ok=True)
+        subprocess.run(["launchctl", "unload", str(UPDATE_LAUNCHD_PLIST)], capture_output=True)
+        UPDATE_LAUNCHD_PLIST.unlink(missing_ok=True)
         _remove_publish_jobs()
     elif sys.platform.startswith("win"):
         subprocess.run(
             ["schtasks", "/Delete", "/F", "/TN", SCHTASK_NAME], capture_output=True
         )
+        subprocess.run(["schtasks", "/Delete", "/F", "/TN", UPDATE_SCHTASK_NAME], capture_output=True)
         _remove_publish_jobs()
     else:
         remaining = [
             line for line in _current_crontab().splitlines()
-            if CRON_TAG not in line and PUBLISH_CRON_TAG not in line
+            if CRON_TAG not in line and PUBLISH_CRON_TAG not in line and UPDATE_CRON_TAG not in line
         ]
         content = "\n".join(remaining)
         if not _write_crontab(content + "\n" if content else ""):
@@ -390,6 +474,8 @@ def status() -> int:
     )
     times = ", ".join(f"{h:02d}:{m:02d}" for h, m in PUBLISH_TIMES)
     say("Research publishing: " + (f"ON — weekdays {times}" if _publish_on() else "OFF"))
+    h, m = UPDATE_TIME
+    say("Self-update: " + (f"ON — weekdays {h:02d}:{m:02d}" if _update_on() else "OFF (you run update by hand)"))
     return 0
 
 
@@ -406,6 +492,8 @@ def main(argv: list[str] | None = None) -> int:
         return turn_on_publish(args[1])
     if mode == "publish-drive":
         return turn_on_publish(None)
+    if mode == "auto-update":
+        return turn_on_update()
     if mode in ("off", "uninstall"):
         return turn_off()
     if mode == "status":

@@ -96,3 +96,42 @@ def test_main_publish_drive_routes_correctly(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(drive_api, "CREDENTIALS_PATH", tmp_path / "missing.json")
     assert autopilot.main(["publish-drive"]) == 1  # reaches turn_on_publish(None)
     assert "isn't set up" in capsys.readouterr().out.lower()
+
+
+# --- self-update: opt-in only -----------------------------------------------------
+
+def test_self_update_runs_the_safe_update_command_on_weekdays_before_publishing():
+    from stocksage import autopilot as ap
+
+    cmd = ap.update_schtasks_cmd()
+    assert cmd[-1] == "08:10" and "MON,TUE,WED,THU,FRI" in cmd
+    tr = cmd[cmd.index("/TR") + 1]
+    assert tr.endswith('start.bat" update'), "the update branch exits before cmd reads further"
+    assert ap.UPDATE_TIME < min(ap.PUBLISH_TIMES)
+    assert "update" in ap.update_cron_line() and ap.UPDATE_CRON_TAG in ap.update_cron_line()
+    assert "<string>update</string>" in ap.update_launchd_plist()
+
+
+def test_self_update_is_only_ever_switched_on_by_the_owners_command():
+    """It runs whatever is on GitHub on the computer holding the broker login, so
+    no code path may turn it on except `autopilot auto-update`."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent / "stocksage"
+    callers = [p.name for p in root.glob("*.py") if re.search(r"turn_on_update\(", p.read_text(encoding="utf-8"))]
+    assert callers == ["autopilot.py"]
+    text = (root / "autopilot.py").read_text(encoding="utf-8")
+    assert text.count("turn_on_update(") == 2, "its definition and the auto-update command, nothing else"
+
+
+def test_autopilot_off_also_removes_self_update(monkeypatch):
+    from stocksage import autopilot as ap
+
+    monkeypatch.setattr(ap.sys, "platform", "linux")
+    written = {}
+    tab = f"{ap.cron_line()}\n{ap.update_cron_line()}\nother job\n"
+    monkeypatch.setattr(ap, "_current_crontab", lambda: tab)
+    monkeypatch.setattr(ap, "_write_crontab", lambda content, fallback_lines=None: written.setdefault("c", content) or True)
+    ap.turn_off()
+    assert ap.UPDATE_CRON_TAG not in written["c"] and "other job" in written["c"]

@@ -72,7 +72,7 @@ nothing to clone, import or retire. Do not delete that folder: your `.env`
 | When | Time | What |
 |---|---|---|
 | Every morning | 10 seconds | Read the 08:30 message. "All clear" means nothing to do. Open the phone page only if there is an action |
-| Monthly | 2 minutes | `.\start.bat update`, then `.\start.bat doctor`. Fix anything yellow |
+| Monthly | 2 minutes | `.\start.bat update` (unless you switched on self-update with `.\start.bat autopilot auto-update`), then `.\start.bat doctor`. Fix anything yellow |
 | Every quarter | 5 minutes | Read the scorecard at the bottom of the sheet. Re-run `.\start.bat research` |
 | Every year | 30 minutes | Update Windows and Python, restart, run `doctor`. Change your Robinhood password and re-link. Confirm the Drive snapshot is recent. Decide whether any idea has earned trust (see STRATEGY.md) |
 
