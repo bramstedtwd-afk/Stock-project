@@ -565,3 +565,42 @@ def test_a_model_sell_that_look_alikes_do_not_back_says_so_in_its_tag():
     rule = today.Directive("SELL", "DE", "SELL ALL DE", "risk rule")
     assert today._tag(bad) == "MODEL, look-alikes do not back it"
     assert today._tag(good) == "MODEL" and today._tag(rule) == "RULE"
+
+
+# ------------------------------------------------------------ tax-aware trims
+
+def test_a_taxable_trim_estimates_the_gain_from_average_cost():
+    d = today.Directive("TRIM", "TMO", "TRIM TMO", "risk rule", dollars=600.0)
+    line = today.tax_line(d, {"price": 120.0, "avg_cost": 100.0}, "personal")
+    assert d.gain == pytest.approx(100.0) and "+$100 of gain" in line and "$100.00" in line
+
+
+def test_a_loss_is_called_a_loss_with_the_wash_sale_warning():
+    d = today.Directive("SELL", "DE", "SELL ALL DE", "model call", dollars=90.0)
+    line = today.tax_line(d, {"price": 90.0, "avg_cost": 100.0}, "personal")
+    assert d.gain == pytest.approx(-10.0) and "loss of about $10" in line and "wash-sale" in line
+
+
+def test_a_roth_sale_is_tax_free_and_buys_get_no_tax_line():
+    d = today.Directive("TRIM", "TMO", "TRIM TMO", "risk rule", dollars=150.0)
+    assert "tax-free" in today.tax_line(d, {"price": 1, "avg_cost": 1}, "roth")
+    assert today.tax_line(today.Directive("BUY", "X", "BUY X", "model call", dollars=50.0), None, "personal") is None
+    assert today.tax_line(d, None, "personal") is None, "no position, no guess"
+
+
+def test_the_same_name_trimmed_in_the_roth_and_a_taxable_account_suggests_the_roth(real_book):
+    from stocksage.robinhood import Holding, Portfolio
+
+    broker = FakeBroker()
+    # PERS held in both personal (cost 100, now 120) and the Roth, over the cap in each.
+    broker.pf["999999999"] = Portfolio([Holding("PERS", 4.0, 100.0, 120.0, 480.0)], 20.0, "999999999")
+    engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
+    sheet = today.build_sheet(engine, broker, suggestions=default_suggestions(STRONG),
+                              book=real_book, news=False, now=NOW)
+    text = today.render_text(sheet)
+    assert any(n.startswith("PERS is trimmed in your Roth") for n in sheet.tax_notes)
+    assert "TAX  PERS is trimmed in your Roth" in text
+    assert text.index("TAX  ") < text.index("DETAIL")
+    personal = [a for a in sheet.accounts if a.role == "personal"][0]
+    trim = [d for d in personal.directives if d.ticker == "PERS" and d.verb == "TRIM"][0]
+    assert any(c.startswith("Tax: realises roughly +$") for c in trim.context)

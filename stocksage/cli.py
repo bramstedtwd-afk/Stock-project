@@ -633,6 +633,38 @@ def cmd_watchdog(args) -> int:
     return watchdog.run()
 
 
+def cmd_invest(args) -> int:
+    """Set (or turn off) the monthly 'put $X into the index' reminder."""
+    from . import envfile
+
+    if args.amount in (None, "status"):
+        amt = os.environ.get("STOCKSAGE_MONTHLY_INVEST") or ""
+        if not amt or amt == "0":
+            print("No monthly contribution set. Example:  .\\start.bat invest 200 --account roth")
+        else:
+            print(f"Monthly: ${float(amt):,.0f} into {os.environ.get('STOCKSAGE_MONTHLY_INVEST_FUND', 'VTI')} "
+                  f"in your {os.environ.get('STOCKSAGE_MONTHLY_INVEST_ACCOUNT', 'roth')} account.")
+        return 0
+    if args.amount == "off":
+        envfile.save_env({"STOCKSAGE_MONTHLY_INVEST": "0"})
+        print("Monthly reminder off.")
+        return 0
+    try:
+        amount = float(args.amount.replace("$", "").replace(",", ""))
+        if amount <= 0:
+            raise ValueError
+    except ValueError:
+        print("Give an amount in dollars, e.g.  .\\start.bat invest 200")
+        return 1
+    envfile.save_env({"STOCKSAGE_MONTHLY_INVEST": f"{amount:g}",
+                      "STOCKSAGE_MONTHLY_INVEST_FUND": args.fund.upper(),
+                      "STOCKSAGE_MONTHLY_INVEST_ACCOUNT": args.account})
+    print(f"Set: ${amount:,.0f} into {args.fund.upper()} in your {args.account} account each month.")
+    print("The sheet shows it from the 1st until the purchase appears in your Robinhood history,")
+    print("and the monthly phone message reminds you (without the amount).")
+    return 0
+
+
 def cmd_analogs(args) -> int:
     """Build the look-alike history that lets a BUY be stated plainly."""
     from . import backtest
@@ -1548,6 +1580,12 @@ def build_parser() -> argparse.ArgumentParser:
         "watchdog", help="warn your phone if the always-on computer has stopped updating the sheet"
     )
     p.set_defaults(func=cmd_watchdog)
+
+    p = sub.add_parser("invest", help="monthly reminder to put a set amount into a broad index fund")
+    p.add_argument("amount", nargs="?", help="dollars a month, 'off', or nothing to show the setting")
+    p.add_argument("--account", default="roth", choices=["roth", "personal"])
+    p.add_argument("--fund", default="VTI", help="the index fund (default VTI)")
+    p.set_defaults(func=cmd_invest)
 
     p = sub.add_parser(
         "analogs",

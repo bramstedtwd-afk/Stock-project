@@ -50,6 +50,7 @@ class Directive:
     evidence: str | None = None
     context: list[str] = field(default_factory=list)
     dollars: float = 0.0
+    gain: float | None = None    # estimated realised gain of a taxable sale, from average cost
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -81,12 +82,14 @@ class Sheet:
     market: list[str] = field(default_factory=list)
     trend: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    tax_notes: list[str] = field(default_factory=list)
+    invest: str | None = None
     accounts: list[AccountSheet] = field(default_factory=list)
     overall_notes: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return {"generated_at": self.generated_at, "market": self.market, "trend": self.trend, "warnings": self.warnings,
+        return {"generated_at": self.generated_at, "market": self.market, "trend": self.trend, "warnings": self.warnings, "tax_notes": self.tax_notes, "invest": self.invest,
                 "accounts": [a.to_dict() for a in self.accounts],
                 "overall_notes": self.overall_notes, "notes": self.notes}
 
@@ -330,6 +333,86 @@ def _reinvest(acct: AccountSheet) -> str | None:
             "Nothing tested here has beaten a broad index, so that is the default home for it.")
 
 
+def tax_line(d: Directive, position: dict | None, role: str) -> str | None:
+    """What selling this slice means for tax, estimated from the average cost.
+
+    An estimate on purpose: the holding period (short or long term) needs the
+    actual tax lots, which this account link does not have per account.
+    """
+    if d.verb not in ("SELL", "TRIM") or not d.dollars:
+        return None
+    if role == "roth":
+        return "Tax: none. Sales inside a Roth IRA are tax-free."
+    if not position:
+        return None
+    price, avg = float(position.get("price") or 0), float(position.get("avg_cost") or 0)
+    if price <= 0 or avg <= 0:
+        return None
+    d.gain = round(d.dollars * (1.0 - avg / price), 2)
+    if d.gain >= 0:
+        return (f"Tax: realises roughly +${d.gain:,.0f} of gain (from your average cost of "
+                f"${avg:,.2f}). Short or long term depends on when you bought.")
+    return (f"Tax: realises a loss of about ${-d.gain:,.0f}, which can offset gains elsewhere "
+            "(watch the 30-day wash-sale rule if you buy it back).")
+
+
+def roth_first_notes(accounts: list[AccountSheet]) -> list[str]:
+    """Same name trimmed in the Roth and in a taxable account: lean on the Roth."""
+    roth = {d.ticker for a in accounts if a.role == "roth" for d in a.directives if d.verb == "TRIM"}
+    out = []
+    for a in accounts:
+        if a.role == "roth":
+            continue
+        for d in a.directives:
+            if d.verb == "TRIM" and d.ticker in roth and d.gain and d.gain > 0:
+                out.append(f"{d.ticker} is trimmed in your Roth and in {a.label}. Doing more of the "
+                           f"trim in the Roth (tax-free) avoids tax on up to about ${d.gain:,.0f} of gain.")
+    return out
+
+
+ACCOUNT_WORDS = {"roth": "Roth IRA", "personal": "personal account", "agentic": "agentic account"}
+
+
+def invest_plan() -> dict | None:
+    """The owner's monthly index contribution, from .env (`invest` command)."""
+    import os
+
+    try:
+        amount = float(os.environ.get("STOCKSAGE_MONTHLY_INVEST") or 0)
+    except ValueError:
+        return None
+    if amount <= 0:
+        return None
+    return {"amount": amount,
+            "fund": (os.environ.get("STOCKSAGE_MONTHLY_INVEST_FUND") or "VTI").strip().upper(),
+            "account": (os.environ.get("STOCKSAGE_MONTHLY_INVEST_ACCOUNT") or "roth").strip().lower()}
+
+
+def bought_this_month(db, fund: str, now: datetime) -> float:
+    """Dollars of `fund` bought since the 1st, from the order mirror."""
+    start = now.strftime("%Y-%m-01")
+    try:
+        rows = db.conn.execute(
+            "SELECT quantity, price FROM rh_orders WHERE ticker = ? AND side = 'buy' AND executed_at >= ?",
+            (fund, start)).fetchall()
+    except Exception:
+        return 0.0
+    return float(sum(r["quantity"] * r["price"] for r in rows))
+
+
+def invest_line(db, now: datetime, plan: dict | None = None) -> str | None:
+    plan = plan if plan is not None else invest_plan()
+    if not plan:
+        return None
+    where = ACCOUNT_WORDS.get(plan["account"], plan["account"])
+    done = bought_this_month(db, plan["fund"], now)
+    if done >= 0.9 * plan["amount"]:
+        return f"MONTHLY  Done: about ${done:,.0f} of {plan['fund']} bought this month."
+    left = plan["amount"] - done
+    return (f"MONTHLY  Put ${left:,.0f} into {plan['fund']} in your {where} this month"
+            + (f" (${done:,.0f} already in)." if done > 0 else "."))
+
+
 def lab_status(db) -> str:
     """Has the look-alike filter itself passed an out-of-sample test?"""
     when = db.get_meta("lab_at")
@@ -387,6 +470,7 @@ def build_sheet(engine, client, suggestions=None, book="auto", news: bool = True
     news_budget = MAX_CONTEXT_TICKERS
     news_cache: dict[str, str | None] = {}
     for entry in result["accounts"]:
+        positions_by = {p["ticker"]: p for p in entry.get("positions", [])}
         filtered = apply_evidence(entry["plan"], evidence_for)
         acct = AccountSheet(role=entry["role"], title=entry["title"], label=entry["label"],
                             manual=entry["manual"], quiet=list(filtered.quiet),
@@ -407,6 +491,9 @@ def build_sheet(engine, client, suggestions=None, book="auto", news: bool = True
             elif ev is not None:
                 d.evidence = ev.sentence()
             d.context.append(a.why)
+            tax = tax_line(d, positions_by.get(d.ticker), entry["role"])
+            if tax:
+                d.context.append(tax)
             if d.verb == "TRIM":
                 d.context.append("This is about size, not a verdict on the stock.")
             d.context += _trend_lines(sug, sector_trends)
@@ -419,6 +506,8 @@ def build_sheet(engine, client, suggestions=None, book="auto", news: bool = True
         acct.directives.sort(key=lambda d: d.urgency)
         acct.reinvest = _reinvest(acct)
         sheet.accounts.append(acct)
+    sheet.tax_notes = roth_first_notes(sheet.accounts)
+    sheet.invest = invest_line(engine.db, now)
     if any(d.verb == "BUY" for a in sheet.accounts for d in a.directives):
         sheet.notes.append(lab_status(engine.db))
     from . import scorekeeping
@@ -481,7 +570,11 @@ def render_text(sheet: Sheet) -> str:
     # to see, so it leads.
     for n in sheet.overall_notes:
         lines.append(f"BIGGEST RISK  {n}")
-    if sheet.overall_notes:
+    for n in sheet.tax_notes:
+        lines.append(f"TAX  {n}")
+    if sheet.invest:
+        lines.append(sheet.invest)
+    if sheet.overall_notes or sheet.tax_notes or sheet.invest:
         lines.append("")
     for a in sheet.accounts:
         lines += _bottom_line(a) + [""]

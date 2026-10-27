@@ -700,7 +700,8 @@ def plans_for_accounts(engine: Engine, client, suggestions: list | None = None,
                 "never from margin."
             )
         out.append({"role": role, "title": ROLE_LABELS[role], "label": label,
-                    "manual": role != "agentic", "plan": plan})
+                    "manual": role != "agentic", "plan": plan,
+                    "positions": positions})
         total += pf.sizing_cash + sum(p["equity"] for p in positions)
         for p in positions:
             combined[p["ticker"]] = combined.get(p["ticker"], 0.0) + p["equity"]

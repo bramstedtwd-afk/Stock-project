@@ -153,9 +153,12 @@ def monthly_scorecard(db, topic: str | None = None, post=None, now: datetime | N
         if now.hour < digest_hour() or (db.get_meta(MONTHLY_KEY) or "") == month:
             return False
         report = monthly_report(db)
-        if report is None:
+        reminder = bool((os.environ.get("STOCKSAGE_MONTHLY_INVEST") or "").strip() not in ("", "0"))
+        if report is None and not reminder:
             return False
-        title, body = report
+        title, body = report or ("StockSage monthly", "")
+        if reminder:   # no amount: ntfy topics are not private
+            body = (body + "\n" if body else "") + "Reminder: your monthly index contribution is due (see the sheet)."
         post(NTFY_URL.format(topic=topic), body.encode("utf-8"),
              {"Title": title, "Priority": "default", "Tags": "bar_chart"})
         db.set_meta(MONTHLY_KEY, month)
