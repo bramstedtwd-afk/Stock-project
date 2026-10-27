@@ -665,6 +665,45 @@ def cmd_invest(args) -> int:
     return 0
 
 
+def cmd_options(args) -> int:
+    """Test S&P 500 options strategies against real Cboe records and a calibrated model."""
+    import json
+    from datetime import datetime, timezone
+
+    from . import optionslab, today
+    from .db import Database
+
+    print("Options lab: 130+ strategies, about 2 minutes. Downloading market and Cboe history...\n")
+    base = today.state_dir()
+    try:
+        df = optionslab.load_data(base / "options_market.parquet")
+        cboe = optionslab.load_cboe(base / "options_cboe.parquet")
+    except Exception as exc:
+        print(f"Could not get the history: {exc}")
+        return 1
+    res = optionslab.run(df, cboe, draws=args.draws)
+    try:
+        res["other"] = optionslab.own_underlying(cboe, optionslab.load_funds(), df["^IRX"])
+    except Exception:
+        res["other"] = []
+    print("\n".join(optionslab.describe(res, top=args.top)))
+    winners = optionslab.strong(res["real_rows"], False) + optionslab.strong(res["rows"], True)
+    try:
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        report = {k: v for k, v in res.items() if k not in ("rows", "real_rows")}
+        report.update(at=stamp, rows=[r.to_dict() for r in res["rows"]],
+                      real_rows=[r.to_dict() for r in res["real_rows"]])
+        (base / "options.json").write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+        db = Database()
+        db.set_meta("options_at", stamp)
+        db.set_meta("options_winners", ",".join(w.name for w in winners))
+        db.close()
+        print(f"\n(Saved to {base / 'options.json'})")
+    except OSError:
+        pass
+    return 0
+
+
 def cmd_analogs(args) -> int:
     """Build the look-alike history that lets a BUY be stated plainly."""
     from . import backtest
@@ -1586,6 +1625,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--account", default="roth", choices=["roth", "personal"])
     p.add_argument("--fund", default="VTI", help="the index fund (default VTI)")
     p.set_defaults(func=cmd_invest)
+
+    p = sub.add_parser(
+        "options", help="options lab: do S&P 500 options strategies beat holding the index? (real Cboe data)"
+    )
+    p.add_argument("--draws", type=int, default=2000, help="bootstrap draws for the luck correction")
+    p.add_argument("--top", type=int, default=15, help="how many strategies to list per part")
+    p.set_defaults(func=cmd_options)
 
     p = sub.add_parser(
         "analogs",

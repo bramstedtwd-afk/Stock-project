@@ -329,7 +329,7 @@ def reality_check(d: np.ndarray, draws: int = 1000, avg_block: float = 30.0,
     obs = d.mean(axis=0)
     rng = np.random.default_rng(seed)
     boot = np.empty((draws, k))
-    chunk = 50
+    chunk = max(1, min(50, int(2e7 // max(1, t_len * k))))   # bound memory for big families
     for i in range(0, draws, chunk):
         n = min(chunk, draws - i)
         idx = _stationary_indices(t_len, n, avg_block, rng)

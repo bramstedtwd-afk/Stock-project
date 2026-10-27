@@ -97,6 +97,44 @@ line stays context, checked on the first trading day of the month. "2x above
 Roth if the owner chooses, never a sheet instruction, until it passes this lab
 on a later re-run or earns it on the forward scorecard.
 
+## Options: 130+ strategies (run `.\start.bat options`; last run 2026-10-27)
+
+**Real record first.** Cboe publishes daily history for its option-strategy
+indices, priced from real quotes: put-writing (monthly, weekly, 2% out of the
+money), covered calls (at the money, 30-delta, 2% OTM, conditional), put
+protection, collars, iron condors and butterflies, covered combos, VIX tail
+hedges, buffers, plus Nasdaq-100 and Russell 2000 versions. From 2006 to 2026
+**none beat holding the S&P 500** on return (11.3% a year); the best matched its
+Sharpe (0.56-0.59) by taking less risk. 25 switching rules between these real
+streams (VIX level, VIX curve, 200-day trend, half-and-half mixes) also failed
+the luck-corrected test. Nasdaq-100 covered calls trailed the Nasdaq by ~3.5% a
+year (a real loss, t = -2.3); Russell 2000 versions trailed the Russell.
+
+**Then a model, fitted to that record.** 98 strategies (puts and calls at 7
+strike distances, weekly and monthly, spreads, condors, strangles, collars,
+protective puts, calls instead of stock, 1.5-2x put-writing, long straddles,
+and 5 VIX/trend filters) priced by Black-Scholes from the VIX family. The
+price level is fitted each year to Cboe's real at-the-money put-write index
+(replica correlation 0.97); the smile is fitted to the real 2%-OTM put-write,
+2%-OTM and 30-delta covered call and 5% put-protection indices (all within
+~0.6%/yr); the weekly level to the real weekly put-write. Six strategies passed
+the development test (2006-2015); **all six failed in 2016-2026**: weekly
+far-from-the-money put selling earned 3-5% a year against the S&P's 15%, with no
+alpha, and its early result depended on the unverifiable smile.
+
+**Verdict.** Nothing cleared the pre-declared bar (pass the corrected test,
+then holdout alpha t > 2 AND at least the S&P 500's return and Sharpe, robust
+to the smile). Option selling here buys a smoother ride, not more money.
+"Search until one works" was not done: every extra try raises the bar for all,
+and the family size is in the report.
+
+**Practical limits even if one had worked.** Your Roth has no options
+permission; the margin account and agentic account are Level 2 (covered calls,
+cash-secured puts, buying options; no spreads). One S&P 500 index contract
+controls hundreds of thousands of dollars (XSP, the mini, about $77,000), and a
+covered call needs 100 shares, so at current account sizes these strategies
+cannot be placed as tested.
+
 ## The owner's goal (2026-10-01)
 
 **Maximum growth: hold the market, manage risk only.** The trend rules are
