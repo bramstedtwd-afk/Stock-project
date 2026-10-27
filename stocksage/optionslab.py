@@ -864,9 +864,13 @@ def verdict_lines(rows: list[Row], model: bool) -> list[str]:
 
 def strong(rows: list[Row], model: bool) -> list[Row]:
     """The pre-declared bar for 'a strategy that works': passes the corrected
-    development test, then in the untouched holdout has alpha t > 2 AND at least
-    the S&P 500's return and Sharpe; model strategies must also survive the smile."""
-    return [r for r in rows if r.passed and r.t_holdout is not None and r.t_holdout > 2
+    development test, then in the untouched holdout clears a t bar that rises with
+    the number of survivors checked (drivers.holdout_bar) AND has at least the
+    S&P 500's return and Sharpe; model strategies must also survive the smile."""
+    from .drivers import holdout_bar
+
+    bar = holdout_bar(rows)
+    return [r for r in rows if r.passed and r.t_holdout is not None and r.t_holdout > bar
             and r.beats_spx and (r.robust or not model)]
 
 
@@ -879,7 +883,7 @@ def describe(res: dict, top: int = 15) -> list[str]:
            f"Sharpe {b['full']['sharpe']:.2f}, worst drop {_pct(b['full']['maxdd'], 0)}. "
            f"From {res['split'][:4]}: CAGR {_pct(b['holdout']['cagr'])}, Sharpe {b['holdout']['sharpe']:.2f}.",
            "Bar for 'works': passes the luck-corrected test on years before "
-           f"{res['split'][:4]}, then in later untouched years has alpha t > 2 and at least the",
+           f"{res['split'][:4]}, then in later untouched years clears a t bar that rises with the number of survivors, and at least the",
            "S&P 500's return AND Sharpe (and, for modelled strategies, survives a different smile).", ""]
     out += [f"PART 1. THE REAL RECORD: {res['n_real']} Cboe strategy indices (real quotes) and switching rules"]
     out += [f"{'  strategy (best first, development years)':<64}{'alpha':>8}{'t':>6}{'p':>6}{'CAGR':>8}"]

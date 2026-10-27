@@ -81,6 +81,7 @@ class Sheet:
     generated_at: str
     market: list[str] = field(default_factory=list)
     trend: list[str] = field(default_factory=list)
+    drivers: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     tax_notes: list[str] = field(default_factory=list)
     invest: str | None = None
@@ -89,7 +90,7 @@ class Sheet:
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return {"generated_at": self.generated_at, "market": self.market, "trend": self.trend, "warnings": self.warnings, "tax_notes": self.tax_notes, "invest": self.invest,
+        return {"generated_at": self.generated_at, "market": self.market, "trend": self.trend, "drivers": self.drivers, "warnings": self.warnings, "tax_notes": self.tax_notes, "invest": self.invest,
                 "accounts": [a.to_dict() for a in self.accounts],
                 "overall_notes": self.overall_notes, "notes": self.notes}
 
@@ -227,6 +228,37 @@ def _core_trend(engine, track: bool = False, today: datetime | None = None) -> l
         except Exception:
             pass
     return lines
+
+
+MAX_DRIVER_LINES = 6
+
+
+def _driver_lines() -> list[str]:
+    """The forces behind the market, as of the last refresh. Reads the cache only
+    (the scheduled run refreshes it), so building the sheet never waits on FRED.
+    Shows what is unusual; normal readings are counted, not listed."""
+    try:
+        from . import drivers
+
+        path = state_dir() / "fred.parquet"
+        if not path.exists():
+            return []
+        lines = drivers.context_lines(pd_read_parquet(path))
+    except Exception:
+        return []
+    unusual = [ln for ln in lines if "normal)" not in ln]
+    rest = len(lines) - len(unusual)
+    out = unusual[:MAX_DRIVER_LINES]
+    if rest:
+        out.append(f"DRIVER  {rest} other forces are in their normal range. Context only: none of these "
+                   "changes a call (`drivers` command for the evidence).")
+    return out
+
+
+def pd_read_parquet(path):
+    import pandas as pd
+
+    return pd.read_parquet(path)
 
 
 def _news_line(engine, ticker: str) -> str | None:
@@ -457,7 +489,7 @@ def build_sheet(engine, client, suggestions=None, book="auto", news: bool = True
         sector_trends = {}
 
     sheet = Sheet(generated_at=now.strftime("%a %d %b %Y, %H:%M"),
-                  market=_market_lines(engine), trend=_core_trend(engine, track, now), warnings=list(result.get("warnings", [])),
+                  market=_market_lines(engine), trend=_core_trend(engine, track, now), drivers=_driver_lines(), warnings=list(result.get("warnings", [])),
                   overall_notes=list(result.get("overall_notes", [])))
     if book is None:
         sheet.notes.append(
@@ -562,6 +594,7 @@ def render_text(sheet: Sheet) -> str:
     for m in sheet.market:
         lines.append(f"MARKET  {m}")
     lines += sheet.trend
+    lines += sheet.drivers
     lines.append("ACCOUNTS READ  " + (", ".join(a.label for a in sheet.accounts) or "none"))
     for w in sheet.warnings:
         lines.append(f"HEADS UP  {w}")

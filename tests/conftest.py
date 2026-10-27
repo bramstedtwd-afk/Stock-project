@@ -48,3 +48,24 @@ def _state_dir_is_a_temp_dir(monkeypatch, tmp_path_factory):
 
     if "STOCKSAGE_STATE" not in os.environ:
         monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path_factory.mktemp("state")))
+
+
+@pytest.fixture(autouse=True)
+def _no_economic_data_downloads(monkeypatch):
+    """The drivers lab talks to FRED/ALFRED; no test may. Tests that need data inject it."""
+    from stocksage import drivers
+
+    _real = {"fred": drivers.load_fred, "rt": drivers.load_realtime}
+
+    def fred(*a, **k):
+        if k.get("fetch") is not None:
+            return _real["fred"](*a, **k)
+        raise RuntimeError("offline in tests")
+
+    def rt(*a, **k):
+        if k.get("fetch") is not None:
+            return _real["rt"](*a, **k)
+        raise RuntimeError("offline in tests")
+
+    monkeypatch.setattr(drivers, "load_fred", fred)
+    monkeypatch.setattr(drivers, "load_realtime", rt)

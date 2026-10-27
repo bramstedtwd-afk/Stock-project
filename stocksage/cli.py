@@ -704,6 +704,53 @@ def cmd_options(args) -> int:
     return 0
 
 
+def cmd_drivers(args) -> int:
+    """Why the market moves, and whether knowing why helps (news uncertainty, rates,
+    credit, the consumer, jobs, inflation)."""
+    import json
+    from datetime import datetime, timezone
+
+    from . import drivers, optionslab, today
+    from .db import Database
+
+    base = today.state_dir()
+    print("Gathering 17 forces from FRED and, the first time, every past release of the revised ones")
+    print("from ALFRED (about 5-10 minutes once, then cached for a week)...\n")
+    try:
+        raw = drivers.load_fred(base / "fred.parquet")
+        rt = drivers.load_realtime(base / "fred_realtime.parquet")
+        mk = optionslab.load_data(base / "options_market.parquet")
+    except Exception as exc:
+        print(f"Could not get the data: {exc}")
+        return 1
+    tr = mk["^SP500TR"].dropna()
+    vix = mk["^VIX"].reindex(tr.index).ffill()
+    put = mk["^PUT"].reindex(tr.index).ffill()
+    gap = tr.index.to_series().diff().dt.days
+    cash = (mk["^IRX"].reindex(tr.index).ffill().shift(1) / 100 * gap / 365).fillna(0)
+    expl = drivers.explain(raw, tr, vix)
+    read = drivers.readings(raw, tr.index, None if args.latest else rt)
+    res = drivers.judge({"S&P 500": tr.pct_change(), "put-write": put.pct_change()},
+                        drivers.rules(read, vix), tr, cash, draws=args.draws)
+    print("\n".join(drivers.describe(expl, res, tr.resample("ME").last().pct_change(), top=args.top)))
+    print("\nToday:")
+    print("\n".join(drivers.context_lines(raw)))
+    winners = drivers.strong(res["rows"])
+    try:
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        report = {"at": stamp, "as_published": not args.latest, "r2": expl.r2, "betas": expl.betas,
+                  **{k: v for k, v in res.items() if k != "rows"}, "rows": [r.to_dict() for r in res["rows"]]}
+        (base / "drivers.json").write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+        db = Database()
+        db.set_meta("drivers_at", stamp)
+        db.set_meta("drivers_winners", ",".join(w.name for w in winners))
+        db.close()
+        print(f"\n(Saved to {base / 'drivers.json'})")
+    except OSError:
+        pass
+    return 0
+
+
 def cmd_analogs(args) -> int:
     """Build the look-alike history that lets a BUY be stated plainly."""
     from . import backtest
@@ -752,6 +799,12 @@ def _refresh_today(engine, client, upload: bool = True, rebuild_book: bool = Fal
                     book.save()
                 except Exception as exc:       # keep going with whatever book exists
                     out["error"] = f"look-alike refresh failed: {exc}"
+        try:                                  # refresh the forces behind the market (12-hour cache)
+            from . import drivers
+
+            drivers.load_fred(today.state_dir() / "fred.parquet")
+        except Exception:
+            pass
         sheet = today.build_sheet(engine, client, track=True)
         text = today.render_text(sheet)
         today.save_local(sheet, text)
@@ -1632,6 +1685,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--draws", type=int, default=2000, help="bootstrap draws for the luck correction")
     p.add_argument("--top", type=int, default=15, help="how many strategies to list per part")
     p.set_defaults(func=cmd_options)
+
+    p = sub.add_parser(
+        "drivers", help="why the market moves (news, rates, credit, jobs, consumer) and whether knowing why helps"
+    )
+    p.add_argument("--draws", type=int, default=2000, help="bootstrap draws for the luck correction")
+    p.add_argument("--top", type=int, default=15, help="how many rules to list")
+    p.add_argument("--latest", action="store_true",
+                   help="use today's revised economic figures instead of as-published ones (optimistic)")
+    p.set_defaults(func=cmd_drivers)
 
     p = sub.add_parser(
         "analogs",
