@@ -97,8 +97,11 @@ changed (update the `STOCKSAGE_NTFY_TOPIC` secret).
 
 ## Never change these
 
-- StockSage never places or confirms an order. The agentic account's every order still
-  needs your "confirm"; the other accounts you place yourself.
+- StockSage never places or confirms an order. The agentic account's orders need your
+  "confirm" unless YOU put `AUTONOMOUS MODE: ON for the agentic account.` in the trading
+  routine's own instructions; then it trades only inside the limits in ROUTINE.md. To stop
+  it at once, turn trade approvals ON in the Robinhood app. The other accounts you place
+  yourself.
 - Credentials live only in `.env` on the always-on computer. Not in chat, not in GitHub,
   not in Drive.
 - The cloud jobs get no broker login, ever.
