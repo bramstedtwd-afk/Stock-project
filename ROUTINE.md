@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v15, 2026-10-29)
+# Agentic Trading Routine — Playbook (v16, 2026-10-29)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from the **"StockSage" Drive folder, file "StockSage Routine
@@ -7,6 +7,13 @@ Playbook.md" — exact folder + exact filename, never a bare title search**
 publishing this file every run. Improving the routine = editing this file;
 the next publish propagates it. The routine states at the top of each run
 which playbook version it loaded, straight from this file's own header.
+
+**What changed in v16 — notes go through StockSage, not the Drive connector.**
+The Drive connector can create files but cannot change one, so v15's "update
+the tags file in place" could never work: no TAG or RUN line was ever saved.
+Record every TAG and RUN line with the terminal command in "Trade memory"
+below. If that fails, put the lines at the end of your Drive trading log and
+say so in the report.
 
 **What changed in v15 — heartbeat and fill details.** Every run ends with a
 RUN line in "StockSage Trade Tags.txt" (account value, cash, one sentence),
@@ -239,18 +246,28 @@ trades, keep testing both.
   positions with the play and reason they were bought; and `today`. The
   always-on computer refreshes it daily; your own pull is fresher for today.
   If it is missing, say so and carry on.
-- **Tag** every order that fills by appending one line to
-  "StockSage Trade Tags.txt" in the StockSage folder, **updating that file
-  in place** (read it, add the line at the end, save it). Never create a
-  second file with that name: the desktop can only read the one it created.
-  If it is missing, say so in the report.
+- **Record every TAG and RUN line through StockSage.** Your working directory
+  holds the StockSage code. Once per run:
+
+      pip install -q google-api-python-client google-auth-oauthlib
+
+  then, for each line:
+
+      python -m stocksage.journal note "<the line>"
+
+  It prints `Recorded: …` (and refreshes the owner's phone report), or
+  `Not recorded: …` with the reason. A format error: fix the line and run it
+  again. `Not recorded (Drive)` or no terminal: write the same lines at the end
+  of your Drive trading log instead and say so in the report. Never create a
+  file named "StockSage Trade Tags.txt" yourself: StockSage can only read the
+  one it made. A tag line, one per filled order:
 
       TAG | <UTC time, e.g. 2026-10-29T14:35Z> | BUY or SELL | TICKER | SAFE or AGGRESSIVE | setup (buy) or exit reason (sell), one word | shares filled | average fill price | why, in a few words
 
   Shares and price come from the confirmed fill. They let the trade report
   stay current on the owner's phone even while the always-on computer is off.
-- **Check in at the end of EVERY run**, trade or no trade, with one line in
-  the same file:
+- **Check in at the end of EVERY run**, trade or no trade, with one RUN line
+  recorded the same way:
 
       RUN | <UTC time> | account value | settled cash | one plain sentence on what this run did
 

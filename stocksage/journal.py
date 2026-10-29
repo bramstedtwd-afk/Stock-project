@@ -430,9 +430,16 @@ def _spy_closes(engine):
         return None
 
 
-def _save_and_publish(summary: dict, upload: bool) -> None:
-    from .today import state_dir
+def state_dir():
+    """Same folder as today.state_dir, without importing the sheet's dependencies."""
+    import os
+    from pathlib import Path
 
+    override = os.environ.get("STOCKSAGE_STATE")
+    return Path(override).expanduser() if override else Path("~/.stocksage").expanduser()
+
+
+def _save_and_publish(summary: dict, upload: bool) -> None:
     text, report = json.dumps(summary, indent=1), render_text(summary)
     try:
         folder = state_dir()
@@ -458,6 +465,32 @@ def _read_drive_tags() -> str:
         return read_or_create_text(TAGS_NAME, TAGS_HEADER)
     except Exception:
         return ""
+
+
+def append_note(line: str, upload: bool = True) -> str:
+    """Add one TAG or RUN line to the tags file in Drive, through this app (the
+    trader's own Drive connector can create files but not edit them). The line
+    is checked first: anything that does not parse is refused, not stored."""
+    line = " ".join((line or "").split())
+    kind = line.split("|", 1)[0].strip().upper()
+    if kind == "TAG" and not parse_tags(line):
+        raise ValueError("not a valid TAG line: TAG | UTC time | BUY or SELL | TICKER | SAFE or AGGRESSIVE | "
+                         "setup | shares | price | why")
+    if kind == "RUN" and not parse_runs(line):
+        raise ValueError("not a valid RUN line: RUN | UTC time | account value | cash | what this run did")
+    if kind not in ("TAG", "RUN"):
+        raise ValueError("a note starts with TAG or RUN")
+    if not upload:
+        return line
+    from .drive_api import ensure_folder, get_service, upload_or_update
+
+    current = _read_drive_tags()
+    if line in current.splitlines():
+        return line                             # already there: a retried command adds nothing
+    text = (current.rstrip("\n") + "\n" if current else TAGS_HEADER) + line + "\n"
+    service = get_service()
+    upload_or_update(service, TAGS_NAME, text, "text/plain", ensure_folder(service))
+    return line
 
 
 def refresh(engine, client, upload: bool = True, account: str | None = None,
@@ -524,3 +557,34 @@ def refresh_without_broker(engine, upload: bool = True, previous: dict | None = 
                         grades=previous.get("grades"))
     _save_and_publish(summary, upload)
     return summary
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`python -m stocksage.journal note "<TAG or RUN line>"`: the trading routine's
+    light path. Needs only the two Google packages and STOCKSAGE_DRIVE_TOKEN, not
+    the rest of StockSage. Records the line, then rebuilds the phone report."""
+    import sys
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if len(argv) < 2 or argv[0] != "note":
+        print('usage: python -m stocksage.journal note "RUN | 2026-10-29T15:35Z | 104.22 | 11.56 | what happened"')
+        return 2
+    try:
+        line = append_note(" ".join(argv[1:]))
+    except ValueError as exc:
+        print(f"Not recorded: {exc}")
+        return 2
+    except Exception as exc:
+        print(f"Not recorded (Drive): {type(exc).__name__}: {exc}")
+        return 1
+    print(f"Recorded: {line}")
+    try:
+        refresh_without_broker(None, upload=True)
+        print("Trade report refreshed.")
+    except Exception as exc:
+        print(f"(Report not refreshed: {exc})")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

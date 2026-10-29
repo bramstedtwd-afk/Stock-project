@@ -158,3 +158,14 @@ def test_the_cloud_keeps_confirmed_fills_and_adds_only_newer_tagged_ones(tmp_pat
     late_note = tags.replace("2026-10-29T14:00Z | BUY", "2026-10-29T14:06Z | BUY")
     s3 = jr.refresh_without_broker(Eng(), upload=False, previous=previous, tags_text=late_note)
     assert len(s3["fills"]) == 2 and not s3["open"], "a note stamped after the confirmed fill is the same buy"
+
+
+def test_a_note_is_checked_before_it_is_stored():
+    import pytest
+
+    assert jr.append_note("RUN |  2026-10-29T15:35Z | 104.22 | 11.56 | sold JNJ", upload=False) == \
+        "RUN | 2026-10-29T15:35Z | 104.22 | 11.56 | sold JNJ"
+    assert jr.append_note("TAG | 2026-10-29T15:00Z | SELL | JNJ | SAFE | target | 0.1 | 274.82 | hit it", upload=False)
+    for bad in ("hello", "TAG | nope | BUY | X | SAFE | x", "RUN | not a time | 1 | 1 | x"):
+        with pytest.raises(ValueError):
+            jr.append_note(bad, upload=False)

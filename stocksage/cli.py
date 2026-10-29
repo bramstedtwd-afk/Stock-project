@@ -653,6 +653,28 @@ def cmd_journal(args) -> int:
     return 0
 
 
+def cmd_trader_note(args) -> int:
+    """For the trading routine: record one TAG or RUN line, then refresh the phone report."""
+    from . import journal
+
+    try:
+        line = journal.append_note(" ".join(args.line))
+    except ValueError as exc:
+        print(f"Not recorded: {exc}")
+        return 2
+    except Exception as exc:
+        print(f"Not recorded (Drive): {type(exc).__name__}: {exc}")
+        return 1
+    print(f"Recorded: {line}")
+    if not args.no_report:
+        try:
+            journal.refresh_without_broker(Engine(), upload=True)
+            print("Trade report refreshed.")
+        except Exception as exc:
+            print(f"(Report not refreshed: {exc})")
+    return 0
+
+
 def cmd_invest(args) -> int:
     """Set (or turn off) the monthly 'put $X into the index' reminder."""
     from . import envfile
@@ -1805,6 +1827,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--trader-only", action="store_true",
                    help="only check that the hourly trader is still checking in")
     p.set_defaults(func=cmd_watchdog)
+
+    p = sub.add_parser("trader-note", help="(for the trading routine) record one TAG or RUN line in Drive")
+    p.add_argument("line", nargs="+", help='e.g. "RUN | 2026-10-29T15:35Z | 104.22 | 11.56 | sold JNJ"')
+    p.add_argument("--no-report", action="store_true", help="skip refreshing the trade report")
+    p.set_defaults(func=cmd_trader_note)
 
     p = sub.add_parser("journal", help="what Claude's own trades in the agentic account actually did")
     p.add_argument("--no-upload", action="store_true", help="do not publish it to Drive")
