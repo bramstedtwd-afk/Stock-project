@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v14, 2026-10-29)
+# Agentic Trading Routine — Playbook (v15, 2026-10-29)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from the **"StockSage" Drive folder, file "StockSage Routine
@@ -7,6 +7,11 @@ Playbook.md" — exact folder + exact filename, never a bare title search**
 publishing this file every run. Improving the routine = editing this file;
 the next publish propagates it. The routine states at the top of each run
 which playbook version it loaded, straight from this file's own header.
+
+**What changed in v15 — heartbeat and fill details.** Every run ends with a
+RUN line in "StockSage Trade Tags.txt" (account value, cash, one sentence),
+and every TAG line carries shares and fill price. The owner's phone report
+and the "trader has gone quiet" alert depend on both.
 
 **What changed in v14 — Claude is the live trader, StockSage is the memory; no trading limits (owner's decision, 2026-10-29).**
 The owner wants continuous, profit-chasing trading with no limits and no
@@ -240,11 +245,25 @@ trades, keep testing both.
   second file with that name: the desktop can only read the one it created.
   If it is missing, say so in the report.
 
-      TAG | <UTC time, e.g. 2026-10-29T14:35Z> | BUY or SELL | TICKER | SAFE or AGGRESSIVE | setup (buy) or exit reason (sell), one word | why, in a few words
+      TAG | <UTC time, e.g. 2026-10-29T14:35Z> | BUY or SELL | TICKER | SAFE or AGGRESSIVE | setup (buy) or exit reason (sell), one word | shares filled | average fill price | why, in a few words
+
+  Shares and price come from the confirmed fill. They let the trade report
+  stay current on the owner's phone even while the always-on computer is off.
+- **Check in at the end of EVERY run**, trade or no trade, with one line in
+  the same file:
+
+      RUN | <UTC time> | account value | settled cash | one plain sentence on what this run did
+
+  This is the heartbeat: if no RUN line appears for a few hours during
+  market hours, the owner's phone is told the trader has gone quiet. It also
+  records the account's value over time.
 
   Setups: `breakout`, `pullback`, `momentum`, `gap`, `news`, `earnings`,
   `reversal`, `brain`. Exit reasons: `target`, `stop`, `thesis`, `time`,
   `close`, `rotate`, `profit`.
+- The owner reads all of this as "StockSage Trades.txt" in the StockSage
+  folder (rebuilt several times a day). Write every `why` for that reader:
+  one plain sentence they can judge.
 - Report the memory's headline in one line each run ("my trades so far: 14
   closed, 8 won, +$3.10; aggressive same-day trades are losing").
 

@@ -101,3 +101,60 @@ def test_refresh_needs_an_agentic_account_and_saves_locally(tmp_path, monkeypatc
     s = jr.refresh(Eng(), c, upload=False, account="555000111", tags_text="")
     assert c.asked == "555000111" and s["open"][0]["ticker"] == "AAA"
     assert json.loads((tmp_path / "trade_memory.json").read_text())["account"] == "••••0111"
+
+
+def test_tags_with_shares_and_price_rebuild_fills_after_the_last_confirmed_one():
+    tags = jr.parse_tags("\n".join([
+        "TAG | 2026-10-29T14:00Z | BUY | AAA | SAFE | pullback | 2 | 10.00 | old, already confirmed",
+        "TAG | 2026-10-29T16:00Z | SELL | AAA | SAFE | target | 2 | 11.00 | hit the target",
+        "TAG | 2026-10-29T17:00Z | BUY | BBB | AGGRESSIVE | gap | why without numbers"]))
+    assert tags[0]["qty"] == 2 and tags[0]["price"] == 10.0 and tags[0]["note"] == "old, already confirmed"
+    assert tags[2]["qty"] is None and tags[2]["note"] == "why without numbers"
+    after = datetime(2026, 10, 29, 15, 0, tzinfo=timezone.utc)
+    fills = jr.fills_from_tags(tags, after=after)
+    assert [(f["ticker"], f["side"], f["price"]) for f in fills] == [("AAA", "sell", 11.0)]
+    assert fills[0]["order_id"] == jr.fills_from_tags(tags, after=after)[0]["order_id"], "stable ids"
+
+
+def test_heartbeat_lines_and_trader_state():
+    runs = jr.parse_runs("RUN | 2026-10-29T14:40Z | 100.00 | 20.00 | bought AAA\n"
+                         "RUN | bad | 1 | 1 | x\nRUN | 2026-10-29T19:40Z | 104.50 | 0 | sold AAA, +$1")
+    state = jr.trader_state(runs, NOW)
+    assert state["runs_today"] == 2 and state["equity"] == 104.5 and state["cash"] == 0.0
+    assert state["equity_first"] == 100.0 and state["equity_peak"] == 104.5 and state["minutes_since"] == 20
+
+
+def test_confidence_needs_thirty_trades_then_real_evidence():
+    assert jr.confidence({"trades": 12})["status"] == "too early"
+    base = {"trades": 30, "pnl": 5.0, "verdict": "working: keep doing it", "avg_vs_spy": 0.01}
+    assert jr.confidence(base)["status"] == "earned"
+    for bad in ({"pnl": -1.0}, {"verdict": "no clear edge yet"}, {"avg_vs_spy": -0.002}):
+        assert jr.confidence({**base, **bad})["status"] == "not earned"
+
+
+def test_the_cloud_keeps_confirmed_fills_and_adds_only_newer_tagged_ones(tmp_path, monkeypatch):
+    monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path))
+
+    class Eng:
+        class market:
+            @staticmethod
+            def history(t):
+                return None
+
+    previous = {"account": "••••0111", "grades": ["LIVE SCORECARD x"],
+                "fills": [fill("rh1", "AAA", "buy", 2, 10, "2026-10-29T14:00:30+00:00")]}
+    tags = ("TAG | 2026-10-29T14:00Z | BUY | AAA | SAFE | pullback | 2 | 10 | strong uptrend dip\n"
+            "TAG | 2026-10-29T16:00Z | SELL | AAA | SAFE | target | 2 | 11 | hit the target\n"
+            "RUN | 2026-10-29T16:05Z | 102 | 22 | sold AAA")
+    s = jr.refresh_without_broker(Eng(), upload=False, previous=previous, tags_text=tags)
+    assert s["overall"]["trades"] == 1 and s["overall"]["pnl"] == 2.0
+    trip = s["recent"][0]
+    assert trip["buy_why"] == "strong uptrend dip" and trip["sell_why"] == "hit the target"
+    assert s["account"] == "••••0111" and s["grades"] == ["LIVE SCORECARD x"]
+    text = (tmp_path / "trades.txt").read_text(encoding="utf-8")
+    assert "bought: strong uptrend dip" in text and "CONFIDENCE" in text and "NOT YET" in text
+    again = jr.refresh_without_broker(Eng(), upload=False, previous=s, tags_text=tags)
+    assert again["overall"]["trades"] == 1, "a second cloud run must not count the tagged sell twice"
+    late_note = tags.replace("2026-10-29T14:00Z | BUY", "2026-10-29T14:06Z | BUY")
+    s3 = jr.refresh_without_broker(Eng(), upload=False, previous=previous, tags_text=late_note)
+    assert len(s3["fills"]) == 2 and not s3["open"], "a note stamped after the confirmed fill is the same buy"

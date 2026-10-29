@@ -48,10 +48,74 @@ def verdict(modified: datetime | None, now: datetime | None = None) -> str | Non
             "computer is on, awake and signed in.")
 
 
-def run(post=notify._post, now: datetime | None = None, modified=None) -> int:
+TRADER_QUIET_MINUTES = 150
+
+
+def trader_verdict(runs: list[dict], now: datetime | None = None) -> str | None:
+    """A plain message if the hourly trader has stopped checking in during market hours.
+
+    Only judged on weekdays between 11:00 and 16:30 New York time, when at least
+    two hourly runs should have happened. A market holiday can trip it; the
+    message says so."""
+    from zoneinfo import ZoneInfo
+
+    now = now or datetime.now(timezone.utc)
+    local = now.astimezone(ZoneInfo("America/New_York"))
+    minutes = local.hour * 60 + local.minute
+    if local.weekday() >= 5 or not (11 * 60 <= minutes <= 16 * 60 + 30):
+        return None
+    if not runs:
+        return ("The trader has never checked in (no RUN line in the trade tags file). Check that the "
+                "'Agentic trader (hourly)' routine is switched on and has run.")
+    quiet = (now - runs[-1]["at"]).total_seconds() / 60
+    if quiet <= TRADER_QUIET_MINUTES:
+        return None
+    last = runs[-1]["at"].astimezone(ZoneInfo("America/New_York")).strftime("%a %I:%M %p ET")
+    return (f"The trader has not checked in since {last}. Open the 'Agentic trader (hourly)' routine "
+            "at claude.ai/code/routines and look at its last run. (Ignore this on a market holiday.)")
+
+
+def _send(post, title: str, message: str) -> None:
+    topic = notify.topic_from_env()
+    if not topic:
+        print("(No alert topic set, so nothing was sent to a phone.)")
+        return
+    try:
+        post(notify.NTFY_URL.format(topic=topic), message.encode("utf-8"),
+             {"Title": title, "Priority": "high", "Tags": "warning"})
+    except Exception as exc:
+        print(f"(Could not send the alert: {exc})")
+
+
+def check_trader(post=notify._post, now: datetime | None = None, tags_text: str | None = None) -> None:
+    """Warn the phone if the trader has gone quiet. Never raises."""
+    from . import journal
+
+    try:
+        if tags_text is None:
+            from . import drive_api
+
+            tags_text = drive_api.read_drive_text(journal.TAGS_NAME) or ""
+    except Exception as exc:
+        print(f"Could not read the trader's check-ins: {exc}")
+        return
+    message = trader_verdict(journal.parse_runs(tags_text), now)
+    if message is None:
+        print("The trader is checking in.")
+        return
+    print(message)
+    _send(post, "StockSage trader has gone quiet", message)
+
+
+def run(post=notify._post, now: datetime | None = None, modified=None, sheet: bool = True,
+        trader: bool = False, tags_text: str | None = None) -> int:
     """Alert if stale. 0 = fine or alerted, 1 = could not check."""
     from . import drive_api
 
+    if trader:
+        check_trader(post, now, tags_text)
+    if not sheet:
+        return 0
     try:
         found = modified if modified is not None else drive_api.modified_time(WATCHED_FILE)
     except Exception as exc:
@@ -62,13 +126,5 @@ def run(post=notify._post, now: datetime | None = None, modified=None) -> int:
         print("The sheet is fresh.")
         return 0
     print(message)
-    topic = notify.topic_from_env()
-    if topic:
-        try:
-            post(notify.NTFY_URL.format(topic=topic), message.encode("utf-8"),
-                 {"Title": "StockSage has gone quiet", "Priority": "high", "Tags": "warning"})
-        except Exception as exc:
-            print(f"(Could not send the alert: {exc})")
-    else:
-        print("(No alert topic set, so nothing was sent to a phone.)")
+    _send(post, "StockSage has gone quiet", message)
     return 0

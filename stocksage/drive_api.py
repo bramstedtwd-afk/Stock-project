@@ -214,6 +214,18 @@ def publish_text(name: str, text: str) -> str:
     return upload_or_update(service, name, text, "text/plain", folder_id)
 
 
+def read_drive_text(name: str) -> str | None:
+    """The text of a file in the StockSage Drive folder, or None if absent."""
+    service = get_service()
+    folder = find_file(service, FOLDER_NAME)
+    if folder is None:
+        return None
+    raw = download_file(service, name, folder)
+    if raw is None:
+        return None
+    return raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+
+
 def read_or_create_text(name: str, default: str) -> str:
     """The text of a file in the StockSage Drive folder, creating it with
     `default` the first time. Created here so this app can read it back later

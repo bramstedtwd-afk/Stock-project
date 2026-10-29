@@ -120,3 +120,25 @@ def test_the_watchdog_keeps_both_scheduled_jobs_switched_on():
 def test_no_third_party_action_is_trusted_with_the_write_permission():
     uses = [s["uses"] for s in yaml.safe_load(TEXT)["jobs"]["watch"]["steps"] if "uses" in s]
     assert all(u.startswith("actions/") for u in uses)
+
+
+def test_a_quiet_trader_is_flagged_only_in_market_hours():
+    from stocksage import journal
+
+    runs = journal.parse_runs("RUN | 2026-10-29T14:35Z | 100 | 10 | ok")
+    noon_et = datetime(2026, 10, 29, 16, 0, tzinfo=UTC)          # 12:00 ET, 85 min after the run
+    assert watchdog.trader_verdict(runs, noon_et) is None
+    late = datetime(2026, 10, 29, 18, 0, tzinfo=UTC)             # 14:00 ET, 205 min quiet
+    assert "not checked in" in watchdog.trader_verdict(runs, late)
+    assert watchdog.trader_verdict(runs, datetime(2026, 10, 29, 23, 0, tzinfo=UTC)) is None   # evening
+    assert watchdog.trader_verdict(runs, datetime(2026, 10, 31, 16, 0, tzinfo=UTC)) is None   # Saturday
+    assert "never checked in" in watchdog.trader_verdict([], late)
+
+
+def test_the_trader_alert_is_one_plain_push(monkeypatch):
+    monkeypatch.setenv("STOCKSAGE_NTFY_TOPIC", "t")
+    sent = []
+    watchdog.run(post=lambda u, d, h: sent.append((d.decode(), h)), now=datetime(2026, 10, 29, 18, 0, tzinfo=UTC),
+                 sheet=False, trader=True, tags_text="RUN | 2026-10-29T14:35Z | 100 | 10 | ok")
+    assert len(sent) == 1 and "trader" in sent[0][1]["Title"]
+    assert not re.search(r"\$|\d{4,}", sent[0][0]), "no amounts in a push"

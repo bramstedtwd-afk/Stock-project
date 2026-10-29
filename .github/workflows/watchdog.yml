@@ -9,7 +9,9 @@ name: Watchdog
 
 on:
   schedule:
-    - cron: "30 15 * * 1-5"   # 10:30 CT, after the 08:30 and 09:45 runs
+    - cron: "30 15 * * 1-5"   # 10:30 CT, after the 08:30 and 09:45 runs: sheet + trader
+    - cron: "45 17 * * 1-5"   # 12:45 CT: trader only
+    - cron: "50 19 * * 1-5"   # 14:50 CT: trader only
   workflow_dispatch:
 
 # actions: write lets the keep-alive step below re-enable the scheduled jobs.
@@ -37,8 +39,10 @@ jobs:
       - name: Install
         run: pip install -r requirements.txt
 
-      - name: Is the sheet still being updated?
-        run: python -m stocksage watchdog
+      - name: Is the sheet still being updated, and is the trader checking in?
+        # The sheet is judged once a day (the first run, or by hand); the hourly
+        # trader's heartbeat at every run.
+        run: python -m stocksage watchdog ${{ (github.event_name == 'schedule' && github.event.schedule != '30 15 * * 1-5') && '--trader-only' || '' }}
 
       - name: Keep the scheduled jobs switched on
         # A reminder in your calendar is replaced by this. It must never fail the

@@ -630,7 +630,7 @@ def cmd_watchdog(args) -> int:
     """Used by the scheduled cloud job: warn the phone if the sheet has gone stale."""
     from . import watchdog
 
-    return watchdog.run()
+    return watchdog.run(sheet=not args.trader_only, trader=True)
 
 
 def cmd_journal(args) -> int:
@@ -638,6 +638,9 @@ def cmd_journal(args) -> int:
     from . import journal
     from .robinhood import RobinhoodClient
 
+    if args.cloud:                        # no broker login: Robinhood's last fills + the trader's notes
+        print(journal.render_text(journal.refresh_without_broker(Engine(), upload=not args.no_upload)))
+        return 0
     if not (os.environ.get("STOCKSAGE_AGENTIC_ACCOUNT") or "").strip():
         print("No agentic account set. Add STOCKSAGE_AGENTIC_ACCOUNT=<its number> to .env, then run  "
               ".\\start.bat journal  again.")
@@ -1799,10 +1802,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser(
         "watchdog", help="warn your phone if the always-on computer has stopped updating the sheet"
     )
+    p.add_argument("--trader-only", action="store_true",
+                   help="only check that the hourly trader is still checking in")
     p.set_defaults(func=cmd_watchdog)
 
     p = sub.add_parser("journal", help="what Claude's own trades in the agentic account actually did")
     p.add_argument("--no-upload", action="store_true", help="do not publish it to Drive")
+    p.add_argument("--cloud", action="store_true",
+                   help="build it without a broker login (the cloud runner, while the computer is off)")
     p.set_defaults(func=cmd_journal)
 
     p = sub.add_parser("invest", help="monthly reminder to put a set amount into a broad index fund")

@@ -77,6 +77,12 @@ jobs:
       - name: Publish the brief, playbook and brain to Drive
         run: python -m stocksage publish-drive --no-broker
 
+      - name: Refresh the phone trade report from the trader's notes
+        # No broker login: reuses the fills Robinhood last confirmed (saved by the
+        # always-on computer) and adds trades the hourly trader tagged since.
+        continue-on-error: true
+        run: python -m stocksage journal --cloud
+
       - name: Tell the dead-man switch we are alive
         if: ${{ success() && env.HEALTHCHECK_URL != '' }}
         run: curl -fsS --retry 3 "$HEALTHCHECK_URL" > /dev/null

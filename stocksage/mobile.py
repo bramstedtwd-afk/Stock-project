@@ -89,6 +89,13 @@ def render_page(now: float | None = None, path: Path | None = None) -> str:
         text = ("No sheet yet.\n\nOn the computer run:\n    .\\start.bat today\n"
                 "then reload this page.")
         stamp = "Nothing saved yet"
+    trades, jump = "", ""
+    try:                                     # the trader's record, if the trade memory has been built here
+        report = (path.parent / "trades.txt").read_text(encoding="utf-8")
+        trades = f'<h2 id="trades">Trades</h2><pre>{html.escape(report)}</pre>'
+        jump = '<p><a href="#trades">Jump to the trader\'s grades and recent trades</a></p>'
+    except OSError:
+        pass
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -102,10 +109,12 @@ body {{ margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-u
 main {{ padding:12px 16px 48px; max-width:760px; margin:auto; }}
 .stamp {{ color:var(--muted); font-size:13px; border-bottom:1px solid var(--line); padding-bottom:8px; }}
 .warn {{ color:var(--warn); font-weight:600; }}
+h2 {{ font-size:16px; margin:24px 0 4px; border-top:1px solid var(--line); padding-top:12px; }}
+a {{ color:inherit; }}
 pre {{ white-space:pre-wrap; word-wrap:break-word; font:13.5px/1.5 ui-monospace, Menlo, Consolas, monospace; }}
 </style></head><body><main>
 <div class="stamp">StockSage &middot; {html.escape(stamp)} &middot; read-only</div>
-{banner}<pre>{html.escape(text)}</pre>
+{jump}{banner}<pre>{html.escape(text)}</pre>{trades}
 <button onclick="location.reload()">Reload</button>
 </main></body></html>"""
 
