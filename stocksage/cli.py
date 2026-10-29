@@ -633,6 +633,23 @@ def cmd_watchdog(args) -> int:
     return watchdog.run()
 
 
+def cmd_journal(args) -> int:
+    """Claude's own trades in the agentic account: what worked, what did not."""
+    from . import journal
+    from .robinhood import RobinhoodClient
+
+    if not (os.environ.get("STOCKSAGE_AGENTIC_ACCOUNT") or "").strip():
+        print("No agentic account set. Add STOCKSAGE_AGENTIC_ACCOUNT=<its number> to .env, then run  "
+              ".\\start.bat journal  again.")
+        return 1
+    summary = journal.refresh(Engine(), RobinhoodClient(), upload=not args.no_upload)
+    if summary is None:
+        print("Could not read the agentic account's orders. Run  .\\start.bat doctor  to see why.")
+        return 1
+    print(journal.render_text(summary))
+    return 0
+
+
 def cmd_invest(args) -> int:
     """Set (or turn off) the monthly 'put $X into the index' reminder."""
     from . import envfile
@@ -922,6 +939,12 @@ def _refresh_today(engine, client, upload: bool = True, rebuild_book: bool = Fal
                 out["uploaded"] = True
             except Exception as exc:           # Drive is optional for the sheet
                 out["error"] = f"could not upload the sheet to Drive: {exc}"
+        try:                                  # Claude's trade memory for the routine (agentic account)
+            from . import journal
+
+            journal.refresh(engine, client, upload=upload)
+        except Exception as exc:
+            out["error"] = out["error"] or f"trade memory failed: {exc}"
         if topic_from_env():
             alert_accounts(engine.db, [(a.title, a.plan) for a in sheet.accounts if a.plan], news=sheet.news)
             from .notify import monthly_scorecard
@@ -1777,6 +1800,10 @@ def build_parser() -> argparse.ArgumentParser:
         "watchdog", help="warn your phone if the always-on computer has stopped updating the sheet"
     )
     p.set_defaults(func=cmd_watchdog)
+
+    p = sub.add_parser("journal", help="what Claude's own trades in the agentic account actually did")
+    p.add_argument("--no-upload", action="store_true", help="do not publish it to Drive")
+    p.set_defaults(func=cmd_journal)
 
     p = sub.add_parser("invest", help="monthly reminder to put a set amount into a broad index fund")
     p.add_argument("amount", nargs="?", help="dollars a month, 'off', or nothing to show the setting")

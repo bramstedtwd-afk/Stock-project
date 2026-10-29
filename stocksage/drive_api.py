@@ -213,6 +213,19 @@ def publish_text(name: str, text: str) -> str:
     return upload_or_update(service, name, text, "text/plain", folder_id)
 
 
+def read_or_create_text(name: str, default: str) -> str:
+    """The text of a file in the StockSage Drive folder, creating it with
+    `default` the first time. Created here so this app can read it back later
+    (its Drive access reaches only files it created), and the routine appends."""
+    service = get_service()
+    folder_id = ensure_folder(service)
+    raw = download_file(service, name, folder_id)
+    if raw is None:
+        upload_or_update(service, name, default, "text/plain", folder_id)
+        return default
+    return raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+
+
 def modified_time(name: str):
     """When a file in the StockSage Drive folder was last written (UTC), or None
     if the folder or file does not exist. Read-only."""

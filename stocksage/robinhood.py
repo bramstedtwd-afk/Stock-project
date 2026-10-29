@@ -425,14 +425,17 @@ class RobinhoodClient:
                 self._symbol_cache[url] = None
         return self._symbol_cache[url]
 
-    def order_history(self) -> list[dict] | None:
-        """Every filled stock order, normalized for the brain's mirror."""
+    def order_history(self, account_number: str | None = None) -> list[dict] | None:
+        """Every filled stock order, normalized for the brain's mirror.
+        `account_number` limits it to one account (the agentic one, for the
+        trade memory); by default it is whatever Robinhood returns unscoped."""
         if not self.login():
             return None
         import robin_stocks.robinhood as rh
 
         try:
-            raw = rh.orders.get_all_stock_orders() or []
+            raw = (rh.orders.get_all_stock_orders(account_number=account_number) if account_number
+                   else rh.orders.get_all_stock_orders()) or []
         except Exception as exc:
             log.error("failed to fetch Robinhood order history: %s", exc)
             return None
