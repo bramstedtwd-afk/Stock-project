@@ -857,6 +857,13 @@ def publish_brief_via_api(
         _Path(STATE_DIR) / "publish-snapshot.db", db_path=engine.db.path
     )
     result = publish_via_api(json.dumps(packet, indent=2), playbook_text, snap)
+    try:                     # the routine's tag file must be created by this app to be readable later
+        from .drive_api import read_or_create_text
+        from .journal import TAGS_HEADER, TAGS_NAME
+
+        read_or_create_text(TAGS_NAME, TAGS_HEADER)
+    except Exception as exc:
+        log.debug("trade tags file not checked: %s", exc)
     result["candidates"] = len(packet["candidates"])
     result["actions"] = packet.get("actions")
     return result

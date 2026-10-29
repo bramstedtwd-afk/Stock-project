@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -324,6 +325,35 @@ def would_downgrade_playbook(service, folder_id, local_text: str):
     return local_v < remote_v, remote_v, local_v
 
 
+PLACEHOLDER = "{{AGENTIC_ACCOUNT}}"
+
+
+def fill_account_from_drive(service, folder_id, local_text: str) -> str | None:
+    """The playbook with its account placeholder filled from Drive's copy.
+
+    A machine without the account number (the cloud runner) must still be able
+    to publish a new playbook version, but never one that says
+    "{{AGENTIC_ACCOUNT}}" where Drive's copy had the real number: the routine
+    would stop and ask which account to trade. Returns the text unchanged when
+    there is no placeholder, the filled text when Drive's copy carries the
+    number, and None (do not publish) when it would replace a filled copy with
+    a blank one."""
+    if PLACEHOLDER not in local_text:
+        return local_text
+    try:
+        raw = download_file(service, PLAYBOOK_NAME, folder_id)
+    except Exception as exc:
+        log.debug("could not read Drive's playbook: %s", exc)
+        return None
+    if not raw:
+        return local_text                  # first publish: nothing better to offer
+    remote = raw.decode("utf-8", "replace")
+    if PLACEHOLDER in remote:
+        return local_text
+    m = re.search(r"\(#(\d{6,12})\)", remote)
+    return local_text.replace(PLACEHOLDER, m.group(1)) if m else None
+
+
 def publish_via_api(brief_json: str, playbook_text: str, snapshot_path: Path) -> dict:
     """Push the research brief, playbook, and brain snapshot straight to
     Drive via the API — the no-install alternative to a locally-synced
@@ -343,7 +373,12 @@ def publish_via_api(brief_json: str, playbook_text: str, snapshot_path: Path) ->
         service, folder_id, playbook_text
     )
     skipped = None
-    if downgrade:
+    filled = None if downgrade else fill_account_from_drive(service, folder_id, playbook_text)
+    if not downgrade and filled is None:
+        skipped = ("this machine has no agentic account number and Drive's playbook does; left "
+                   "Drive's copy alone rather than blanking the account. Set STOCKSAGE_AGENTIC_ACCOUNT.")
+        log.warning("%s", skipped)
+    elif downgrade:
         skipped = (
             f"Drive already has playbook v{remote_v}; this machine has only "
             f"v{local_v}. Left Drive's copy alone rather than moving the "
@@ -352,7 +387,7 @@ def publish_via_api(brief_json: str, playbook_text: str, snapshot_path: Path) ->
         log.warning("%s", skipped)
     else:
         written[PLAYBOOK_NAME] = upload_or_update(
-            service, PLAYBOOK_NAME, playbook_text, "text/markdown", folder_id,
+            service, PLAYBOOK_NAME, filled, "text/markdown", folder_id,
         )
     if snapshot_path.exists():
         from googleapiclient.http import MediaFileUpload

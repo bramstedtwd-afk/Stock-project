@@ -388,3 +388,24 @@ def test_publish_skips_the_playbook_but_still_refreshes_the_brief(tmp_path, monk
     # And Drive still holds the newer text.
     still = drive_api.download_file(service, drive_api.PLAYBOOK_NAME, folder)
     assert b"v10" in still
+
+
+def test_a_machine_without_the_account_fills_it_from_drives_copy(tmp_path, monkeypatch):
+    """The cloud runner has no account number; a new playbook it publishes must
+    keep the number Drive's copy already carries, never blank it."""
+    service, folder = _drive_with_playbook("# Playbook (v13, 2026-10-28)\ntrade only (#123456789).")
+    monkeypatch.setattr(drive_api, "get_service", lambda: service)
+    monkeypatch.setattr(drive_api, "ensure_folder", lambda svc, name=drive_api.FOLDER_NAME: folder)
+    out = drive_api.publish_via_api("{}", "# Playbook (v14, 2026-10-29)\ntrade only (#{{AGENTIC_ACCOUNT}}).",
+                                    tmp_path / "none.db")
+    assert drive_api.PLAYBOOK_NAME in out["files"]
+    text = drive_api.download_file(service, drive_api.PLAYBOOK_NAME, folder).decode()
+    assert "v14" in text and "(#123456789)" in text and "{{" not in text
+
+
+def test_a_blank_account_never_replaces_a_filled_one_it_cannot_read(tmp_path, monkeypatch):
+    service, folder = _drive_with_playbook("# Playbook (v13, 2026-10-28)\nno number here")
+    assert drive_api.fill_account_from_drive(service, folder, "(#{{AGENTIC_ACCOUNT}})") is None
+    first = FakeDriveService()
+    empty = drive_api.ensure_folder(first)
+    assert drive_api.fill_account_from_drive(first, empty, "x {{AGENTIC_ACCOUNT}}") == "x {{AGENTIC_ACCOUNT}}"
