@@ -68,8 +68,8 @@ def test_summary_groups_by_play_and_counts_today():
              fill("3", "BBB", "buy", 1, 50, "2026-10-27T14:01:00Z"),
              fill("4", "BBB", "sell", 1, 55, "2026-10-28T19:00:00Z"),
              fill("5", "CCC", "buy", 1, 5, "2026-10-29T16:00:00Z")]
-    s = jr.summarize(fills, tags, now=NOW, account="000111222")
-    assert s["account"] == "••••1222" and "000111222" not in json.dumps(s)
+    s = jr.summarize(fills, tags, now=NOW, account="555000111")
+    assert s["account"] == "••••0111" and "555000111" not in json.dumps(s)
     assert s["by_play"]["AGGRESSIVE"]["pnl"] == -1.0 and s["by_play"]["SAFE"]["pnl"] == 5.0
     assert s["by_exit"]["stop"]["trades"] == 1 and s["by_style"]["same day"]["trades"] == 1
     assert s["today"] == {"orders": 3, "buys": 2}
@@ -98,6 +98,6 @@ def test_refresh_needs_an_agentic_account_and_saves_locally(tmp_path, monkeypatc
 
     c = Client()
     assert jr.refresh(Eng(), c, upload=False, account="") is None
-    s = jr.refresh(Eng(), c, upload=False, account="000111222", tags_text="")
-    assert c.asked == "000111222" and s["open"][0]["ticker"] == "AAA"
-    assert json.loads((tmp_path / "trade_memory.json").read_text())["account"] == "••••1222"
+    s = jr.refresh(Eng(), c, upload=False, account="555000111", tags_text="")
+    assert c.asked == "555000111" and s["open"][0]["ticker"] == "AAA"
+    assert json.loads((tmp_path / "trade_memory.json").read_text())["account"] == "••••0111"
