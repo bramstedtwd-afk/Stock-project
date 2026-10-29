@@ -122,8 +122,10 @@ loader's floor wins and the conflict is reported to the user.
 1. **Account scope:** trade ONLY the agentic account
    (#{{AGENTIC_ACCOUNT}}). Verify the account number before every
    review/order call. If that placeholder is still literal text rather than
-   a number, the playbook was not published from the owner's desktop —
-   stop and ask which account to use rather than guessing.
+   a number (the cloud runner publishes without the number), use the account
+   number written in the routine's own stored instructions; that counts as
+   verified. Only if neither carries a number: stop and ask which account to
+   use rather than guessing.
    The personal brokerage and Roth IRA are strictly read-only — never
    place, modify, or cancel anything in them, ever.
 2. **Order authority.** By default, the confirm gate: never place, modify,
