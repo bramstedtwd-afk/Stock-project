@@ -86,8 +86,12 @@ def _send(post, title: str, message: str) -> None:
         print(f"(Could not send the alert: {exc})")
 
 
-def check_trader(post=notify._post, now: datetime | None = None, tags_text: str | None = None) -> None:
-    """Warn the phone if the trader has gone quiet. Never raises."""
+def check_trader(post=notify._post, now: datetime | None = None, tags_text: str | None = None,
+                 once_a_day=None) -> None:
+    """Warn the phone if the trader has gone quiet. Never raises.
+
+    `once_a_day` (a file path) limits it to one push per day: the always-on
+    computer checks at every publish, and one alert is enough."""
     from . import journal
 
     try:
@@ -103,7 +107,24 @@ def check_trader(post=notify._post, now: datetime | None = None, tags_text: str 
         print("The trader is checking in.")
         return
     print(message)
+    today = (now or datetime.now(timezone.utc)).date().isoformat()
+    if once_a_day is not None:
+        try:
+            from pathlib import Path
+
+            if Path(once_a_day).read_text(encoding="utf-8").strip() == today:
+                return
+        except OSError:
+            pass
     _send(post, "StockSage trader has gone quiet", message)
+    if once_a_day is not None:
+        try:
+            from pathlib import Path
+
+            Path(once_a_day).parent.mkdir(parents=True, exist_ok=True)
+            Path(once_a_day).write_text(today, encoding="utf-8")
+        except OSError:
+            pass
 
 
 def run(post=notify._post, now: datetime | None = None, modified=None, sheet: bool = True,

@@ -1196,6 +1196,13 @@ def cmd_publish_drive(args) -> int:
             _record_sheet(engine, error=done["error"] or "the sheet could not be built")
         else:
             _record_sheet(engine)
+    try:                 # the always-on computer watches the hourly trader (GitHub's timers run late)
+        from . import watchdog
+        from .journal import state_dir
+
+        watchdog.check_trader(once_a_day=state_dir() / "trader_alert_day.txt")
+    except Exception as exc:
+        print(f"(Trader check skipped: {exc})")
     print(f"Published directly to Google Drive ({result['candidates']} candidates):")
     for name in result["files"]:
         print(f"  · {name}  (in your Drive's StockSage folder)")

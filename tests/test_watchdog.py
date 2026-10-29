@@ -142,3 +142,16 @@ def test_the_trader_alert_is_one_plain_push(monkeypatch):
                  sheet=False, trader=True, tags_text="RUN | 2026-10-29T14:35Z | 100 | 10 | ok")
     assert len(sent) == 1 and "trader" in sent[0][1]["Title"]
     assert not re.search(r"\$|\d{4,}", sent[0][0]), "no amounts in a push"
+
+
+def test_the_computer_sends_a_quiet_trader_alert_once_a_day(monkeypatch, tmp_path):
+    monkeypatch.setenv("STOCKSAGE_NTFY_TOPIC", "t")
+    sent = []
+    tags = "RUN | 2026-10-29T14:35Z | 100 | 10 | ok"
+    for hour in (18, 19, 20):
+        watchdog.check_trader(post=lambda u, d, h: sent.append(d), now=datetime(2026, 10, 29, hour, 0, tzinfo=UTC),
+                              tags_text=tags, once_a_day=tmp_path / "day.txt")
+    assert len(sent) == 1
+    watchdog.check_trader(post=lambda u, d, h: sent.append(d), now=datetime(2026, 10, 30, 18, 0, tzinfo=UTC),
+                          tags_text=tags, once_a_day=tmp_path / "day.txt")
+    assert len(sent) == 2, "a new day can alert again"

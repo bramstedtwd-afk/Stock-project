@@ -247,11 +247,10 @@ trades, keep testing both.
   always-on computer refreshes it daily; your own pull is fresher for today.
   If it is missing, say so and carry on.
 - **Record every TAG and RUN line through StockSage.** Your working directory
-  holds the StockSage code. Once per run:
-
-      pip install -q google-api-python-client google-auth-oauthlib
-
-  then, for each line:
+  holds the StockSage code. The command needs nothing installed (it falls
+  back to plain HTTPS); `pip install -q google-api-python-client
+  google-auth-oauthlib` is optional, and if it fails, run the command anyway.
+  For each line:
 
       python -m stocksage.journal note "<the line>"
 

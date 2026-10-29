@@ -416,3 +416,77 @@ def test_a_pasted_token_keeps_working_with_its_quotes():
     for raw in (tok, f"'{tok}'", f'"{tok}"', f"  '{tok}'\n"):
         assert drive_api.clean_token(raw) == tok
     assert drive_api.clean_token("") is None and drive_api.clean_token(None) is None
+
+
+class _FakeDriveHttp:
+    """Plain-HTTPS Drive, in memory: token refresh, list, read, create, overwrite."""
+
+    def __init__(self):
+        self.files, self.n, self.refreshes = {}, 0, 0
+
+    def __call__(self, method, url, headers, body):
+        import json
+        import re
+        from urllib.parse import parse_qs, unquote, urlparse
+
+        if "oauth2" in url:
+            self.refreshes += 1
+            return 200, json.dumps({"access_token": "a"}).encode()
+        assert headers["Authorization"] == "Bearer a"
+        u = urlparse(url)
+        qs = parse_qs(u.query)
+        if method == "GET" and u.path.endswith("/files"):
+            q = qs["q"][0]
+            name = re.search(r"name = '([^']*)'", q).group(1)
+            parent = re.search(r"'([^']*)' in parents", q)
+            hits = [{"id": i, "name": f["name"]} for i, f in self.files.items()
+                    if f["name"] == name and (not parent or parent.group(1) in f["parents"])]
+            return 200, json.dumps({"files": hits[:1]}).encode()
+        if method == "GET" and qs.get("alt") == ["media"]:
+            return 200, self.files[unquote(u.path.rsplit("/", 1)[1])]["data"]
+        if method == "POST":
+            self.n += 1
+            fid = f"f{self.n}"
+            if "multipart" in headers.get("Content-Type", ""):
+                parts = body.split(b"\r\n\r\n")
+                meta = json.loads(parts[1].split(b"\r\n")[0])
+                data = parts[2].rsplit(b"\r\n--", 1)[0]
+            else:
+                meta, data = json.loads(body), b""
+            self.files[fid] = {"name": meta["name"], "parents": meta.get("parents", []), "data": data}
+            return 200, json.dumps({"id": fid}).encode()
+        if method == "PATCH":
+            self.files[u.path.rsplit("/", 1)[1]]["data"] = body
+            return 200, b'{"id": "x"}'
+        return 404, b"no"
+
+
+def test_notes_work_with_no_google_packages_installed(monkeypatch, tmp_path):
+    """The trading routine's cloud box may not manage to install the Google client;
+    the note command must still read, append and publish over plain HTTPS."""
+    from stocksage import journal
+
+    fake = _FakeDriveHttp()
+    drive = drive_api.RestDrive({"refresh_token": "r", "client_id": "c", "client_secret": "s"}, http=fake)
+    monkeypatch.setattr(drive_api, "get_service", lambda: drive)
+    monkeypatch.setattr(drive_api, "_media", lambda data, mime: drive_api._Media(data, mime))
+    monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path))
+
+    journal.append_note("RUN | 2026-10-30T13:37Z | 104.68 | 38.04 | held all three")
+    journal.append_note("TAG | 2026-10-30T13:40Z | BUY | XYZ | SAFE | pullback | 1 | 20.00 | dip in uptrend")
+    journal.append_note("TAG | 2026-10-30T13:40Z | BUY | XYZ | SAFE | pullback | 1 | 20.00 | dip in uptrend")
+    text = drive_api.read_drive_text(journal.TAGS_NAME)
+    assert text.startswith("# One line") and text.count("TAG |") == 2 and "RUN | 2026-10-30T13:37Z" in text
+    assert text.count("dip in uptrend") == 1, "a retried note is not added twice"
+    s = journal.refresh_without_broker(None, upload=True)
+    assert s["trader"]["last_run"].startswith("2026-10-30T13:37") and s["open"][0]["ticker"] == "XYZ"
+    assert "CONFIDENCE" in drive_api.read_drive_text(journal.TRADES_NAME)
+    assert fake.refreshes == 1, "one sign-in refresh per run, not per call"
+
+
+def test_a_dead_sign_in_says_so_plainly():
+    import pytest
+
+    drive = drive_api.RestDrive({"refresh_token": "r"}, http=lambda *a: (400, b'{"error": "invalid_grant"}'))
+    with pytest.raises(drive_api.DriveAuthExpired):
+        drive.files().list(q="name = 'x'").execute()

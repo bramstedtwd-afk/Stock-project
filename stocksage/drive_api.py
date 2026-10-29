@@ -113,6 +113,11 @@ def get_service():
         from google_auth_oauthlib.flow import InstalledAppFlow
         from googleapiclient.discovery import build
     except ImportError as exc:
+        # No Google packages (the trading routine's bare cloud box): the same
+        # token works through plain HTTPS, so nothing has to be installed.
+        info = _token_info()
+        if info and info.get("refresh_token"):
+            return RestDrive(info)
         raise DriveNotConfigured(
             "Drive API packages aren't installed. Run: "
             "pip install google-auth-oauthlib google-api-python-client"
@@ -198,9 +203,7 @@ def upload_or_update(
     """Create the file if it doesn't exist, or overwrite its content in
     place if it does — a real update, no version-numbered files needed.
     Returns the file id."""
-    from googleapiclient.http import MediaInMemoryUpload
-
-    media = MediaInMemoryUpload(content.encode("utf-8"), mimetype=mime_type)
+    media = _media(content.encode("utf-8"), mime_type)
     existing = find_file(service, name, parent_id=folder_id)
     if existing:
         service.files().update(fileId=existing, media_body=media).execute()
@@ -430,3 +433,154 @@ def publish_via_api(brief_json: str, playbook_text: str, snapshot_path: Path) ->
     if skipped:
         out["playbook_skipped"] = skipped
     return out
+
+
+# --- the same Drive calls with nothing installed ------------------------------------
+#
+# The trading routine runs in a fresh cloud box each hour. Downloading the Google
+# client there is one more thing that can fail (it did, once), so the few calls it
+# needs (find, read, create, overwrite one small text file) also go over plain
+# HTTPS with the standard library. Same token, same drive.file scope.
+
+DRIVE_API = "https://www.googleapis.com/drive/v3"
+DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3"
+
+
+def _token_info() -> dict | None:
+    import json
+
+    raw = None
+    if TOKEN_PATH.exists():
+        raw = TOKEN_PATH.read_text(encoding="utf-8")
+    else:
+        raw = clean_token(os.environ.get(TOKEN_ENV_VAR))
+    try:
+        return json.loads(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def _media(data: bytes, mime_type: str):
+    try:
+        from googleapiclient.http import MediaInMemoryUpload
+
+        return MediaInMemoryUpload(data, mimetype=mime_type)
+    except ImportError:
+        return _Media(data, mime_type)
+
+
+class _Media:
+    """The three methods of MediaInMemoryUpload that RestDrive reads."""
+
+    def __init__(self, data: bytes, mime_type: str):
+        self._data, self._mime = data, mime_type
+
+    def size(self) -> int:
+        return len(self._data)
+
+    def getbytes(self, begin: int, length: int) -> bytes:
+        return self._data[begin:begin + length]
+
+    def mimetype(self) -> str:
+        return self._mime
+
+
+def _urllib_http(method: str, url: str, headers: dict, body: bytes | None) -> tuple[int, bytes]:
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
+
+
+class _Call:
+    def __init__(self, fn):
+        self._fn = fn
+
+    def execute(self):
+        return self._fn()
+
+
+class RestDrive:
+    """A stand-in for the `build("drive", "v3")` service, covering only
+    files().list / get_media / create / update, as this module uses them."""
+
+    def __init__(self, info: dict, http=None):
+        self.info, self.http = dict(info), http or _urllib_http
+        self._access = None
+
+    def _refresh(self) -> str:
+        import json
+        from urllib.parse import urlencode
+
+        body = urlencode({"client_id": self.info.get("client_id", ""),
+                          "client_secret": self.info.get("client_secret", ""),
+                          "refresh_token": self.info["refresh_token"],
+                          "grant_type": "refresh_token"}).encode()
+        status, raw = self.http("POST", self.info.get("token_uri") or "https://oauth2.googleapis.com/token",
+                                {"Content-Type": "application/x-www-form-urlencoded"}, body)
+        if status != 200:
+            if b"invalid_grant" in raw:
+                raise DriveAuthExpired("Your Google Drive sign-in has expired and can't renew itself. "
+                                       "On the always-on computer run  .\\start.bat publish-drive  to sign in "
+                                       "again, then copy the new token where it is used.")
+            raise RuntimeError(f"Google sign-in refresh failed ({status}): {raw[:200]!r}")
+        self._access = json.loads(raw)["access_token"]
+        return self._access
+
+    def request(self, method: str, url: str, body: bytes | None = None, content_type: str | None = None,
+                raw: bool = False):
+        import json
+
+        for attempt in (1, 2):
+            token = self._access or self._refresh()
+            headers = {"Authorization": f"Bearer {token}"}
+            if content_type:
+                headers["Content-Type"] = content_type
+            status, data = self.http(method, url, headers, body)
+            if status == 401 and attempt == 1:
+                self._access = None
+                continue
+            if status >= 400:
+                raise RuntimeError(f"Drive said {status}: {data[:200]!r}")
+            return data if raw else (json.loads(data) if data else {})
+
+    def files(self):
+        return _RestFiles(self)
+
+
+class _RestFiles:
+    def __init__(self, drive: RestDrive):
+        self.d = drive
+
+    def list(self, q, spaces="drive", fields="files(id, name)", pageSize=100):
+        from urllib.parse import urlencode
+
+        url = f"{DRIVE_API}/files?" + urlencode({"q": q, "spaces": spaces, "fields": fields, "pageSize": pageSize})
+        return _Call(lambda: self.d.request("GET", url))
+
+    def get_media(self, fileId):
+        return _Call(lambda: self.d.request("GET", f"{DRIVE_API}/files/{fileId}?alt=media", raw=True))
+
+    def create(self, body, media_body=None, fields="id"):
+        import json
+
+        if media_body is None:
+            return _Call(lambda: self.d.request("POST", f"{DRIVE_API}/files?fields={fields}",
+                                                json.dumps(body).encode(), "application/json"))
+        boundary = "stocksage-boundary-7f3a"
+        data = media_body.getbytes(0, media_body.size())
+        payload = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{json.dumps(body)}\r\n"
+                   f"--{boundary}\r\nContent-Type: {media_body.mimetype()}\r\n\r\n").encode() + data + \
+            f"\r\n--{boundary}--".encode()
+        return _Call(lambda: self.d.request("POST", f"{DRIVE_UPLOAD}/files?uploadType=multipart&fields={fields}",
+                                            payload, f"multipart/related; boundary={boundary}"))
+
+    def update(self, fileId, media_body=None, body=None, fields="id"):
+        data = media_body.getbytes(0, media_body.size())
+        return _Call(lambda: self.d.request("PATCH", f"{DRIVE_UPLOAD}/files/{fileId}?uploadType=media&fields={fields}",
+                                            data, media_body.mimetype()))
