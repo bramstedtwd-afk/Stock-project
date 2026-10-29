@@ -65,8 +65,7 @@ def trader_verdict(runs: list[dict], now: datetime | None = None) -> str | None:
     if local.weekday() >= 5 or not (11 * 60 <= minutes <= 16 * 60 + 30):
         return None
     if not runs:
-        return ("The trader has never checked in (no RUN line in the trade tags file). Check that the "
-                "'Agentic trader (hourly)' routine is switched on and has run.")
+        return None        # check-ins not set up yet: nothing to judge, and no false alarms
     quiet = (now - runs[-1]["at"]).total_seconds() / 60
     if quiet <= TRADER_QUIET_MINUTES:
         return None

@@ -132,7 +132,7 @@ def test_a_quiet_trader_is_flagged_only_in_market_hours():
     assert "not checked in" in watchdog.trader_verdict(runs, late)
     assert watchdog.trader_verdict(runs, datetime(2026, 10, 29, 23, 0, tzinfo=UTC)) is None   # evening
     assert watchdog.trader_verdict(runs, datetime(2026, 10, 31, 16, 0, tzinfo=UTC)) is None   # Saturday
-    assert "never checked in" in watchdog.trader_verdict([], late)
+    assert watchdog.trader_verdict([], late) is None, "no check-ins yet is not an alarm"
 
 
 def test_the_trader_alert_is_one_plain_push(monkeypatch):
