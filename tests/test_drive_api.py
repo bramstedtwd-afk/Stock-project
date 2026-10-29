@@ -409,3 +409,10 @@ def test_a_blank_account_never_replaces_a_filled_one_it_cannot_read(tmp_path, mo
     first = FakeDriveService()
     empty = drive_api.ensure_folder(first)
     assert drive_api.fill_account_from_drive(first, empty, "x {{AGENTIC_ACCOUNT}}") == "x {{AGENTIC_ACCOUNT}}"
+
+
+def test_a_pasted_token_keeps_working_with_its_quotes():
+    tok = '{"token": "x", "refresh_token": "y"}'
+    for raw in (tok, f"'{tok}'", f'"{tok}"', f"  '{tok}'\n"):
+        assert drive_api.clean_token(raw) == tok
+    assert drive_api.clean_token("") is None and drive_api.clean_token(None) is None

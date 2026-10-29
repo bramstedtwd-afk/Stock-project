@@ -80,6 +80,15 @@ def credentials_available() -> bool:
     return CREDENTIALS_PATH.exists()
 
 
+def clean_token(raw: str | None) -> str | None:
+    """The token JSON as pasted into an environment-variable box, which may keep
+    the quotes around it (KEY='{...}') or add stray spaces and line breaks."""
+    text = (raw or "").strip()
+    while len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"" and not text.startswith('{"'):
+        text = text[1:-1].strip()
+    return text or None
+
+
 def get_service():
     """Authenticated Drive API client, refreshing or requesting consent
     as needed. Raises DriveNotConfigured with setup instructions if
@@ -92,7 +101,7 @@ def get_service():
     seeded), it's never touched again.
     """
     if not TOKEN_PATH.exists():
-        seed = os.environ.get(TOKEN_ENV_VAR)
+        seed = clean_token(os.environ.get(TOKEN_ENV_VAR))
         if seed:
             STATE_DIR.mkdir(parents=True, exist_ok=True)
             TOKEN_PATH.write_text(seed, encoding="utf-8")
