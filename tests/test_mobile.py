@@ -106,10 +106,22 @@ def test_the_link_carries_the_key_and_a_port():
     assert found and all(f"?k={'k' * 32}" in u and f":{mobile.PORT}/" in u for u in found)
 
 
-def test_windows_start_by_itself_at_sign_in_through_the_launcher():
-    cmd = mobile.schtasks_create_cmd()
-    assert cmd[:3] == ["schtasks", "/Create", "/F"] and "ONLOGON" in cmd
-    assert "start.bat" in cmd[-1] and cmd[-1].endswith("mobile serve")
+def test_windows_start_by_itself_at_sign_in_without_admin_rights(tmp_path, monkeypatch):
+    """A sign-in scheduled task needs administrator rights ("Access is denied" on
+    the owner's PC); the user's own Startup folder does not."""
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    assert mobile.startup_dir() == tmp_path / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+    script = mobile.startup_script()
+    assert "start.bat" in script and "mobile serve" in script and script.endswith("\r\n")
+    monkeypatch.setattr(mobile.sys, "platform", "win32")
+    monkeypatch.setattr(mobile, "show_link", lambda: 0)
+    monkeypatch.setattr(mobile, "phone_key", lambda create=False: "k" * 32)
+    monkeypatch.setattr(mobile.subprocess, "Popen", lambda *a, **k: None)
+    assert mobile.install() == 0
+    assert (mobile.startup_dir() / mobile.STARTUP_FILE).read_bytes().decode("utf-8") == script
+    monkeypatch.setattr(mobile.subprocess, "run", lambda *a, **k: None)
+    mobile.off()
+    assert not (mobile.startup_dir() / mobile.STARTUP_FILE).exists()
 
 
 def test_the_mac_and_linux_entries_restart_it():

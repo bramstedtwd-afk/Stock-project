@@ -211,10 +211,23 @@ def start_command() -> list[str]:
     return [str(PROJECT_ROOT / ("start.bat" if sys.platform.startswith("win") else "start.sh")), "mobile", "serve"]
 
 
-def schtasks_create_cmd() -> list[str]:
+def startup_dir() -> Path:
+    """The signed-in user's own Startup folder: anything here runs at sign-in,
+    and writing to it needs no administrator rights (a sign-in scheduled task does)."""
+    import os
+
+    appdata = os.environ.get("APPDATA") or str(Path("~/AppData/Roaming").expanduser())
+    return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+
+
+STARTUP_FILE = "StockSage Phone.cmd"
+
+
+def startup_script() -> str:
     bat = PROJECT_ROOT / "start.bat"
-    return ["schtasks", "/Create", "/F", "/TN", TASK_NAME, "/SC", "ONLOGON",
-            "/TR", f'cmd /c start "" /min "{bat}" mobile serve']
+    return ("@echo off\r\n"
+            "rem Starts the StockSage phone page at sign-in. Remove with: .\\start.bat mobile off\r\n"
+            f'start "" /min "{bat}" mobile serve\r\n')
 
 
 def launchd_plist() -> str:
@@ -246,7 +259,12 @@ def install() -> int:
         subprocess.run(["launchctl", "unload", str(_plist_path())], capture_output=True)
         res = subprocess.run(["launchctl", "load", str(_plist_path())], capture_output=True, text=True)
     elif sys.platform.startswith("win"):
-        res = subprocess.run(schtasks_create_cmd(), capture_output=True, text=True)
+        try:
+            startup_dir().mkdir(parents=True, exist_ok=True)
+            (startup_dir() / STARTUP_FILE).write_bytes(startup_script().encode("utf-8"))  # CRLF as written
+            res = subprocess.CompletedProcess([], 0, "", "")
+        except OSError as exc:
+            res = subprocess.CompletedProcess([], 1, "", str(exc))
     else:
         from .autopilot import _current_crontab, _write_crontab
 
@@ -270,7 +288,8 @@ def off() -> int:
         subprocess.run(["launchctl", "unload", str(_plist_path())], capture_output=True)
         _plist_path().unlink(missing_ok=True)
     elif sys.platform.startswith("win"):
-        subprocess.run(["schtasks", "/Delete", "/F", "/TN", TASK_NAME], capture_output=True)
+        (startup_dir() / STARTUP_FILE).unlink(missing_ok=True)
+        subprocess.run(["schtasks", "/Delete", "/F", "/TN", TASK_NAME], capture_output=True)  # older installs
     else:
         from .autopilot import _current_crontab, _write_crontab
 
