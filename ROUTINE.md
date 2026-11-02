@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v16, 2026-10-29)
+# Agentic Trading Routine — Playbook (v17, 2026-11-02)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from the **"StockSage" Drive folder, file "StockSage Routine
@@ -7,6 +7,12 @@ Playbook.md" — exact folder + exact filename, never a bare title search**
 publishing this file every run. Improving the routine = editing this file;
 the next publish propagates it. The routine states at the top of each run
 which playbook version it loaded, straight from this file's own header.
+
+**What changed in v17 — start the cloud jobs on time.** GitHub runs the
+owner's two cloud jobs (research backup and the watchdog) about five hours
+late on its own schedule. Once a day, on the run that starts between 10:30
+and 11:30 Eastern, start them yourself (see "Housekeeping"). It takes two
+commands and changes nothing else.
 
 **What changed in v16 — notes go through StockSage, not the Drive connector.**
 The Drive connector can create files but cannot change one, so v15's "update
@@ -282,6 +288,19 @@ trades, keep testing both.
   one plain sentence they can judge.
 - Report the memory's headline in one line each run ("my trades so far: 14
   closed, 8 won, +$3.10; aggressive same-day trades are losing").
+
+## Housekeeping (once a day)
+
+On the run that starts between 10:30 and 11:30 Eastern, after trading and
+before the RUN line, run these two commands in your terminal (your working
+directory is the StockSage repository):
+
+    gh api --method POST repos/bramstedtwd-afk/Stock-project/actions/workflows/cloud-research.yml/dispatches -f ref=main
+    gh api --method POST repos/bramstedtwd-afk/Stock-project/actions/workflows/watchdog.yml/dispatches -f ref=main
+
+Each prints nothing on success. If one fails, try it once more, then
+mention the error in that run's RUN line. Never run any other GitHub
+command, and never change, commit or push anything in the repository.
 
 ## Who decides what
 
