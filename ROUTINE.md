@@ -309,7 +309,7 @@ trades, keep testing both.
   records the account's value over time.
 
   Setups: `breakout`, `pullback`, `momentum`, `gap`, `news`, `earnings`,
-  `reversal`, `brain`. Exit reasons: `target`, `stop`, `thesis`, `time`,
+  `reversal`, `brain`, `index` (cash parked in SPY). Exit reasons: `target`, `stop`, `thesis`, `time`,
   `close`, `rotate`, `profit`.
 - The owner reads all of this as "StockSage Trades.txt" in the StockSage
   folder (rebuilt several times a day). Write every `why` for that reader:
