@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v19, 2026-11-02)
+# Agentic Trading Routine — Playbook (v20, 2026-11-02)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from the **"StockSage" Drive folder, file "StockSage Routine
@@ -7,6 +7,12 @@ Playbook.md" — exact folder + exact filename, never a bare title search**
 publishing this file every run. Improving the routine = editing this file;
 the next publish propagates it. The routine states at the top of each run
 which playbook version it loaded, straight from this file's own header.
+
+**What changed in v20 — keep a cash reserve when parking in SPY.** Money
+from selling SPY is not settled until the next business day, so it cannot
+pay for a new buy the same day without a good-faith violation. Park at most
+two thirds of settled cash in SPY and keep the rest ready for same-day
+setups (see "Using the cash", rule 2).
 
 **What changed in v19 — a real news check, and one-word setups.** Every run
 now reads the brief's `news` block and runs a fresh headline check in the
@@ -217,10 +223,14 @@ simply holding the market. Cash sitting still tests nothing. So:
    $10 or more, deploy it into the best 1-3 setups you can find (the brief's
    candidates, your own scans, news and earnings-reaction moves). A setup
    does not need to be perfect; it needs a reason, a stop and a target.
-2. **No setup you like? Buy SPY with it** (tag it `SAFE`, setup `index`).
-   That is the benchmark itself: it keeps the money growing with the market
-   and costs nothing to sell when a real setup appears. Sell SPY to fund a
-   better trade whenever one shows up (tag the sale `rotate`).
+2. **No setup you like? Park up to two thirds of the settled cash in SPY**
+   (tag it `SAFE`, setup `index`) and keep the rest, at least $10, as
+   settled cash for a setup that appears later the same day. SPY is the
+   benchmark itself: it keeps the money growing with the market.
+   **Settlement:** money from selling SPY settles the next business day, so it
+   can fund tomorrow's buys, not today's. To rotate out of SPY into a setup,
+   buy the setup with the reserve today, or sell SPY today and buy tomorrow
+   (tag the sale `rotate`). Never buy with unsettled sale money.
 3. **Holding cash on purpose** is allowed only for a stated, specific reason
    (a sharp selloff still in progress, a market-moving release within the
    hour, money needed for a trade already planned this run), and the RUN line
