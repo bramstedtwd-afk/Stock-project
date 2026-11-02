@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v20, 2026-11-02)
+# Agentic Trading Routine — Playbook (v21, 2026-11-03)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from the **"StockSage" Drive folder, file "StockSage Routine
@@ -7,6 +7,10 @@ Playbook.md" — exact folder + exact filename, never a bare title search**
 publishing this file every run. Improving the routine = editing this file;
 the next publish propagates it. The routine states at the top of each run
 which playbook version it loaded, straight from this file's own header.
+
+**What changed in v21 — rebuild the reserve.** If settled cash is below the
+reserve and the account holds SPY, the first run of the day sells enough SPY
+to restore it (that money is ready the next business day).
 
 **What changed in v20 — keep a cash reserve when parking in SPY.** Money
 from selling SPY is not settled until the next business day, so it cannot
@@ -231,6 +235,10 @@ simply holding the market. Cash sitting still tests nothing. So:
    can fund tomorrow's buys, not today's. To rotate out of SPY into a setup,
    buy the setup with the reserve today, or sell SPY today and buy tomorrow
    (tag the sale `rotate`). Never buy with unsettled sale money.
+   **Rebuild the reserve:** when settled cash plus unsettled sale money is
+   below a third of the account and you hold SPY, the first run of the day
+   sells enough SPY to bring it back to about a third (tag `SAFE`, exit
+   `rotate`, why "rebuild cash reserve").
 3. **Holding cash on purpose** is allowed only for a stated, specific reason
    (a sharp selloff still in progress, a market-moving release within the
    hour, money needed for a trade already planned this run), and the RUN line
