@@ -85,6 +85,24 @@ def _num(value, allow_zero: bool = False) -> float | None:
     return v if (v > 0 or (allow_zero and v == 0)) and math.isfinite(v) else None
 
 
+SETUP_WORDS = ("breakout", "pullback", "momentum", "gap", "news", "earnings", "reversal", "brain", "index",
+               "target", "stop", "thesis", "time", "close", "rotate", "profit")
+
+
+def setup_word(text: str) -> str:
+    """One of the playbook's words, so trips group together: "take profit before
+    the weekend" is `profit`. Unknown phrases keep their first word."""
+    words = re.findall(r"[a-z]+", (text or "").lower())
+    for w in words:
+        if w in SETUP_WORDS:
+            return w
+    for w in words:
+        for known in SETUP_WORDS:
+            if w.startswith(known) or known.startswith(w) and len(w) >= 4:
+                return known
+    return words[0] if words else "unspecified"
+
+
 def parse_tags(text: str) -> list[dict]:
     """Tag lines from the routine's file. Anything malformed is skipped, not guessed."""
     out = []
@@ -101,7 +119,7 @@ def parse_tags(text: str) -> list[dict]:
             qty, price, rest = _num(parts[6]), _num(parts[7]), parts[8:]
         out.append({"at": at, "side": side, "ticker": ticker,
                     "play": play if play in PLAYS else "untagged",
-                    "setup": re.sub(r"[^a-z0-9\-]+", "-", parts[5].lower()).strip("-") or "unspecified",
+                    "setup": setup_word(parts[5]),
                     "qty": qty, "price": price, "note": " | ".join(rest)[:200]})
     return out
 

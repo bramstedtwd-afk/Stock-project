@@ -156,3 +156,32 @@ def test_a_huge_news_day_stays_under_the_push_size_limit():
 def _hour(monkeypatch):
     monkeypatch.delenv("STOCKSAGE_DIGEST_HOUR", raising=False)
     monkeypatch.delenv("STOCKSAGE_ALL_CLEAR", raising=False)
+
+
+def test_brief_news_has_market_and_ticker_headlines_with_ages():
+    from datetime import datetime, timezone
+
+    from stocksage import news as nw
+
+    now = datetime(2026, 11, 2, 18, 0, tzinfo=timezone.utc)
+
+    def fetch(url):
+        stamp = "Mon, 02 Nov 2026 15:00:00 GMT"
+        title = "Stocks rise as Fed holds rates" if "market" in url or "Wall" in url else "Starbucks beats estimates"
+        return (f"<rss><channel><item><title>{title} - Reuters</title><source>Reuters</source>"
+                f"<pubDate>{stamp}</pubDate><link>x</link></item></channel></rss>")
+
+    p = nw.brief_news(["SBUX"], {"SBUX": "Starbucks Corporation"}, fetch=fetch, now=now)
+    assert p["market"][0]["title"] == "Stocks rise as Fed holds rates" and p["market"][0]["hours_ago"] == 3.0
+    assert p["tickers"]["SBUX"][0]["publisher"] == "Reuters"
+    assert "MARKET" in nw.render(p) and "Starbucks beats" in nw.render(p)
+
+
+def test_brief_news_never_raises_without_a_network():
+    from stocksage import news as nw
+
+    def boom(url):
+        raise OSError("offline")
+
+    p = nw.brief_news(["XYZ"], fetch=boom)
+    assert p["market"] == [] and p["tickers"]["XYZ"] == []

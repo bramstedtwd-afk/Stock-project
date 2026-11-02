@@ -169,3 +169,11 @@ def test_a_note_is_checked_before_it_is_stored():
     for bad in ("hello", "TAG | nope | BUY | X | SAFE | x", "RUN | not a time | 1 | 1 | x"):
         with pytest.raises(ValueError):
             jr.append_note(bad, upload=False)
+
+
+def test_free_text_setups_fold_into_the_playbook_words():
+    assert jr.setup_word("take profit before weekend in selloff") == "profit"
+    assert jr.setup_word("Breakout") == "breakout"
+    assert jr.setup_word("stopped out") == "stop"
+    assert jr.setup_word("pullbacks") == "pullback"
+    assert jr.setup_word("vibes") == "vibes" and jr.setup_word("") == "unspecified"

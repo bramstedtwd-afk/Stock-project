@@ -344,9 +344,20 @@ def build_brief(
         except Exception as exc:  # a planning bug must never cost the whole brief
             log.warning("could not build today's actions: %s", exc)
 
+    news_packet = None
+    try:                 # headlines for what the routine holds and might buy: context, never a call
+        from . import news as news_mod
+        from .journal import state_dir
+
+        wanted = list(dict.fromkeys([f["ticker"] for f in focus] + [s.ticker for s in candidates[:top]]))[:12]
+        news_packet = news_mod.brief_news(wanted, news_mod.company_names(wanted, state_dir() / "names.json"))
+    except Exception as exc:
+        log.warning("brief news skipped: %s", exc)
+
     return {
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "actions": packet_actions,
+        "news": news_packet,
         "snapshot_absorbed": snapshot,
         "graded_this_call": graded_now,
         "market_mood": engine.sector_trends(),

@@ -95,7 +95,8 @@ def holding_news(ticker: str, name: str | None, market=None, now: datetime | Non
     """Up to `limit` headlines from the last 7 days about one holding, newest first."""
     now = now or datetime.now(timezone.utc)
     name = clean_name(name or "") or ticker
-    query = f'"{name}" when:7d' if name != ticker else f"{ticker} stock when:7d"
+    business = "(stock OR shares OR earnings OR analyst OR investors OR guidance OR revenue)"
+    query = f'"{name}" {business} when:7d' if name != ticker else f'"{ticker}" stock when:7d'
     items = google_news(query, fetch)
     if market is not None:
         try:
@@ -212,3 +213,76 @@ def push_lines(news: dict[str, list[dict]], now: datetime, seen: set[str], only:
         lines.append(f"{'NEW ' if is_new else ''}{t} ({age(it['published'], now)}): {short(it['title'], 90)}")
         shown.add(hid)
     return lines, shown
+
+
+# --- news for the trading routine (brief packet and a no-install command) ---------------
+
+
+def _fresh(items: list[dict], now: datetime, within: timedelta, limit: int) -> list[dict]:
+    seen, out = set(), []
+    for it in sorted(items, key=lambda x: x["published"], reverse=True):
+        k = _key(it["title"])
+        if not k or k in seen or JUNK.search(it["title"]) or now - it["published"] > within:
+            continue
+        seen.add(k)
+        out.append(it)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def market_news(fetch=None, now: datetime | None = None, limit: int = 6) -> list[dict]:
+    """Today's market-wide headlines: what is moving the whole market."""
+    now = now or datetime.now(timezone.utc)
+    items = []
+    for q in ("stock market today when:1d", "Wall Street stocks Fed economy when:1d"):
+        items += google_news(q, fetch)
+    return _fresh(items, now, DAY, limit)
+
+
+def _compact(items: list[dict], now: datetime) -> list[dict]:
+    return [{"title": short(it["title"], 140), "publisher": it.get("publisher", ""),
+             "hours_ago": round((now - it["published"]).total_seconds() / 3600, 1)} for it in items]
+
+
+def brief_news(tickers: list[str], names: dict[str, str] | None = None, fetch=None,
+               now: datetime | None = None, per: int = 3) -> dict:
+    """{"market": [...], "tickers": {T: [...]}} with each headline's age in hours:
+    the last day first, the week if nothing is that fresh. Never raises."""
+    now = now or datetime.now(timezone.utc)
+    out = {"as_of": now.isoformat(timespec="minutes"), "market": _compact(market_news(fetch, now), now),
+           "tickers": {}}
+    for t in tickers:
+        items = holding_news(t, (names or {}).get(t), now=now, fetch=fetch, limit=per)
+        out["tickers"][t] = _compact(items, now)
+    return out
+
+
+def render(packet: dict) -> str:
+    lines = ["MARKET (last 24h)"]
+    lines += [f"  [{m['hours_ago']:.0f}h] {m['title']} ({m['publisher']})" for m in packet["market"]] or ["  nothing"]
+    for t, items in packet["tickers"].items():
+        lines.append(t)
+        lines += [f"  [{m['hours_ago']:.0f}h] {m['title']} ({m['publisher']})" for m in items] or ["  no news in 7 days"]
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`python -m stocksage.news SBUX JNJ` (optionally NAME=Company): fresh headlines
+    for the market and each ticker, standard library only. Context, never a call."""
+    import sys
+
+    args = list(sys.argv[1:] if argv is None else argv)
+    tickers, names = [], {}
+    for a in args:
+        t, _, name = a.partition("=")
+        if t:
+            tickers.append(t.upper())
+            if name:
+                names[t.upper()] = name
+    print(render(brief_news(tickers, names)))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
