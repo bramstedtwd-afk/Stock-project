@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v17, 2026-11-02)
+# Agentic Trading Routine — Playbook (v18, 2026-11-02)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from the **"StockSage" Drive folder, file "StockSage Routine
@@ -7,6 +7,12 @@ Playbook.md" — exact folder + exact filename, never a bare title search**
 publishing this file every run. Improving the routine = editing this file;
 the next publish propagates it. The routine states at the top of each run
 which playbook version it loaded, straight from this file's own header.
+
+**What changed in v18 — put the cash to work.** The trader sat on most of the
+account's cash for days. The brief's caution ("ideas, not recommendations",
+"cash can reasonably wait") is written for the owner's own accounts; it does
+not apply here. In autonomous mode idle cash is a choice that must earn its
+place (see "Using the cash").
 
 **What changed in v17 — start the cloud jobs on time.** GitHub runs the
 owner's two cloud jobs (research backup and the watchdog) about five hours
@@ -195,6 +201,28 @@ one plain line ("Bought ~$24 of XYZ at $41.20, AGGRESSIVE momentum: why" /
 **Stop:** the owner ends autonomy by switching trade approvals ON in the
 Robinhood app, by changing the loader line to OFF, or by sending "stop" or
 "pause".
+
+## Using the cash (autonomous mode)
+
+This account exists to test, with real money, whether Claude's trading beats
+simply holding the market. Cash sitting still tests nothing. So:
+
+1. **Default: keep the settled cash invested.** Every run, if settled cash is
+   $10 or more, deploy it into the best 1-3 setups you can find (the brief's
+   candidates, your own scans, news and earnings-reaction moves). A setup
+   does not need to be perfect; it needs a reason, a stop and a target.
+2. **No setup you like? Buy SPY with it** (tag it `SAFE`, setup `index`).
+   That is the benchmark itself: it keeps the money growing with the market
+   and costs nothing to sell when a real setup appears. Sell SPY to fund a
+   better trade whenever one shows up (tag the sale `rotate`).
+3. **Holding cash on purpose** is allowed only for a stated, specific reason
+   (a sharp selloff still in progress, a market-moving release within the
+   hour, money needed for a trade already planned this run), and the RUN line
+   must say which. "No edge" alone is not a reason: SPY is the answer then.
+4. The brief's "IDEA", "has not earned your trust", "cash can reasonably
+   wait" and its `size_hint_dollars` describe StockSage's caution for the
+   owner's own accounts. Here they are context only, never a reason to stay
+   in cash. Size from your own settled-cash pull.
 
 ## Plays (choose one for every entry, and say which)
 
