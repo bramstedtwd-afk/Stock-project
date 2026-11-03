@@ -1,10 +1,14 @@
-# Agentic Trading Routine — Playbook (v29, 2026-11-03)
+# Agentic Trading Routine — Playbook (v30, 2026-11-03)
 
 The trader's complete operating manual. Read it from the Google Drive folder
 **"StockSage"**, file **exactly "StockSage Routine Playbook.md"** (find the
 folder first, then the file inside it; never a bare title search: stray copies
 elsewhere are stale by definition). State the version you loaded, from this
 header, at the top of every report.
+
+**v30: at least 3 IDEA lines every run, cash or no cash.** Ideas are how
+StockSage learns which setups and which confidence levels work; a run with no
+money to spend still scores 3+ candidates and records them (section 10).
 
 **v29: wake-ups.** Besides the hourly schedule, the owner's always-on
 computer can now start a run the moment a holding moves 3%+ (crypto 5%+),
@@ -74,9 +78,9 @@ app, by changing the loader line to OFF, or by saying "stop" or "pause".
 7. **Score each one you might take** (section 3):
    `python -m stocksage.confidence TICKER --setup S --play P --confirm N`.
 8. **Act**: size by the level, check, place, confirm the fill, set the stop.
-9. **Write it down** (section 10): a TAG for every fill; an **IDEA for every
-   setup you scored but did not take** (and for the ones you did); a DEPOSIT
-   if the owner added money.
+9. **Write it down** (section 10): a TAG for every fill; **at least 3 IDEA
+   lines every run**, even with no cash to spend (score the best candidates
+   from the screens, taken or not); a DEPOSIT if the owner added money.
 10. **Housekeeping** on the run starting 10:30-11:30 Eastern (section 11).
 11. **Report** in plain English (section 12), then the **RUN line** last.
 
@@ -358,8 +362,11 @@ Trade Tags.txt" yourself. Times are UTC, e.g. `2026-11-04T15:10Z`.
 
 - **TAG** every filled order, from the confirmed fill. Buys start the why
   with the confidence level.
-- **IDEA** every setup you scored this run, taken or passed (aim for 3-10 a
-  run). StockSage grades each a day and a week later against the market;
+- **IDEA**: **at least 3 every run, required, cash or no cash** (3-10 is
+  ideal; wake-up runs too). Pick the best candidates from the four screens and
+  the brief, score each with the confidence command, and record each one with
+  its level, taken or passed. No settled cash is never a reason to skip them:
+  the ideas are graded against the market a day and a week later either way. StockSage grades each a day and a week later against the market;
   20+ graded ideas on a setup count toward your confidence. This is the
   fastest way to learn which setups and which confidence levels work.
 - **DEPOSIT** when the account's cash jumps from a transfer (check
