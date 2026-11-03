@@ -86,7 +86,7 @@ def _num(value, allow_zero: bool = False) -> float | None:
 
 
 SETUP_WORDS = ("breakout", "pullback", "momentum", "gap", "news", "earnings", "reversal", "brain", "index", "inverse",
-               "defensive", "bounce",
+               "defensive", "bounce", "social",
                "target", "stop", "thesis", "time", "close", "rotate", "profit")
 
 

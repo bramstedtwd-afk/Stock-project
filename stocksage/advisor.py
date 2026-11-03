@@ -360,10 +360,20 @@ def build_brief(
     except Exception as exc:
         log.warning("brief news skipped: %s", exc)
 
+    social_packet = None
+    try:                 # the crowd: what is trending and why, Reddit surges, mood, crypto fear/greed
+        from . import social
+
+        held = [f["ticker"] for f in focus] + [s.ticker for s in candidates[:top]]
+        social_packet = social.pulse(held)
+    except Exception as exc:
+        log.warning("social pulse skipped: %s", exc)
+
     return {
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "actions": packet_actions,
         "news": news_packet,
+        "social": social_packet,
         "market": market_snapshot,
         "snapshot_absorbed": snapshot,
         "graded_this_call": graded_now,
