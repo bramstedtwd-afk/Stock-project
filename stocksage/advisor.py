@@ -957,6 +957,31 @@ def publish_brief(
     return {"folder": str(out_dir), "written": written, "candidates": len(packet["candidates"])}
 
 
+PICK_KEYS = ("focus", "candidates", "avoid")
+SCAN_BROKEN_AT = 50          # this many tickers without data: the data source blocked us, not a quiet market
+
+
+def carry_forward_picks(packet: dict, previous: dict | None) -> dict:
+    """A run whose price source was blocked (GitHub's servers get rate-limited by
+    Yahoo) scans nothing and would publish an empty brief over a good one. Keep
+    the last good brief's stock picks, say so, and keep everything fresh that
+    did work (market, news, social, playbook)."""
+    if packet.get("candidates") or (packet.get("scan_errors") or 0) < SCAN_BROKEN_AT:
+        return packet
+    if not previous or not previous.get("candidates"):
+        return packet
+    out = dict(packet)
+    for k in PICK_KEYS:
+        out[k] = previous.get(k, [])
+    from_as_of = (previous.get("carried_over") or {}).get("from") or previous.get("as_of")
+    out["carried_over"] = {
+        "from": from_as_of,
+        "why": (f"price data was blocked for this run ({packet.get('scan_errors')} tickers failed); "
+                "focus, candidates and avoid are from the last good brief. Re-check prices live before acting."),
+    }
+    return out
+
+
 def publish_brief_via_api(
     engine: Engine,
     tickers: list[str] | None = None,
@@ -985,6 +1010,13 @@ def publish_brief_via_api(
         engine, tickers=focus, max_price=max_price, top=top, holdings=holdings,
         buying_power=buying_power, positions=positions,
     )
+    if not packet.get("candidates") and (packet.get("scan_errors") or 0) >= SCAN_BROKEN_AT:
+        try:
+            from .drive_api import BRIEF_NAME, read_drive_text
+
+            packet = carry_forward_picks(packet, json.loads(read_drive_text(BRIEF_NAME) or "null"))
+        except Exception as exc:
+            log.warning("could not read the last brief to keep its picks: %s", exc)
     playbook_text = playbook_for_publishing()
     # Same reasoning as publish_brief: export outside the repo tree so an
     # automated run never leaves the git working directory dirty.

@@ -61,3 +61,18 @@ def test_regime_is_mixed_on_a_dip_inside_an_uptrend():
     sectors = {str(i): {"d5": 0.01 if i < 6 else -0.01} for i in range(11)}
     assert advisor.market_regime(idx, sectors)["label"] == "mixed"
     assert advisor.market_regime({}, {}) == {}
+
+
+def test_a_blocked_scan_keeps_the_last_good_picks_but_fresh_market_context():
+    prev = {"as_of": "2026-11-02T20:00:00+00:00", "candidates": [{"ticker": "AAA"}], "focus": [{"ticker": "MCD"}],
+            "avoid": [{"ticker": "ZZZ"}], "market": {"old": True}}
+    blocked = {"as_of": "2026-11-03T02:00:00+00:00", "candidates": [], "focus": [], "avoid": [],
+               "scan_errors": 100, "market": {"fresh": True}}
+    out = advisor.carry_forward_picks(blocked, prev)
+    assert out["candidates"] == [{"ticker": "AAA"}] and out["focus"] == [{"ticker": "MCD"}]
+    assert out["market"] == {"fresh": True} and out["carried_over"]["from"] == prev["as_of"]
+    again = advisor.carry_forward_picks(dict(blocked), out)
+    assert again["carried_over"]["from"] == prev["as_of"], "a second blocked run still dates the picks honestly"
+    quiet = {**blocked, "scan_errors": 3}
+    assert advisor.carry_forward_picks(quiet, prev) is quiet, "few errors: an empty list is a real answer"
+    assert advisor.carry_forward_picks(blocked, None) is blocked

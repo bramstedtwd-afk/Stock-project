@@ -13,7 +13,9 @@ what is trending on StockTwits and why, Reddit mention surges, the bullish
 /bearish split on each focus ticker, and the crypto Fear & Greed index. Each
 run also pulls it fresh (`python -m stocksage.social TICKERS`). It is read
 as "how big will the move be", never "which way" (see "News check", step 5).
-New setup word: `social`.
+New setup word: `social`. If the brief has `carried_over`, its focus,
+candidates and avoid lists are from an earlier brief (the cloud copy could
+not get prices); re-check every price live before using them.
 
 **What changed in v23 — making money when the market falls.** This is a cash
 account: it cannot short or borrow, but down-moves can still pay. The brief's
