@@ -731,6 +731,9 @@ def append_note(line: str, upload: bool = True) -> str:
     trader's own Drive connector can create files but not edit them). The line
     is checked first: anything that does not parse is refused, not stored."""
     line = " ".join((line or "").split())
+    if re.search(r"/bin/(ba|z)?sh|/usr/bin/", line):
+        raise ValueError("the terminal swallowed a dollar sign (\"$0.82\" became \"/bin/bash.82\"): "
+                         "put the whole line in single quotes, or write amounts without the $ sign")
     kind = line.split("|", 1)[0].strip().upper()
     if kind == "TAG" and not parse_tags(line):
         raise ValueError("not a valid TAG line: TAG | UTC time | BUY or SELL | TICKER | SAFE or AGGRESSIVE | "

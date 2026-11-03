@@ -317,9 +317,11 @@ the account's `rhs_account_number`). It trades 24/7 in small dollar amounts.
 Record every line through StockSage, from your terminal (nothing to install;
 it falls back to plain HTTPS):
 
-    python -m stocksage.journal note "<the line>"
+    python -m stocksage.journal note '<the line>'
 
-It prints `Recorded: ...` or `Not recorded: ...` with the reason (fix the
+**Single quotes, and no `$` sign inside the line** (write "0.82 dollars"):
+inside double quotes the terminal turns `$0.82` into `/bin/bash.82`, which
+corrupted a RUN line on 2026-11-03 and is now refused. It prints `Recorded: ...` or `Not recorded: ...` with the reason (fix the
 line and retry). If it cannot reach Drive, or you have no terminal, append
 the lines to your Drive trading log and say so. Never create "StockSage
 Trade Tags.txt" yourself. Times are UTC, e.g. `2026-11-04T15:10Z`.

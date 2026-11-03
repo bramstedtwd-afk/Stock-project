@@ -271,3 +271,10 @@ def test_the_account_is_compared_with_holding_spy_net_of_deposits_and_taxes_are_
     assert s["tax"]["realized"] == 1.0 and s["tax"]["wash_sale_losses"] == -2.0
     text = jr.render_text(s)
     assert "VS THE MARKET" in text and "TAX 2026" in text and "wash sales" in text
+
+
+def test_a_note_mangled_by_the_shell_is_refused_with_the_fix():
+    import pytest
+
+    with pytest.raises(ValueError, match="single quotes"):
+        jr.append_note("RUN | 2026-11-03T13:40Z | 105.85 | 0.82 | only /bin/bash.82 cash", upload=False)
