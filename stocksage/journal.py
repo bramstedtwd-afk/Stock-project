@@ -119,10 +119,13 @@ def parse_tags(text: str) -> list[dict]:
         rest = parts[6:]
         if len(parts) >= 8 and _num(parts[6]) and _num(parts[7]):
             qty, price, rest = _num(parts[6]), _num(parts[7]), parts[8:]
+        note = " | ".join(rest)[:200]
+        level = re.match(r"\s*\[(HIGH|MEDIUM|LOW|NO)\]", note, re.I)
         out.append({"at": at, "side": side, "ticker": ticker,
                     "play": play if play in PLAYS else "untagged",
                     "setup": setup_word(parts[5]),
-                    "qty": qty, "price": price, "note": " | ".join(rest)[:200]})
+                    "confidence": level.group(1).upper() if level else "unrated",
+                    "qty": qty, "price": price, "note": note})
     return out
 
 
@@ -200,6 +203,7 @@ class Trip:
     vs_spy: float | None
     buy_why: str = ""
     sell_why: str = ""  # return minus SPY's over the same closes; None for same-day trades
+    confidence: str = "unrated"   # the level the trader stated on the buy ([HIGH] / [MEDIUM] / [LOW])
 
 
 def _style(opened: datetime, closed: datetime) -> str:
@@ -233,7 +237,8 @@ def round_trips(fills: list[dict], spy=None, now: datetime | None = None) -> tup
         if f["side"] == "buy":
             lots.setdefault(ticker, []).append({"qty": qty, "price": price, "at": at,
                                                 "play": tag.get("play", "untagged"),
-                                                "setup": tag.get("setup", "untagged"), "note": tag.get("note", "")})
+                                                "setup": tag.get("setup", "untagged"), "note": tag.get("note", ""),
+                                                "confidence": tag.get("confidence", "unrated")})
             continue
         if f["side"] != "sell":
             continue
@@ -249,7 +254,8 @@ def round_trips(fills: list[dict], spy=None, now: datetime | None = None) -> tup
                               hours=round((at - lot["at"]).total_seconds() / 3600, 1), style=_style(lot["at"], at),
                               play=lot["play"], setup=lot["setup"], exit=tag.get("setup", "untagged"),
                               vs_spy=None if spy_ret is None else round(ret - spy_ret, 4),
-                              buy_why=lot["note"], sell_why=tag.get("note", "")))
+                              buy_why=lot["note"], sell_why=tag.get("note", ""),
+                              confidence=lot.get("confidence", "unrated")))
             lot["qty"] -= take
             remaining -= take
             if lot["qty"] <= 1e-9:
@@ -312,7 +318,15 @@ def lessons(summary: dict) -> list[str]:
         return ["No closed trades yet: nothing to learn from. Tag every order so the memory can sort them."]
     out.append(f"{total['trades']} closed trades: {total['wins']} won, {_pct(total['avg_return'])} average, "
                f"${total['pnl']:+.2f} in all. {total['verdict'].capitalize()}.")
-    for name in ("by_asset", "by_play", "by_style", "by_setup", "by_exit"):
+    conf = summary.get("by_confidence") or {}
+    hi, lo = conf.get("HIGH") or {}, conf.get("LOW") or {}
+    if hi.get("trades", 0) >= MIN_TO_JUDGE and lo.get("trades", 0) >= MIN_TO_JUDGE:
+        if (hi.get("avg_return") or 0) <= (lo.get("avg_return") or 0):
+            out.append(f"HIGH-confidence trades ({_pct(hi.get('avg_return'))}) are not beating LOW ones "
+                       f"({_pct(lo.get('avg_return'))}): confidence is not calibrated yet. Size HIGH like MEDIUM.")
+        else:
+            out.append(f"Confidence is calibrated: HIGH {_pct(hi.get('avg_return'))} vs LOW {_pct(lo.get('avg_return'))} a trade.")
+    for name in ("by_asset", "by_confidence", "by_play", "by_style", "by_setup", "by_exit"):
         judged = {k: v for k, v in summary[name].items() if v["trades"] >= MIN_TO_JUDGE}
         if len(judged) < 2:
             continue
@@ -375,6 +389,7 @@ def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | Non
         "account": f"••••{account[-4:]}" if account else "",
         "overall": stats(trips),
         "by_asset": _grouped(trips, lambda t: "crypto" if is_crypto(t.ticker) else "stocks"),
+        "by_confidence": _grouped(trips, lambda t: t.confidence),
         "by_play": _grouped(trips, lambda t: t.play),
         "by_style": _grouped(trips, lambda t: t.style),
         "by_setup": _grouped(trips, lambda t: t.setup),
@@ -418,8 +433,8 @@ def render_text(summary: dict) -> str:
         if t.get("last_note"):
             lines.append(f"  Last run said: {t['last_note']}")
     lines += ["", "LESSONS", *("  " + x for x in summary["lessons"])]
-    for name in ("by_asset", "by_play", "by_style", "by_setup", "by_exit"):
-        if summary.get(name) and (name != "by_asset" or len(summary[name]) > 1):
+    for name in ("by_asset", "by_confidence", "by_play", "by_style", "by_setup", "by_exit"):
+        if summary.get(name) and (name not in ("by_asset", "by_confidence") or len(summary[name]) > 1):
             lines += ["", name.replace("by_", "GRADES BY ").upper()]
             for k, st in summary[name].items():
                 lines.append(f"  {k:<12}{st['trades']:>3} trades, won {st['win_rate'] * 100:.0f}%, "

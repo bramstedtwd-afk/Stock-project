@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v25, 2026-11-03)
+# Agentic Trading Routine — Playbook (v26, 2026-11-03)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from the **"StockSage" Drive folder, file "StockSage Routine
@@ -7,6 +7,18 @@ Playbook.md" — exact folder + exact filename, never a bare title search**
 publishing this file every run. Improving the routine = editing this file;
 the next publish propagates it. The routine states at the top of each run
 which playbook version it loaded, straight from this file's own header.
+
+**What changed in v26 — confidence decides how far to go, and a live wire.**
+The owner asked for no limits on what the trader does when it is confident,
+with confidence defined by how similar situations turned out. Every new
+position now gets a confidence level (HIGH / MEDIUM / LOW / NO) from
+`python -m stocksage.confidence`, and the level, not a fixed cap, sets its
+size (see "Confidence"). Every run also starts with `python -m
+stocksage.live`: today's economic releases with forecasts, who reports
+earnings today and next session, market headlines, listed companies' press
+releases, the Fed, and prediction-market odds on the Fed and the economy.
+The brief adds `evidence` (look-alike history for every scanned stock),
+`live`, and S&P/Nasdaq futures and the 3-month VIX in `market.indexes`.
 
 **What changed in v25 — the crypto test.** The owner approved a crypto
 test in this account (2026-11-03): up to 20% of the account, bitcoin and
@@ -250,6 +262,67 @@ one plain line ("Bought ~$24 of XYZ at $41.20, AGGRESSIVE momentum: why" /
 **Stop:** the owner ends autonomy by switching trade approvals ON in the
 Robinhood app, by changing the loader line to OFF, or by sending "stop" or
 "pause".
+
+## Confidence (decides size and freedom; supersedes the old caps)
+
+**Confidence = how situations like this one actually turned out**, measured,
+never felt. For every new position, before the order:
+
+    python -m stocksage.confidence TICKER --setup pullback --play SAFE --confirm 2
+
+(`--confirm N` = how many of these you see right now: a fresh catalyst, the
+name stronger than its sector/market today, volume well above average.
+Crypto uses the pair: `BTC-USD`.) It reads the brief and the trade memory
+from Drive and adds up the evidence:
+
+| Evidence | Points |
+|---|---|
+| Look-alikes: the 150 most similar past setups (signal fingerprint), measured vs the market after costs over the next week | +3 history backs it (95% floor above zero) / +1 leans right / -1 leans wrong / -3 history says it loses |
+| Your own record on this setup (else this play), 10+ closed trades | +2 working / +1 positive / -1 negative / -3 losing money |
+| Crypto: your crypto record, 10+ trades | same as above |
+| The market agrees (stocks: regime; crypto: bitcoin's trend or extreme fear) | +1 / -1 (-2 for crypto against bitcoin's trend); short-side setups are not marked down in a falling market |
+| 2+ live confirmations | +1 |
+
+**Levels and what each allows** (defaults the owner set; hard rules still apply):
+- **HIGH (4+): no limits.** Size up to all the settled cash, add to a winner,
+  hold through earnings or overnight if the evidence covers it.
+- **MEDIUM (2-3):** up to 25% of the account.
+- **LOW (0-1):** a test position, 5-8% of the account. No evidence is LOW,
+  not a guess dressed up as conviction.
+- **NO (below 0): do not open.** History or your own record says this loses.
+  Selling, trimming and exits are never gated by confidence.
+
+Where older sections of this playbook give caps, counts or sizes (25% cap,
+3-4 slots, $15 floor, daily limits), this section takes precedence. One
+exception: the crypto test's budget (20% of the account, memes 5%) stays
+until crypto has 10 graded trades; the owner set it for the test.
+
+**Say it and tag it.** Report "AAPL: MEDIUM (+3): look-alikes lean right,
+pullback record working, regime mixed". Start every BUY tag's why with the
+level in brackets: `... | 0.5 | 251.20 | [MEDIUM] pullback to the 21-day in an
+uptrend`. The scorecard grades trades by level ("GRADES BY CONFIDENCE"). If
+HIGH trades are not beating LOW ones after 10 of each, the memory says
+"confidence is not calibrated yet": size HIGH like MEDIUM until it is.
+
+## Live wire (every run, first)
+
+    python -m stocksage.live MCD PLD SBUX
+
+(your holdings and candidates; standard library only). It prints:
+- **Your tickers that report earnings** today or next session, before the
+  open or after the close: decide hold-through or sell, and say which.
+- **Economic releases** today and tomorrow with forecast and previous (and
+  the actual once out), plus the big releases later in the week. Avoid
+  opening new positions in the 15 minutes before a High-impact release;
+  after it, a number far from forecast moves the whole market for hours.
+- **Who reports** today and next session, biggest first: their moves drag
+  their sector (Apple moves tech; a bank moves banks).
+- **Prediction-market odds** (real money) on the Fed and the economy. A
+  rate-hike chance climbing is bad for growth stocks and bonds; falling is
+  good. Say the Fed odds in one line each run.
+- **Headlines, listed companies' press releases** (with the ticker) and
+  **Fed releases**: a press release is often the first source of a move.
+Then the "News check" below for your specific names.
 
 ## Using the cash (autonomous mode)
 

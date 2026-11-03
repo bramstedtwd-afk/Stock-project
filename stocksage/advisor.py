@@ -369,6 +369,26 @@ def build_brief(
     except Exception as exc:
         log.warning("social pulse skipped: %s", exc)
 
+    evidence = {}
+    try:                 # look-alike history for every scanned name: the core of the trader's confidence
+        from .analogs import AnalogBook
+
+        book = AnalogBook.load()
+        if book is not None:
+            for t, sug in by_ticker.items():
+                if sug.signals:
+                    evidence[t] = {side: _evidence_dict(book.evidence(sug.signals, side)) for side in ("buy", "sell")}
+    except Exception as exc:
+        log.warning("look-alike evidence skipped: %s", exc)
+
+    live_packet = None
+    try:                 # what is happening now: calendar, earnings, wires, Fed, prediction-market odds
+        from . import live
+
+        live_packet = live.wire([f["ticker"] for f in focus] + [s.ticker for s in candidates[:top]])
+    except Exception as exc:
+        log.warning("live wire skipped: %s", exc)
+
     crypto_packet = None
     try:                 # the crypto test's context: trend gate, fear/greed, funding, memes, measured lessons
         from . import crypto
@@ -383,6 +403,8 @@ def build_brief(
         "news": news_packet,
         "social": social_packet,
         "crypto": crypto_packet,
+        "live": live_packet,
+        "evidence": evidence,
         "market": market_snapshot,
         "snapshot_absorbed": snapshot,
         "graded_this_call": graded_now,
@@ -427,6 +449,7 @@ MARKET_SYMBOLS = {
     "SPY": "S&P 500", "QQQ": "Nasdaq 100", "DIA": "Dow 30", "IWM": "Small caps (Russell 2000)",
     "^VIX": "Fear gauge (VIX)", "^TNX": "10-year Treasury yield", "CL=F": "Crude oil", "GC=F": "Gold",
     "DX-Y.NYB": "US dollar index", "BTC-USD": "Bitcoin",
+    "ES=F": "S&P 500 futures", "NQ=F": "Nasdaq 100 futures", "^VIX3M": "3-month fear gauge (VIX3M)",
 }
 SECTOR_SYMBOLS = {
     "XLK": "Technology", "XLF": "Financials", "XLV": "Healthcare", "XLE": "Energy", "XLI": "Industrials",
@@ -471,6 +494,13 @@ def market_regime(indexes: dict, sectors: dict) -> dict:
     label = "down" if down >= 3 else "up" if up >= 3 else "mixed"
     return {"label": label, "reasons": reasons, "sectors_up_5d": up_sectors,
             "note": "the tape at the last close, not a forecast"}
+
+
+def _evidence_dict(ev) -> dict:
+    """A look-alike Evidence as plain numbers for the brief (confidence.py reads it)."""
+    r = lambda v: None if v is None else round(float(v), 5)  # noqa: E731
+    return {"n": ev.n, "dates": ev.dates, "edge": r(ev.edge), "lower": r(ev.lower),
+            "hit_rate": r(ev.hit_rate), "backed": bool(ev.backed)}
 
 
 def _moves(df) -> dict | None:
@@ -974,12 +1004,18 @@ def carry_forward_picks(packet: dict, previous: dict | None) -> dict:
     """A run whose price source was blocked (GitHub's servers get rate-limited by
     Yahoo) scans nothing and would publish an empty brief over a good one. Keep
     the last good brief's stock picks, say so, and keep everything fresh that
-    did work (market, news, social, playbook)."""
-    if packet.get("candidates") or (packet.get("scan_errors") or 0) < SCAN_BROKEN_AT:
+    did work (market, news, social, playbook). Look-alike evidence is built only
+    on the always-on computer, so a run without it keeps the last one, dated."""
+    if not previous:
         return packet
-    if not previous or not previous.get("candidates"):
-        return packet
-    out = dict(packet)
+    out = packet
+    if not packet.get("evidence") and previous.get("evidence"):
+        out = dict(out)
+        out["evidence"] = previous["evidence"]
+        out["evidence_from"] = previous.get("evidence_from") or previous.get("as_of")
+    if packet.get("candidates") or (packet.get("scan_errors") or 0) < SCAN_BROKEN_AT or not previous.get("candidates"):
+        return out
+    out = dict(out)
     for k in PICK_KEYS:
         out[k] = previous.get(k, [])
     from_as_of = (previous.get("carried_over") or {}).get("from") or previous.get("as_of")
@@ -1019,7 +1055,7 @@ def publish_brief_via_api(
         engine, tickers=focus, max_price=max_price, top=top, holdings=holdings,
         buying_power=buying_power, positions=positions,
     )
-    if not packet.get("candidates") and (packet.get("scan_errors") or 0) >= SCAN_BROKEN_AT:
+    if not packet.get("evidence") or (not packet.get("candidates") and (packet.get("scan_errors") or 0) >= SCAN_BROKEN_AT):
         try:
             from .drive_api import BRIEF_NAME, read_drive_text
 

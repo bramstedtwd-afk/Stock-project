@@ -76,3 +76,14 @@ def test_a_blocked_scan_keeps_the_last_good_picks_but_fresh_market_context():
     quiet = {**blocked, "scan_errors": 3}
     assert advisor.carry_forward_picks(quiet, prev) is quiet, "few errors: an empty list is a real answer"
     assert advisor.carry_forward_picks(blocked, None) is blocked
+
+
+def test_a_run_without_look_alike_history_keeps_the_last_evidence_dated():
+    prev = {"as_of": "2026-11-02T20:00:00+00:00", "candidates": [{"ticker": "AAA"}],
+            "evidence": {"AAA": {"buy": {"edge": 0.01, "backed": True}}}}
+    fresh = {"as_of": "2026-11-03T02:00:00+00:00", "candidates": [{"ticker": "BBB"}], "scan_errors": 0, "evidence": {}}
+    out = advisor.carry_forward_picks(fresh, prev)
+    assert out["evidence"] == prev["evidence"] and out["evidence_from"] == prev["as_of"]
+    assert out["candidates"] == [{"ticker": "BBB"}], "a working scan keeps its own picks"
+    own = {**fresh, "evidence": {"BBB": {}}}
+    assert advisor.carry_forward_picks(own, prev) is own
