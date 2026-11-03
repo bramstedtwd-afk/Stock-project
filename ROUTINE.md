@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v21, 2026-11-03)
+# Agentic Trading Routine — Playbook (v22, 2026-11-03)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from the **"StockSage" Drive folder, file "StockSage Routine
@@ -7,6 +7,14 @@ Playbook.md" — exact folder + exact filename, never a bare title search**
 publishing this file every run. Improving the routine = editing this file;
 the next publish propagates it. The routine states at the top of each run
 which playbook version it loaded, straight from this file's own header.
+
+**What changed in v22 — trading outside market hours, and the whole market
+in view.** Runs that fall before 9:30 or after 4:00 Eastern may trade in the
+extended and overnight sessions under strict rules (see "Outside market
+hours"). The brief now carries `market`: index, volatility, rates, oil, gold,
+dollar and bitcoin moves, every sector ranked by its 5-day move, and unusual
+macro readings; and `news.macro_and_earnings`: this week's economic data,
+Fed and earnings headlines. Read both at the start of every run.
 
 **What changed in v21 — rebuild the reserve.** If settled cash is below the
 reserve and the account holds SPY, the first run of the day sells enough SPY
@@ -312,8 +320,42 @@ trades, keep testing both.
      pre-market highs/lows, spread and liquidity.
   5. Time of day: the first 30 minutes are the wildest, midday is often
      choppy, the last hour moves again.
-- **The last run of the day** decides, for every open trade, whether it
-  stays overnight, and says why.
+- **The last run before the 4:00 PM Eastern close** decides, for every open
+  trade, whether it stays overnight, and says why. A held name that reports
+  earnings after the close gets an explicit decision here.
+- **The brief's `market` block** is the whole market as of the last close:
+  `indexes` (S&P 500, Nasdaq 100, Dow, small caps, VIX, 10-year yield, oil,
+  gold, dollar, bitcoin: last, 1-day, 5-day, 1-month change, distance from
+  the 50-day average), `sectors` ranked by 5-day move with `leaders_5d` and
+  `laggards_5d`, and `macro` (unusual readings in credit, rates, jobs,
+  inflation and similar). Start every run by saying in one line what the
+  market is doing and which sectors lead; favour setups in leading sectors
+  and be slower to buy into laggards.
+
+## Outside market hours (pre-market, after-hours, overnight)
+
+Robinhood sessions (Eastern): pre-market 7:00-9:30 AM, after-hours 4:00-8:00
+PM, and the overnight "24 Hour Market" 8:00 PM-4:00 AM Sunday to Friday night
+for eligible stocks. Rules there, all hard:
+
+1. **Limit orders only**, with `market_hours` set to `extended_hours`
+   (pre-market and after-hours) or `all_day_hours` (overnight). No market
+   or stop orders: they wait for the next regular open.
+2. **Whole shares only.** Fractional and dollar-based orders trade 9:30-4:00
+   only, so a fractional position can NOT be sold outside market hours.
+   Size extended-hours buys in whole shares of names the settled cash can
+   afford.
+3. **Check the session first** with `get_equity_tradability`: extended and
+   overnight trading need `all_day_tradability: tradable`.
+4. **Price it carefully**: spreads are wide and volume thin. Buy with a limit
+   at or just above the ask, sell at or just below the bid, never more than
+   0.5% through the last trade; if the spread is over 1% of the price, do
+   not trade. Re-quote before placing.
+5. **What it is for**: reacting to earnings and big news released outside
+   market hours, and getting in or out before the next open. Not for
+   routine trading: most setups wait for the open.
+6. Settled cash only, as always. Tag these trades like any other and add
+   "after-hours" or "overnight" to the why.
 
 ## Trade memory (StockSage) — read every run, tag every order
 

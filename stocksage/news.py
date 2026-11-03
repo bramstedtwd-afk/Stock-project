@@ -250,8 +250,10 @@ def brief_news(tickers: list[str], names: dict[str, str] | None = None, fetch=No
     """{"market": [...], "tickers": {T: [...]}} with each headline's age in hours:
     the last day first, the week if nothing is that fresh. Never raises."""
     now = now or datetime.now(timezone.utc)
+    macro = _fresh(google_news("economic data this week CPI jobs report Federal Reserve when:3d", fetch)
+                   + google_news("earnings this week stocks to watch when:3d", fetch), now, timedelta(days=3), 6)
     out = {"as_of": now.isoformat(timespec="minutes"), "market": _compact(market_news(fetch, now), now),
-           "tickers": {}}
+           "macro_and_earnings": _compact(macro, now), "tickers": {}}
     for t in tickers:
         items = holding_news(t, (names or {}).get(t), now=now, fetch=fetch, limit=per)
         out["tickers"][t] = _compact(items, now)
@@ -260,7 +262,10 @@ def brief_news(tickers: list[str], names: dict[str, str] | None = None, fetch=No
 
 def render(packet: dict) -> str:
     lines = ["MARKET (last 24h)"]
+    macro = packet.get("macro_and_earnings") or []
     lines += [f"  [{m['hours_ago']:.0f}h] {m['title']} ({m['publisher']})" for m in packet["market"]] or ["  nothing"]
+    lines.append("MACRO AND EARNINGS (last 3 days)")
+    lines += [f"  [{m['hours_ago']:.0f}h] {m['title']} ({m['publisher']})" for m in macro] or ["  nothing"]
     for t, items in packet["tickers"].items():
         lines.append(t)
         lines += [f"  [{m['hours_ago']:.0f}h] {m['title']} ({m['publisher']})" for m in items] or ["  no news in 7 days"]

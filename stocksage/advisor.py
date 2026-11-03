@@ -344,6 +344,12 @@ def build_brief(
         except Exception as exc:  # a planning bug must never cost the whole brief
             log.warning("could not build today's actions: %s", exc)
 
+    market_snapshot = None
+    try:                 # the whole market at a glance: indexes, fear gauge, rates, oil, sectors, macro forces
+        market_snapshot = build_market_snapshot(engine)
+    except Exception as exc:
+        log.warning("market snapshot skipped: %s", exc)
+
     news_packet = None
     try:                 # headlines for what the routine holds and might buy: context, never a call
         from . import news as news_mod
@@ -358,6 +364,7 @@ def build_brief(
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "actions": packet_actions,
         "news": news_packet,
+        "market": market_snapshot,
         "snapshot_absorbed": snapshot,
         "graded_this_call": graded_now,
         "market_mood": engine.sector_trends(),
@@ -395,6 +402,71 @@ def build_brief(
         },
         "scan_errors": len(result.errors),
     }
+
+
+MARKET_SYMBOLS = {
+    "SPY": "S&P 500", "QQQ": "Nasdaq 100", "DIA": "Dow 30", "IWM": "Small caps (Russell 2000)",
+    "^VIX": "Fear gauge (VIX)", "^TNX": "10-year Treasury yield", "CL=F": "Crude oil", "GC=F": "Gold",
+    "DX-Y.NYB": "US dollar index", "BTC-USD": "Bitcoin",
+}
+SECTOR_SYMBOLS = {
+    "XLK": "Technology", "XLF": "Financials", "XLV": "Healthcare", "XLE": "Energy", "XLI": "Industrials",
+    "XLY": "Consumer Discretionary", "XLP": "Consumer Staples", "XLU": "Utilities", "XLRE": "Real Estate",
+    "XLC": "Communication Services", "XLB": "Materials",
+}
+
+
+def _moves(df) -> dict | None:
+    """Last completed close and its 1-day, 5-day and 1-month change, plus where it
+    sits against its 50-day average. None when there is not enough history."""
+    if df is None or len(df) < 22:
+        return None
+    close = df["Close"].dropna()
+    if len(close) < 22:
+        return None
+    last = float(close.iloc[-1])
+    ch = lambda n: round(last / float(close.iloc[-1 - n]) - 1, 4)  # noqa: E731
+    ma50 = float(close.iloc[-50:].mean()) if len(close) >= 50 else None
+    return {"last": round(last, 2), "d1": ch(1), "d5": ch(5), "m1": ch(21),
+            "vs_50d": round(last / ma50 - 1, 4) if ma50 else None, "as_of": str(close.index[-1])[:10]}
+
+
+def build_market_snapshot(engine) -> dict:
+    """The market as of the last completed session, from the same cached price
+    history the scan uses: major indexes, volatility, rates, oil, gold, the dollar,
+    every sector ranked by its 5-day move, and unusual macro readings. Context only."""
+    market = getattr(engine, "market", None)
+    if market is None:
+        return {}
+    try:
+        market.prefetch(list(MARKET_SYMBOLS) + list(SECTOR_SYMBOLS))
+    except Exception:
+        pass
+
+    def read(symbols):
+        out = {}
+        for sym, label in symbols.items():
+            try:
+                m = _moves(market.history(sym))
+            except Exception:
+                m = None
+            if m:
+                out[sym] = {"name": label, **m}
+        return out
+
+    sectors = read(SECTOR_SYMBOLS)
+    ranked = sorted(sectors.items(), key=lambda kv: kv[1]["d5"], reverse=True)
+    drivers = []
+    try:
+        from .today import _driver_lines
+
+        drivers = _driver_lines()
+    except Exception:
+        drivers = []
+    return {"indexes": read(MARKET_SYMBOLS),
+            "sectors": dict(ranked),
+            "leaders_5d": [k for k, _ in ranked[:3]], "laggards_5d": [k for k, _ in ranked[-3:]],
+            "macro": drivers}
 
 
 def ingest_fills(engine: Engine, orders: list[dict], horizon_days: int = 5) -> dict:
