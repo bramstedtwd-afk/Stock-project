@@ -227,6 +227,18 @@ def wire(tickers=(), fetch=None, now: datetime | None = None) -> dict:
     safe("fed", lambda: rss(FED, "Federal Reserve", fetch, now, timedelta(days=3))[:5], [])
     safe("odds", lambda: odds(fetch), [])
     mine = {t.upper() for t in tickers if t}
+    out["company_news"] = []
+    try:                 # ticker-tagged company news (Finnhub), only with its free key
+        from . import finnhub
+
+        if finnhub.key() or fetch is not None:
+            for t in sorted(x for x in mine if not x.endswith("-USD"))[:8]:
+                for item in finnhub.company_news(t, days=1, fetch=fetch)[:3]:
+                    hours = (now - datetime.fromisoformat(item["at"])).total_seconds() / 3600
+                    if hours <= 24:
+                        out["company_news"].append({**item, "hours_ago": round(hours, 1)})
+    except Exception:
+        pass
     out["your_tickers_reporting"] = [dict(e, day=label) for label, key in (("today", "earnings_today"), ("next session", "earnings_next"))
                                      for e in out[key] if e["ticker"] in mine]
     return out
@@ -256,6 +268,9 @@ def render(w: dict) -> str:
         lines += ["", "Prediction-market odds (real money):"]
         for o in w["odds"]:
             lines.append(f"  {o['question']} -> " + ", ".join(f"{t['outcome']} {t['chance']:.0%}" for t in o["top"]))
+    if w.get("company_news"):
+        lines += ["", "Company news on your names (last 24h):"] + [
+            f"  {n['hours_ago']:>4}h  {n['ticker']}: {n['title']} ({n['source']})" for n in w["company_news"]]
     for key, label in (("headlines", "Headlines"), ("press_releases", "Listed companies' press releases (last 6h)"),
                        ("fed", "Federal Reserve (last 3 days)")):
         if w.get(key):

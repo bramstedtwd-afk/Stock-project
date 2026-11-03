@@ -619,6 +619,55 @@ def cmd_alerts(args) -> int:
     return 0
 
 
+def cmd_watch_trader(args) -> int:
+    """Wake the trading routine the moment a holding moves or has news."""
+    from . import watcher
+
+    return watcher.main([args.action])
+
+
+def cmd_keys(args) -> int:
+    """Type in the data keys and the trader's API trigger once; each is tested and saved to .env."""
+    import getpass
+
+    from . import envfile, finnhub, watcher
+    from .data import tiingo_history
+
+    print("Paste each value and press Enter. What you paste stays hidden and is saved only in this")
+    print("computer's .env file. Press Enter on an empty line to keep what is already saved.\n")
+    asks = [("STOCKSAGE_TIINGO_KEY", "Tiingo API token (tiingo.com > Account > API)"),
+            (finnhub.KEY_VAR, "Finnhub API key (finnhub.io > Dashboard)"),
+            (watcher.URL_VAR, "The trading routine's Fire URL (routine > Edit > API trigger)"),
+            (watcher.TOKEN_VAR, "The trading routine's API token (shown once when generated)")]
+    new = {}
+    for var, label in asks:
+        val = (input(f"{label}: ") if var == watcher.URL_VAR else getpass.getpass(f"{label}: ")).strip()
+        if val:
+            new[var] = val.strip().strip('"').strip("'")
+    if new:
+        envfile.save_env(new)
+        os.environ.update(new)
+    print("\nChecking each one:")
+    try:
+        df = tiingo_history("SPY", "1mo")
+        print(f"  Tiingo:  {'works' if df is not None and len(df) else 'no data came back (check the token)'}")
+    except Exception as exc:
+        print(f"  Tiingo:  failed ({type(exc).__name__})")
+    try:
+        q = finnhub.quote("SPY")
+        print(f"  Finnhub: {'works, SPY ' + format(q['price'], ',.2f') if q else 'no data came back (check the key)'}")
+    except Exception as exc:
+        print(f"  Finnhub: failed ({type(exc).__name__}: check the key)")
+    url_ok = os.environ.get(watcher.URL_VAR, "").startswith("https://api.anthropic.com/")
+    token_ok = bool(os.environ.get(watcher.TOKEN_VAR, "").strip())
+    print(f"  Trader wake-up: {'saved' if url_ok and token_ok else 'not complete'}"
+          + ("" if url_ok or not os.environ.get(watcher.URL_VAR) else " (the URL should start https://api.anthropic.com/)"))
+    if url_ok and token_ok:
+        print("  (Not test-fired: a test would start a full trading run. Start the watcher with")
+        print("   .\\start.bat watch-trader install)")
+    return 0
+
+
 def cmd_mobile(args) -> int:
     """The always-on phone page: link, auto-start, off."""
     from . import mobile
@@ -1837,6 +1886,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("action", nargs="?", default="setup", choices=["setup", "test", "off"])
     p.set_defaults(func=cmd_alerts)
+
+    p = sub.add_parser("watch-trader", help="wake the trading routine when a holding moves or has news "
+                       "(install, off, status, once, serve)")
+    p.add_argument("action", nargs="?", default="status", choices=["install", "off", "status", "once", "serve"])
+    p.set_defaults(func=cmd_watch_trader)
+
+    p = sub.add_parser("keys", help="type in the Tiingo/Finnhub keys and the trader's API trigger once; tested and saved")
+    p.set_defaults(func=cmd_keys)
 
     p = sub.add_parser(
         "mobile", help="your phone page: today's sheet, always on, one tap (link, install, off)"
