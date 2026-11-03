@@ -1,10 +1,15 @@
-# Agentic Trading Routine — Playbook (v27, 2026-11-03)
+# Agentic Trading Routine — Playbook (v28, 2026-11-03)
 
 The trader's complete operating manual. Read it from the Google Drive folder
 **"StockSage"**, file **exactly "StockSage Routine Playbook.md"** (find the
 folder first, then the file inside it; never a bare title search: stray copies
 elsewhere are stale by definition). State the version you loaded, from this
 header, at the top of every report.
+
+**v28 adds your Robinhood toolbox** (section 6a): four saved screens of the
+whole market, the live order book, server-side indicators, earnings-surprise
+history, analyst targets, SEC filings and Robinhood's own realized P&L.
+Use them every run; they are faster and wider than anything else you have.
 
 **v27 is the condensed playbook.** Everything from v14-v26 still holds (no
 fixed limits, confidence decides size, crypto test, falling-market plays,
@@ -55,10 +60,11 @@ app, by changing the loader line to OFF, or by saying "stop" or "pause".
    bought still true? Stops and targets set (resting stop orders where
    possible, section 7)? Earnings before the next session: hold through it
    or sell, and say which. Exits are never gated by confidence.
-6. **Find setups.** The brief's `candidates` and `actions`, your own scans
-   (Robinhood scanners, movers, relative volume, news and earnings
-   reactions), the crowd's surges, falling-market plays (section 8), crypto
-   (section 9).
+6. **Find setups.** Run the four saved StockSage screens (section 6a), then
+   the brief's `candidates` and `actions`, news and earnings reactions, the
+   crowd's surges, falling-market plays (section 8), crypto (section 9).
+   Check the finalists with the toolbox: indicators, order book, earnings
+   history, analyst targets.
 7. **Score each one you might take** (section 3):
    `python -m stocksage.confidence TICKER --setup S --play P --confirm N`.
 8. **Act**: size by the level, check, place, confirm the fill, set the stop.
@@ -174,6 +180,45 @@ keep testing both.
 parked in SPY or SGOV), `inverse`, `defensive`, `bounce`, `social`; crypto:
 `trend`, `fear`, `meme`. **Exit words** (one per sell): `target`, `stop`,
 `thesis`, `time`, `close`, `rotate`, `profit`.
+
+## 6a. Your Robinhood toolbox (use it; most of it was never used before v28)
+
+- **Four saved screens of the whole market** (`get_scans`, then `run_scan`
+  with each `scan_id`; they are titled "StockSage 1-4"):
+  1. *Pullbacks in uptrends*: large caps above their 50-day average with RSI
+     35-50 (setup `pullback`).
+  2. *Movers*: liquid stocks up or down 4%+ today (setups `momentum`, `gap`,
+     `news`, `earnings`; find the catalyst before acting).
+  3. *Oversold quality*: large caps with RSI under 30 (setup `bounce`; only
+     with a reason to expect a turn).
+  4. *Momentum leaders*: up 10%+ in a month, RSI 55-75 (setups `momentum`,
+     `breakout`).
+  Score the best 3-5 with the confidence command and write an IDEA for each.
+  Screens are live market data; a ticker outside StockSage's list simply has
+  no look-alike evidence (it scores on the rest). Do not use "relative
+  volume" filters before the close: Robinhood compares today's partial
+  volume with a full day's, so everything looks quiet until late.
+- **`get_equity_technical_indicators`**: RSI, MACD, EMAs, ATR, VWAP,
+  Bollinger, ADX, supertrend for up to 10 symbols in one call (`output:
+  latest`). Use it instead of estimating from charts.
+- **`get_equity_price_book`** (Level 2, live): before entering or exiting,
+  look for walls (unusually large size at one price): a big bid is support,
+  a big ask is resistance. Price limit orders just in front of a wall.
+- **`get_earnings_results`**: the last 8 quarters of expected vs actual EPS.
+  A company that beats every quarter usually needs a big beat to rise; one
+  with misses is fragile into the print.
+- **`get_equity_analyst_ratings`**: price targets and buy/hold/sell counts;
+  a price far above the average target is stretched.
+- **`get_equity_fundamentals` / `get_financials`**: valuation and growth for
+  SAFE holds measured in days or weeks.
+- **`get_sec_filing_index` / `get_sec_filing`**: read the actual 8-K behind a
+  surprise move (deals, guidance, executive exits) instead of a headline.
+- **`get_politician_trades`**: context only, never a reason on its own.
+- **`get_equity_historicals`** (intraday bars) and **`get_index_quotes`**:
+  today's shape and the indexes live.
+- **`get_realized_pnl`** (span `week`, `month`, `ytd`): Robinhood's own
+  profit and loss for this account; compare it with the scorecard when they
+  disagree.
 
 ## 7. Day-trading mechanics
 
