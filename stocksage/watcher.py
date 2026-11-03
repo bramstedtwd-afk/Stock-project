@@ -40,6 +40,7 @@ DAILY_CAP = 10
 NEWS_EVERY = timedelta(minutes=5)
 MEMORY_EVERY = timedelta(minutes=15)
 BETA = "experimental-cc-routine-2026-04-01"
+HEARTBEAT = timedelta(hours=2)
 STARTUP_FILE = "StockSage Watcher.cmd"
 # Funds get general market news all day: a NEWS wake-up is for a company's own news only.
 FUNDS = {"SPY", "VOO", "IVV", "VTI", "QQQ", "DIA", "IWM", "SGOV", "BIL", "SHV", "TLT", "IEF", "GLD", "SLV",
@@ -254,6 +255,38 @@ def message(events: list[str], now: datetime) -> str:
                       "Check these positions first (live quotes and news), then run as usual."])
 
 
+def _utc(now: datetime) -> str:
+    return now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+
+
+def note(line: str, post=None) -> None:
+    """Put the watcher's activity in the trade notes file, where the owner's
+    dashboard and phone report read it. Skipped in tests (post injected) and
+    never fatal: the watcher keeps watching if Drive is unreachable."""
+    if post is not None:
+        return
+    try:
+        from .journal import append_note
+
+        append_note(line[:600])
+    except Exception as exc:
+        log(f"could not record the note in Drive ({type(exc).__name__})")
+
+
+def heartbeat(state: dict, now: datetime, memory: dict, force: bool = False) -> None:
+    """A WATCH line when the watcher starts and every two hours while it watches."""
+    last = state.get("last_heartbeat")
+    if not force and last and now - datetime.fromisoformat(last) < HEARTBEAT:
+        return
+    if not force and not stock_hours(now):
+        return
+    held = ", ".join(h["ticker"] for h in holdings(memory)) or "nothing held"
+    day = now.astimezone(ET).date().isoformat()
+    fires = state.get("fires_today", 0) if state.get("fires_day") == day else 0
+    state["last_heartbeat"] = now.isoformat()
+    note(f"WATCH | {_utc(now)} | {'started, ' if force else ''}watching {held} | {fires} wake-up(s) today")
+
+
 def _post(url: str, token: str, body: dict) -> dict:
     import urllib.request
 
@@ -300,6 +333,7 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
     state["fires_today"] = state.get("fires_today", 0) + 1 if state.get("fires_day") == day else 1
     state.update(fires_day=day, last_fire=now.isoformat(), pending=[])
     log(f"woke the trader: {'; '.join(pending)}")
+    note(f"WAKE | {_utc(now)} | " + "; ".join(pending), post=post)
     return text
 
 
@@ -324,6 +358,7 @@ def run_once(memory_reader=None) -> str | None:
     quote, cq, news = _sources()
     memory = read_memory(state, now, reader=memory_reader)
     sent = tick(state, now, quote=quote, crypto_quote=cq, news=news, memory=memory)
+    heartbeat(state, now, memory, force=state.pop("starting", False))
     save_state(state)
     return sent
 
@@ -338,6 +373,9 @@ def serve() -> int:
         log("not watching: missing " + ", ".join(missing) + ". Run .\\start.bat keys to add them.")
         return 1
     log("watching the trader's positions every minute (close this window to stop)")
+    state = load_state()
+    state["starting"] = True
+    save_state(state)
     while True:
         try:
             run_once()

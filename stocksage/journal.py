@@ -748,8 +748,12 @@ def append_note(line: str, upload: bool = True) -> str:
         raise ValueError("not a valid IDEA line: IDEA | UTC time | BUY or SELL | TICKER | setup | price | [LEVEL] why")
     if kind == "DEPOSIT" and not parse_deposits(line):
         raise ValueError("not a valid DEPOSIT line: DEPOSIT | UTC time | amount (negative for a withdrawal)")
-    if kind not in ("TAG", "RUN", "IDEA", "DEPOSIT"):
-        raise ValueError("a note starts with TAG, RUN, IDEA or DEPOSIT")
+    if kind in ("WAKE", "WATCH"):
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 3 or _ts(parts[1]) is None:
+            raise ValueError(f"not a valid {kind} line: {kind} | UTC time | what happened")
+    if kind not in ("TAG", "RUN", "IDEA", "DEPOSIT", "WAKE", "WATCH"):
+        raise ValueError("a note starts with TAG, RUN, IDEA, DEPOSIT, WAKE or WATCH")
     if not upload:
         return line
     from .drive_api import ensure_folder, get_service, upload_or_update

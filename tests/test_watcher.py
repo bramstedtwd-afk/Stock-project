@@ -183,3 +183,28 @@ def test_funds_never_wake_the_trader_for_news():
 
     events = watcher.check(state, NOW, watcher.holdings(memory), quotes({"SPY": (760.0, 0.002)}), lambda t: None, news)
     assert asked == [] and events == []
+
+
+def test_wakes_and_heartbeats_are_recorded_for_the_dashboard(monkeypatch):
+    from stocksage import journal as jr
+
+    lines = []
+    monkeypatch.setattr(jr, "append_note", lambda line, upload=True: lines.append(line) or line)
+    state = {"fires_day": "2026-11-03", "fires_today": 2}
+    watcher.heartbeat(state, NOW, MEMORY, force=True)
+    watcher.heartbeat(state, NOW + timedelta(minutes=30), MEMORY)
+    watcher.heartbeat(state, NOW + timedelta(hours=2, minutes=1), MEMORY)
+    assert lines[0] == "WATCH | 2026-11-03T16:05Z | started, watching PLD, BTC-USD | 2 wake-up(s) today"
+    assert len(lines) == 2, "one heartbeat every two hours"
+    assert jr.append_note.__call__  # patched
+    watcher.note("WAKE | 2026-11-03T16:05Z | MOVE: PLD -3.4% today")
+    assert lines[-1].startswith("WAKE |")
+
+
+def test_wake_and_watch_lines_are_valid_notes():
+    from stocksage import journal as jr
+
+    assert jr.append_note("WAKE | 2026-11-03T16:05Z | MOVE: PLD -3.4% today", upload=False)
+    assert jr.append_note("WATCH | 2026-11-03T16:05Z | watching PLD | 0 wake-up(s) today", upload=False)
+    with pytest.raises(ValueError):
+        jr.append_note("WAKE | not a time | x", upload=False)
