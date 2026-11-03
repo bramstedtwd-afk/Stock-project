@@ -412,7 +412,11 @@ def parse_ideas(text: str) -> list[dict]:
             continue
         note = " | ".join(parts[6:])[:200]
         level = re.match(r"\s*\[(HIGH|MEDIUM|LOW|NO)\]", note, re.I)
-        out.append({"at": at, "side": side, "ticker": ticker, "setup": setup_word(parts[4]), "price": price,
+        setup = setup_word(parts[4])
+        if any(o["ticker"] == ticker and o["side"] == side and o["setup"] == setup
+               and abs((at - o["at"]).total_seconds()) <= 2 * 3600 for o in out):
+            continue                       # the same idea noted twice counts once
+        out.append({"at": at, "side": side, "ticker": ticker, "setup": setup, "price": price,
                     "confidence": level.group(1).upper() if level else "unrated", "note": note})
     return out
 

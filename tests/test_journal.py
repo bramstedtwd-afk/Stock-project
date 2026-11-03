@@ -278,3 +278,10 @@ def test_a_note_mangled_by_the_shell_is_refused_with_the_fix():
 
     with pytest.raises(ValueError, match="single quotes"):
         jr.append_note("RUN | 2026-11-03T13:40Z | 105.85 | 0.82 | only /bin/bash.82 cash", upload=False)
+
+
+def test_the_same_idea_noted_twice_counts_once():
+    ideas = jr.parse_ideas("IDEA | 2026-11-03T16:38Z | BUY | MSFT | pullback | 515.81 | [LOW] pullback\n"
+                           "IDEA | 2026-11-03T16:45Z | BUY | MSFT | pullback | 515.81 | test --help\n"
+                           "IDEA | 2026-11-03T16:45Z | BUY | MSFT | bounce | 515.81 | different setup")
+    assert [(i["setup"], i["note"]) for i in ideas] == [("pullback", "[LOW] pullback"), ("bounce", "different setup")]
