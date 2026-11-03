@@ -15,6 +15,12 @@ each counted only when there is enough of it:
   4. Live confirmations the trader sees right now (each one an independent
      reason): a fresh catalyst, strength vs its sector/market today, volume
      well above average.
+  5. The trader's graded IDEAS (trades considered, taken or not, checked 5
+     days later): cheaper evidence, used only while the setup has no 10-trade
+     record, and weighted lower.
+
+Brake: once the account is 10% below its highest check-in, new trades are
+LOW size whatever the score, until it recovers. Selling is never braked.
 
 Score -> level -> what the trader may do (defaults, the owner set no hard caps):
   HIGH   (>= 4) : no size limit beyond settled cash; may add to a winner.
@@ -39,6 +45,8 @@ SIZE_GUIDE = {"HIGH": "no limit beyond settled cash; may add to a winner",
               "NO": "do not open (exits are never gated)"}
 SHORT_SIDE_SETUPS = {"inverse", "defensive", "bounce", "fear"}
 MIN_GROUP = 10
+MIN_IDEAS = 20
+BRAKE_AT = -0.10          # account this far below its peak: new trades at LOW size until it recovers
 
 
 def _lookalike_points(ev: dict | None) -> tuple[int, str]:
@@ -69,6 +77,20 @@ def _record_points(group: dict | None, label: str) -> tuple[int, str]:
     return (1 if avg > 0 else -1), desc
 
 
+def _idea_points(group: dict | None, setup: str) -> tuple[int, str]:
+    """Graded ideas (trades considered, taken or not) are cheaper evidence than real
+    trades: they count only when the setup has no 10-trade record, and weigh less."""
+    if not group or group.get("ideas", 0) < MIN_IDEAS:
+        return 0, f"your '{setup}' ideas: {(group or {}).get('ideas', 0)} graded, too few to count"
+    v = group.get("verdict", "")
+    desc = f"your '{setup}' ideas: {group['ideas']} graded, avg {group.get('avg_5d', 0):+.1%} over 5 days, {v}"
+    if v.startswith("working"):
+        return 1, desc
+    if v.startswith("losing"):
+        return -2, desc
+    return 0, desc
+
+
 def score(*, side: str = "buy", setup: str = "", asset: str = "stocks", play: str = "",
           lookalike: dict | None = None, memory: dict | None = None, regime: str | None = None,
           crypto_flags: dict | None = None, confirmations: int = 0) -> dict:
@@ -77,7 +99,12 @@ def score(*, side: str = "buy", setup: str = "", asset: str = "stocks", play: st
     if asset == "stocks":
         parts.append(_lookalike_points(lookalike))
     memory = memory or {}
-    pts, why = _record_points((memory.get("by_setup") or {}).get(setup), f"'{setup}' trades")
+    setup_group = (memory.get("by_setup") or {}).get(setup)
+    pts, why = _record_points(setup_group, f"'{setup}' trades")
+    if pts == 0 and (setup_group or {}).get("trades", 0) < MIN_GROUP:
+        ipts, iwhy = _idea_points(((memory.get("ideas") or {}).get("by_setup") or {}).get(setup), setup)
+        if ipts:
+            pts, why = ipts, iwhy
     if pts == 0 and play:
         pts, why = _record_points((memory.get("by_play") or {}).get(play), f"{play} trades")
     parts.append((pts, why))
@@ -100,8 +127,12 @@ def score(*, side: str = "buy", setup: str = "", asset: str = "stocks", play: st
     parts.append((1 if c >= 2 else 0, f"{c} live confirmation(s) (catalyst / relative strength / volume)"))
     total = sum(p for p, _ in parts)
     level = next((name for name, floor in LEVELS if total >= floor), "NO")
-    return {"level": level, "score": total, "size": SIZE_GUIDE[level],
-            "reasons": [f"{p:+d}  {w}" for p, w in parts]}
+    reasons = [f"{p:+d}  {w}" for p, w in parts]
+    dd = memory.get("drawdown")
+    if side == "buy" and dd is not None and dd <= BRAKE_AT and level in ("HIGH", "MEDIUM"):
+        level = "LOW"
+        reasons.append(f"BRAKE: the account is {dd:.1%} below its peak, so new trades are LOW size until it recovers")
+    return {"level": level, "score": total, "size": SIZE_GUIDE[level], "reasons": reasons}
 
 
 def evidence_for(brief: dict, ticker: str, side: str = "buy") -> dict | None:

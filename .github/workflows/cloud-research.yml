@@ -43,6 +43,8 @@ jobs:
     env:
       STOCKSAGE_DRIVE_TOKEN: ${{ secrets.STOCKSAGE_DRIVE_TOKEN }}
       HEALTHCHECK_URL: ${{ secrets.STOCKSAGE_HEALTHCHECK_URL }}
+      # Optional backup price source (free tiingo.com key): Yahoo blocks GitHub's servers.
+      STOCKSAGE_TIINGO_KEY: ${{ secrets.STOCKSAGE_TIINGO_KEY }}
     steps:
       - uses: actions/checkout@v5
 

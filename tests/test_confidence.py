@@ -75,3 +75,22 @@ def test_the_scorecard_grades_confidence_and_says_when_it_is_not_calibrated():
     assert s["by_confidence"]["HIGH"]["trades"] == 10 and s["by_confidence"]["LOW"]["trades"] == 10
     assert any("not calibrated" in x for x in s["lessons"])
     assert "GRADES BY CONFIDENCE" in jr.render_text(s)
+
+
+def test_graded_ideas_count_when_there_is_no_trade_record_and_weigh_less():
+    ideas = {"by_setup": {"gap": {"ideas": 25, "avg_5d": 0.012, "verdict": "working: keep doing it"}}}
+    r = cf.score(setup="gap", memory={"ideas": ideas})
+    assert r["score"] == 1 and any("ideas" in x for x in r["reasons"])
+    bad = {"by_setup": {"gap": {"ideas": 25, "avg_5d": -0.01, "verdict": "losing money: do less of this"}}}
+    assert cf.score(setup="gap", memory={"ideas": bad})["score"] == -2
+    real = cf.score(setup="gap", memory={"ideas": bad, "by_setup": {"gap": WORKING}})
+    assert real["score"] == 2, "a real 10-trade record outranks ideas"
+
+
+def test_the_drawdown_brake_caps_new_buys_but_never_sells():
+    strong = dict(setup="pullback", lookalike=BACKED, memory={"by_setup": {"pullback": WORKING}, "drawdown": -0.12},
+                  regime="up", confirmations=2)
+    r = cf.score(**strong)
+    assert r["level"] == "LOW" and any("BRAKE" in x for x in r["reasons"])
+    assert cf.score(**{**strong, "memory": {"by_setup": {"pullback": WORKING}, "drawdown": -0.05}})["level"] == "HIGH"
+    assert "BRAKE" not in " ".join(cf.score(**{**strong, "side": "sell"})["reasons"])

@@ -87,3 +87,16 @@ def test_a_run_without_look_alike_history_keeps_the_last_evidence_dated():
     assert out["candidates"] == [{"ticker": "BBB"}], "a working scan keeps its own picks"
     own = {**fresh, "evidence": {"BBB": {}}}
     assert advisor.carry_forward_picks(own, prev) is own
+
+
+def test_attention_tickers_come_from_memory_crowd_and_earnings(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path))
+    (tmp_path / "trade_memory.json").write_text(json.dumps(
+        {"open": [{"ticker": "MCD"}], "recent": [{"ticker": "CMCSA"}, {"ticker": "BTC-USD"}],
+         "ideas": {"recent": [{"ticker": "PLD"}]}}))
+    social = {"stocktwits_trending": [{"ticker": "PLTR", "kind": "Stock"}, {"ticker": "BTC.X", "kind": "Crypto"}],
+              "reddit_surging": ["MU"]}
+    live = {"earnings_today": [{"ticker": "AAPL"}], "earnings_next": [{"ticker": "AMD"}, {"ticker": "MCD"}]}
+    assert advisor._attention_tickers(social, live) == ["MCD", "CMCSA", "PLD", "PLTR", "MU", "AAPL", "AMD"]

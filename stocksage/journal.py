@@ -37,10 +37,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
+
+log = logging.getLogger(__name__)
 
 TAGS_NAME = "StockSage Trade Tags.txt"
 MEMORY_NAME = "StockSage Trade Memory.json"
@@ -151,8 +154,36 @@ def is_crypto(ticker: str) -> bool:
     return str(ticker).upper().endswith("-USD")
 
 
-def crypto_fills(tags: list[dict]) -> list[dict]:
-    return fills_from_tags([t for t in tags if is_crypto(t["ticker"])])
+def crypto_fills(tags: list[dict], broker: list[dict] | None = None, account_id: str = "") -> list[dict]:
+    """Crypto fills for the trade memory. The trader's TAG notes are the base. When
+    the broker's crypto orders are available they correct each note's amount and
+    price (same pair and side within 3 hours, amount within 5%). The broker's list
+    spans EVERY crypto account under the login, so its other orders are used only
+    when `account_id` (STOCKSAGE_AGENTIC_CRYPTO_ID) names the trading account's."""
+    noted = fills_from_tags([t for t in tags if is_crypto(t["ticker"])])
+    if not broker:
+        return noted
+    pool = [b for b in broker if is_crypto(b.get("ticker", ""))]
+    out, used = [], set()
+    for f in noted:
+        at = _ts(f["executed_at"])
+        match = None
+        for b in pool:
+            bt = _ts(b.get("executed_at"))
+            if (b["order_id"] in used or bt is None or at is None or b["ticker"] != f["ticker"] or b["side"] != f["side"]
+                    or abs(bt - at) > MATCH_WINDOW or abs(float(b["quantity"]) - f["quantity"]) > 0.05 * f["quantity"]):
+                continue
+            if match is None or abs(bt - at) < abs(_ts(match["executed_at"]) - at):
+                match = b
+        if match is not None:
+            used.add(match["order_id"])
+            out.append({k: match[k] for k in ("order_id", "ticker", "side", "quantity", "price", "executed_at")})
+        else:
+            out.append(f)
+    if account_id:
+        out += [{k: b[k] for k in ("order_id", "ticker", "side", "quantity", "price", "executed_at")}
+                for b in pool if b["order_id"] not in used and b.get("crypto_account") == account_id]
+    return out
 
 
 def fills_from_tags(tags: list[dict], after: datetime | None = None) -> list[dict]:
@@ -345,20 +376,159 @@ def lessons(summary: dict) -> list[str]:
     return out
 
 
-def confidence(overall: dict) -> dict:
-    """Has the record earned more money? Four plain checks, all required."""
+def confidence(overall: dict, market: dict | None = None) -> dict:
+    """Has the record earned more money? Plain checks, all required."""
     n = overall.get("trades", 0)
     if n < CONFIDENCE_TRADES:
         return {"status": "too early", "line": f"NOT YET: {n} of {CONFIDENCE_TRADES} closed trades. "
                 f"Too few to tell skill from luck; do not add money on this record yet."}
     checks = [("made money overall", overall["pnl"] > 0),
               ("better than luck (verdict 'working')", overall["verdict"].startswith("working")),
-              ("not behind SPY on trades held overnight", overall["avg_vs_spy"] is None or overall["avg_vs_spy"] >= 0)]
+              ("not behind SPY on trades held overnight", overall["avg_vs_spy"] is None or overall["avg_vs_spy"] >= 0),
+              ("the account ahead of simply holding SPY since the first check-in",
+               not market or market.get("ahead") is None or market["ahead"] >= 0)]
     failed = [name for name, ok in checks if not ok]
     if failed:
         return {"status": "not earned", "line": f"NOT EARNED after {n} trades: not yet " + "; ".join(failed) + "."}
     return {"status": "earned", "line": f"EARNED: {n} trades, profitable and better than luck. The record supports "
             "adding money; add in steps and keep watching it."}
+
+
+IDEA_HORIZONS = (1, 5)          # trading days after the idea
+MIN_IDEAS = 20                  # an idea group speaks only with this many graded
+
+
+def parse_ideas(text: str) -> list[dict]:
+    """`IDEA | <UTC time> | BUY or SELL | TICKER | setup | price | [LEVEL] why`: a trade the
+    trader considered (taken or not). Graded later against the market, free evidence."""
+    out = []
+    for raw in (text or "").splitlines():
+        parts = [p.strip() for p in raw.split("|")]
+        if len(parts) < 6 or parts[0].upper() != "IDEA":
+            continue
+        at, side, ticker = _ts(parts[1]), parts[2].lower(), parts[3].upper()
+        price = _num(parts[5])
+        if at is None or side not in ("buy", "sell") or not re.fullmatch(r"[A-Z.\-]{1,10}", ticker) or not price:
+            continue
+        note = " | ".join(parts[6:])[:200]
+        level = re.match(r"\s*\[(HIGH|MEDIUM|LOW|NO)\]", note, re.I)
+        out.append({"at": at, "side": side, "ticker": ticker, "setup": setup_word(parts[4]), "price": price,
+                    "confidence": level.group(1).upper() if level else "unrated", "note": note})
+    return out
+
+
+def grade_ideas(ideas: list[dict], history, spy=None, now: datetime | None = None) -> dict:
+    """Each idea's move over 1 and 5 trading days from its stated price, in the idea's
+    direction and (for stocks) against SPY. `history(ticker)` returns daily closes."""
+    import pandas as pd
+
+    now = now or datetime.now(timezone.utc)
+    graded, cache = [], {}
+    for idea in ideas:
+        t = idea["ticker"]
+        if t not in cache:
+            try:
+                cache[t] = history(t)
+            except Exception:
+                cache[t] = None
+        closes = cache[t]
+        if closes is None or len(closes) == 0:
+            continue
+        day = pd.Timestamp(_et_date(idea["at"]))
+        after = closes.loc[closes.index > day]
+        row = {"ticker": t, "setup": idea["setup"], "confidence": idea["confidence"], "side": idea["side"]}
+        sign = 1 if idea["side"] == "buy" else -1
+        for h in IDEA_HORIZONS:
+            if len(after) < h:
+                break
+            ret = float(after.iloc[h - 1] / idea["price"] - 1)
+            bench = None
+            if spy is not None and not is_crypto(t):
+                s_before, s_after = spy.loc[:day], spy.loc[spy.index > day]
+                if not s_before.empty and len(s_after) >= h:
+                    bench = float(s_after.iloc[h - 1] / s_before.iloc[-1] - 1)
+            row[f"d{h}"] = round(sign * (ret - (bench or 0.0)), 4)
+        if "d1" in row:
+            graded.append(row)
+
+    def group(key):
+        out = {}
+        for k in sorted({g[key] for g in graded}):
+            rows = [g for g in graded if g[key] == k and "d5" in g]
+            if rows:
+                vals = [r["d5"] for r in rows]
+                out[k] = {"ideas": len(rows), "avg_5d": round(sum(vals) / len(vals), 4),
+                          "right": round(sum(v > 0 for v in vals) / len(vals), 2),
+                          "verdict": verdict(vals) if len(vals) >= MIN_IDEAS else
+                          f"too few to judge ({len(vals)} of {MIN_IDEAS} ideas)"}
+        return out
+
+    return {"graded": len(graded), "by_setup": group("setup"), "by_confidence": group("confidence"),
+            "recent": graded[-10:][::-1]}
+
+
+def parse_deposits(text: str) -> list[dict]:
+    """`DEPOSIT | <UTC time> | amount` lines: money the owner added (or withdrew, negative).
+    They keep the account-vs-market comparison honest: a deposit is not a gain."""
+    out = []
+    for raw in (text or "").splitlines():
+        parts = [p.strip() for p in raw.split("|")]
+        if len(parts) < 3 or parts[0].upper() != "DEPOSIT":
+            continue
+        at, amount = _ts(parts[1]), _num(parts[2].replace("$", "").replace(",", ""), allow_zero=False)
+        if at is not None and amount is not None:
+            out.append({"at": at, "amount": amount})
+    return out
+
+
+def vs_market(runs: list[dict], spy=None, deposits: list[dict] | None = None) -> dict | None:
+    """The account since its first check-in against simply holding SPY over the same days.
+    Deposits after the first check-in are taken out, so added money never looks like skill."""
+    eq = [r for r in runs if r.get("equity") is not None]
+    if len(eq) < 2:
+        return None
+    first, last = eq[0], eq[-1]
+    added = sum(d["amount"] for d in deposits or [] if first["at"] < d["at"] <= last["at"])
+    mine = (last["equity"] - added) / first["equity"] - 1 if first["equity"] else None
+    out = {"since": first["at"].isoformat(timespec="minutes"), "account": None if mine is None else round(mine, 4),
+           "deposits": round(added, 2), "spy": None, "ahead": None}
+    if spy is not None and len(spy):
+        import pandas as pd
+
+        a, b = pd.Timestamp(_et_date(first["at"])), pd.Timestamp(_et_date(last["at"]))
+        before_a, before_b = spy.loc[:a], spy.loc[:b]
+        if not before_a.empty and not before_b.empty:
+            out["spy"] = round(float(before_b.iloc[-1] / before_a.iloc[-1] - 1), 4)
+            if mine is not None:
+                out["ahead"] = round(mine - out["spy"], 4)
+    return out
+
+
+def drawdown(runs: list[dict]) -> float | None:
+    """How far the latest account value sits below its highest check-in (0 at a peak)."""
+    eq = [r["equity"] for r in runs if r.get("equity")]
+    return round(eq[-1] / max(eq) - 1, 4) if eq else None
+
+
+def tax_view(trips: list, fills: list[dict], now: datetime) -> dict:
+    """This calendar year's realized gains (all short-term: nothing here is held a
+    year) and possible wash sales: a loss sale with a buy of the same ticker within
+    30 days either side, which defers the loss. An estimate for planning, not advice."""
+    year = now.year
+    closed = [t for t in trips if _ts(t.closed) and _ts(t.closed).year == year]
+    buys = [(f["ticker"].upper(), _ts(f["executed_at"])) for f in fills if f["side"] == "buy" and _ts(f["executed_at"])]
+    wash = []
+    for t in closed:
+        if t.pnl >= 0:
+            continue
+        sold, opened = _ts(t.closed), _ts(t.opened)
+        if any(tk == t.ticker and abs((at - sold).days) <= 30 and abs((at - opened).total_seconds()) > 60
+               for tk, at in buys):
+            wash.append({"ticker": t.ticker, "closed": t.closed, "loss": t.pnl})
+    gains = sum(t.pnl for t in closed if t.pnl > 0)
+    losses = sum(t.pnl for t in closed if t.pnl < 0)
+    return {"year": year, "realized": round(gains + losses, 2), "gains": round(gains, 2), "losses": round(losses, 2),
+            "wash_sale_losses": round(sum(w["loss"] for w in wash), 2), "wash_sales": wash[-10:]}
 
 
 def trader_state(runs: list[dict], now: datetime) -> dict:
@@ -378,7 +548,7 @@ def trader_state(runs: list[dict], now: datetime) -> dict:
 
 def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | None = None,
               account: str = "", runs: list[dict] | None = None, source: str = "robinhood",
-              grades: list[str] | None = None) -> dict:
+              grades: list[str] | None = None, deposits: list[dict] | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     trips, open_lots = round_trips(attach_tags(fills, tags), spy=spy, now=now)
     today = _et_date(now)
@@ -399,11 +569,14 @@ def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | Non
         "open": open_lots,
         "recent": [asdict(t) for t in trips[-15:][::-1]],
         "trader": trader_state(runs or [], now),
+        "vs_market": vs_market(runs or [], spy, deposits),
+        "drawdown": drawdown(runs or []),
+        "tax": tax_view(trips, fills, now),
         "grades": list(grades or []),
         "fills": [{k: f.get(k) for k in ("order_id", "ticker", "side", "quantity", "price", "executed_at")}
                   for f in sorted(fills, key=lambda f: str(f["executed_at"]))],
     }
-    summary["confidence"] = confidence(summary["overall"])
+    summary["confidence"] = confidence(summary["overall"], summary["vs_market"])
     summary["lessons"] = lessons(summary)
     return summary
 
@@ -432,7 +605,28 @@ def render_text(summary: dict) -> str:
                          f"peak ${t['equity_peak']:,.2f}.")
         if t.get("last_note"):
             lines.append(f"  Last run said: {t['last_note']}")
+    m = summary.get("vs_market") or {}
+    if m.get("account") is not None:
+        line = f"  VS THE MARKET: account {m['account']:+.1%} since {_et(m['since'], '%d %b')}"
+        if m.get("spy") is not None:
+            line += f", SPY {m['spy']:+.1%}: {'AHEAD' if m['ahead'] >= 0 else 'BEHIND'} by {abs(m['ahead']):.1%}"
+        if m.get("deposits"):
+            line += f" (deposits of ${m['deposits']:,.2f} taken out)"
+        lines.append(line)
+    if summary.get("drawdown") is not None and summary["drawdown"] <= -0.05:
+        lines.append(f"  DRAWDOWN: {summary['drawdown']:.1%} below the peak"
+                     + ("; brake on: new trades LOW size only until it recovers." if summary["drawdown"] <= -0.10 else "."))
+    tx = summary.get("tax") or {}
+    if tx.get("realized") is not None and (tx.get("gains") or tx.get("losses")):
+        lines.append(f"  TAX {tx['year']}: realized ${tx['realized']:+,.2f} (all short-term)"
+                     + (f"; ${-tx['wash_sale_losses']:,.2f} of losses may be wash sales (deferred)"
+                        if tx.get("wash_sale_losses") else ""))
     lines += ["", "LESSONS", *("  " + x for x in summary["lessons"])]
+    ideas = summary.get("ideas") or {}
+    if ideas.get("graded"):
+        lines += ["", f"IDEAS GRADED (trades considered, 5 days later, vs the market): {ideas['graded']}"]
+        for k, st in list(ideas.get("by_setup", {}).items()) + [(f"[{k}]", v) for k, v in ideas.get("by_confidence", {}).items()]:
+            lines.append(f"  {k:<12}{st['ideas']:>4} ideas, right {st['right'] * 100:.0f}%, avg {_pct(st['avg_5d'])}: {st['verdict']}")
     for name in ("by_asset", "by_confidence", "by_play", "by_style", "by_setup", "by_exit"):
         if summary.get(name) and (name not in ("by_asset", "by_confidence") or len(summary[name]) > 1):
             lines += ["", name.replace("by_", "GRADES BY ").upper()]
@@ -474,6 +668,25 @@ def _spy_closes(engine):
         return None if hist is None else hist["Close"]
     except Exception:
         return None
+
+
+def _with_ideas(summary: dict, engine, tags_text: str) -> dict:
+    """Grade the trader's IDEA lines with the same price source the scan uses."""
+    ideas = parse_ideas(tags_text)
+    if not ideas:
+        summary["ideas"] = {"graded": 0, "by_setup": {}, "by_confidence": {}, "recent": []}
+        return summary
+
+    def closes(t):
+        hist = engine.market.history(t)
+        return None if hist is None else hist["Close"]
+
+    try:
+        summary["ideas"] = grade_ideas(ideas, closes, spy=_spy_closes(engine))
+    except Exception as exc:
+        log.warning("ideas not graded: %s", exc)
+        summary["ideas"] = {"graded": 0, "by_setup": {}, "by_confidence": {}, "recent": []}
+    return summary
 
 
 def state_dir():
@@ -524,8 +737,12 @@ def append_note(line: str, upload: bool = True) -> str:
                          "setup | shares | price | why")
     if kind == "RUN" and not parse_runs(line):
         raise ValueError("not a valid RUN line: RUN | UTC time | account value | cash | what this run did")
-    if kind not in ("TAG", "RUN"):
-        raise ValueError("a note starts with TAG or RUN")
+    if kind == "IDEA" and not parse_ideas(line):
+        raise ValueError("not a valid IDEA line: IDEA | UTC time | BUY or SELL | TICKER | setup | price | [LEVEL] why")
+    if kind == "DEPOSIT" and not parse_deposits(line):
+        raise ValueError("not a valid DEPOSIT line: DEPOSIT | UTC time | amount (negative for a withdrawal)")
+    if kind not in ("TAG", "RUN", "IDEA", "DEPOSIT"):
+        raise ValueError("a note starts with TAG, RUN, IDEA or DEPOSIT")
     if not upload:
         return line
     from .drive_api import ensure_folder, get_service, upload_or_update
@@ -557,7 +774,13 @@ def refresh(engine, client, upload: bool = True, account: str | None = None,
         return None
     if tags_text is None:
         tags_text = _read_drive_tags() if upload else ""
-    fills = list(fills) + crypto_fills(parse_tags(tags_text))
+    broker_crypto = None
+    try:
+        broker_crypto = client.crypto_order_history()
+    except Exception:
+        broker_crypto = None
+    fills = list(fills) + crypto_fills(parse_tags(tags_text), broker_crypto,
+                                       os.environ.get("STOCKSAGE_AGENTIC_CRYPTO_ID", "").strip())
     if grades is None:
         try:
             from .scorekeeping import lines as grade_lines
@@ -566,7 +789,9 @@ def refresh(engine, client, upload: bool = True, account: str | None = None,
         except Exception:
             grades = []
     summary = summarize(fills, parse_tags(tags_text), spy=_spy_closes(engine), account=account,
-                        runs=parse_runs(tags_text), source="robinhood", grades=grades)
+                        runs=parse_runs(tags_text), source="robinhood", grades=grades,
+                        deposits=parse_deposits(tags_text))
+    _with_ideas(summary, engine, tags_text or "")
     _save_and_publish(summary, upload)
     return summary
 
@@ -589,6 +814,8 @@ def refresh_without_broker(engine, upload: bool = True, previous: dict | None = 
         tags_text = _read_drive_tags() if upload else ""
     tags = parse_tags(tags_text)
     confirmed = [f for f in previous.get("fills") or [] if not str(f.get("order_id", "")).startswith("tag-")]
+    crypto_confirmed = [f for f in confirmed if is_crypto(f["ticker"])]
+    confirmed = [f for f in confirmed if not is_crypto(f["ticker"])]
     last = max((_ts(f["executed_at"]) for f in confirmed if _ts(f["executed_at"])), default=None)
     def already_confirmed(f):              # the trader's note can be stamped a few minutes after the fill
         at = _ts(f["executed_at"])
@@ -598,12 +825,19 @@ def refresh_without_broker(engine, upload: bool = True, previous: dict | None = 
                    for c in confirmed)
 
     stock_tags = [t for t in tags if not is_crypto(t["ticker"])]
+    crypto_noted = [f for f in crypto_fills(tags)
+                    if not any(c["ticker"] == f["ticker"] and c["side"] == f["side"] and _ts(c["executed_at"])
+                               and abs(_ts(c["executed_at"]) - _ts(f["executed_at"])) <= MATCH_WINDOW
+                               for c in crypto_confirmed)]
     fills = (confirmed + [f for f in fills_from_tags(stock_tags, after=last) if not already_confirmed(f)]
-             + crypto_fills(tags))
+             + crypto_confirmed + crypto_noted)
     account = (previous.get("account") or "").replace("••••", "")
     summary = summarize(fills, tags, spy=_spy_closes(engine), account=account, runs=parse_runs(tags_text),
-                        source="robinhood" if not fills or len(fills) == len(confirmed) else "robinhood+notes",
+                        deposits=parse_deposits(tags_text),
+                        source="robinhood" if not fills or len(fills) == len(confirmed) + len(crypto_confirmed)
+                        else "robinhood+notes",
                         grades=previous.get("grades"))
+    _with_ideas(summary, engine, tags_text or "")
     _save_and_publish(summary, upload)
     return summary
 

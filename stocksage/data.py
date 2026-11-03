@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -146,6 +147,49 @@ def parse_news_items(raw: list, limit: int) -> list[dict]:
             }
         )
     return [i for i in items if i["title"]]
+
+
+TIINGO_URL = "https://api.tiingo.com/tiingo/daily/{ticker}/prices?startDate={start}&token={key}"
+
+
+def _period_start(period: str, today: date | None = None) -> date:
+    today = today or date.today()
+    m = re.fullmatch(r"(\d+)(y|mo|d)", period or "1y")
+    n, unit = (int(m.group(1)), m.group(2)) if m else (1, "y")
+    days = n * 366 if unit == "y" else n * 31 if unit == "mo" else n
+    return today - timedelta(days=days)
+
+
+def _tiingo_get(url: str) -> str:
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={"Content-Type": "application/json", "User-Agent": "StockSage"})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.read().decode("utf-8")
+
+
+def tiingo_history(ticker: str, period: str = HISTORY_PERIOD, fetch=None) -> pd.DataFrame | None:
+    """Daily adjusted prices from Tiingo, the backup when Yahoo refuses (it blocks
+    GitHub's servers). Only with STOCKSAGE_TIINGO_KEY set (free account at
+    tiingo.com); stocks and ETFs only. The key never appears in logs."""
+    import os
+
+    key = os.environ.get("STOCKSAGE_TIINGO_KEY", "").strip()
+    if not key or not re.fullmatch(r"[A-Za-z.\-]{1,10}", ticker) or ticker.upper().endswith("-USD"):
+        return None
+    url = TIINGO_URL.format(ticker=ticker.replace(".", "-").lower(), start=_period_start(period).isoformat(), key=key)
+    try:
+        rows = json.loads((fetch or _tiingo_get)(url))
+    except Exception as exc:
+        log.warning("backup price source failed for %s: %s", ticker, type(exc).__name__)
+        return None
+    if not isinstance(rows, list) or not rows:
+        return None
+    df = pd.DataFrame({"Open": [r.get("adjOpen") for r in rows], "High": [r.get("adjHigh") for r in rows],
+                       "Low": [r.get("adjLow") for r in rows], "Close": [r.get("adjClose") for r in rows],
+                       "Volume": [r.get("adjVolume") for r in rows]},
+                      index=pd.to_datetime([str(r.get("date"))[:10] for r in rows]))
+    return MarketData._normalize_frame(df)
 
 
 class MarketData:
@@ -382,13 +426,13 @@ class MarketData:
         return df.sort_index()
 
     def _download(self, ticker: str, period: str) -> pd.DataFrame | None:
+        df = None
         try:
             import yfinance as yf
 
             df = yf.Ticker(ticker).history(period=period, interval="1d", auto_adjust=True)
         except Exception as exc:
             log.warning("download failed for %s: %s", ticker, exc)
-            return None
         if df is None or df.empty:
-            return None
+            return tiingo_history(ticker, period)      # backup source, only when a key is set
         return self._normalize_frame(df)

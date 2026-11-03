@@ -461,6 +461,37 @@ class RobinhoodClient:
                 log.warning("skipping malformed order: %s", exc)
         return orders
 
+    def crypto_order_history(self) -> list[dict] | None:
+        """Every filled crypto order under the login (all crypto accounts), with its
+        pair (BTC-USD) and the crypto account id it belongs to. Read-only."""
+        if not self.login():
+            return None
+        import robin_stocks.robinhood as rh
+
+        try:
+            raw = rh.orders.get_all_crypto_orders() or []
+            pairs = {p.get("id"): p.get("symbol", "") for p in (rh.crypto.get_crypto_currency_pairs() or [])}
+        except Exception as exc:
+            log.error("failed to fetch Robinhood crypto orders: %s", exc)
+            return None
+        out = []
+        for o in raw:
+            try:
+                if o.get("state") != "filled":
+                    continue
+                symbol = (pairs.get(o.get("currency_pair_id")) or "").upper()
+                if not symbol:
+                    continue
+                out.append({"order_id": "c-" + str(o["id"]), "ticker": symbol if symbol.endswith("-USD") else symbol + "-USD",
+                            "side": o.get("side", ""),
+                            "quantity": float(o.get("cumulative_quantity") or o.get("quantity") or 0),
+                            "price": float(o.get("average_price") or o.get("price") or 0),
+                            "executed_at": o.get("last_transaction_at") or o.get("updated_at") or "",
+                            "crypto_account": o.get("account_id", "")})
+            except (KeyError, TypeError, ValueError) as exc:
+                log.warning("skipping malformed crypto order: %s", exc)
+        return out
+
     def dividend_history(self) -> list[dict] | None:
         """Every dividend payment, normalized for the brain's mirror."""
         if not self.login():

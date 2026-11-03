@@ -202,3 +202,72 @@ def test_crypto_trades_come_from_notes_and_are_graded_apart_from_stocks(tmp_path
     cloud = jr.refresh_without_broker(Eng(), upload=False, previous=s, tags_text=tags)
     assert cloud["by_asset"]["crypto"]["trades"] == 1, "older crypto notes survive the cloud rebuild, counted once"
     assert cloud["overall"]["trades"] == 2
+
+
+def test_broker_crypto_orders_correct_the_notes_and_never_leak_another_account(tmp_path, monkeypatch):
+    monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path))
+    tags = jr.parse_tags(
+        "TAG | 2026-10-27T14:00Z | BUY | BTC-USD | SAFE | trend | 0.0002 | 70000 | [MEDIUM] uptrend\n"
+        "TAG | 2026-10-29T18:00Z | SELL | BTC-USD | SAFE | target | 0.0002 | 77000 | target")
+    broker = [
+        {"order_id": "c-1", "ticker": "BTC-USD", "side": "buy", "quantity": 0.000201, "price": 70120.0,
+         "executed_at": "2026-10-27T14:02:00Z", "crypto_account": "agentic"},
+        {"order_id": "c-2", "ticker": "ETH-USD", "side": "buy", "quantity": 1.0, "price": 3000.0,
+         "executed_at": "2026-10-28T14:00:00Z", "crypto_account": "personal"},
+        {"order_id": "c-3", "ticker": "SOL-USD", "side": "buy", "quantity": 0.5, "price": 150.0,
+         "executed_at": "2026-10-28T15:00:00Z", "crypto_account": "agentic"}]
+    out = jr.crypto_fills(tags, broker)
+    assert [f["order_id"] for f in out][0] == "c-1" and out[0]["price"] == 70120.0, "broker corrects the note"
+    assert {f["ticker"] for f in out} == {"BTC-USD"}, "without the account id, nothing unnoted is taken"
+    with_id = jr.crypto_fills(tags, broker, account_id="agentic")
+    assert {f["ticker"] for f in with_id} == {"BTC-USD", "SOL-USD"}, "the trading account's own orders, never personal"
+
+    class Client:
+        def order_history(self, account_number=None):
+            return []
+
+        def crypto_order_history(self):
+            return broker
+
+    class Eng:
+        class market:
+            @staticmethod
+            def history(t):
+                return None
+
+    text = ("TAG | 2026-10-27T14:00Z | BUY | BTC-USD | SAFE | trend | 0.0002 | 70000 | [MEDIUM] uptrend\n"
+            "TAG | 2026-10-29T18:00Z | SELL | BTC-USD | SAFE | target | 0.0002 | 77000 | target")
+    s = jr.refresh(Eng(), Client(), upload=False, account="555000111", tags_text=text)
+    again = jr.refresh_without_broker(Eng(), upload=False, previous=s, tags_text=text)
+    assert s["overall"]["trades"] == 1 and again["overall"]["trades"] == 1, "the cloud never double-counts confirmed crypto"
+
+
+def test_ideas_are_graded_against_the_market_and_grouped():
+    days = pd.bdate_range("2026-10-01", periods=20)
+    up = pd.Series([100 + i for i in range(20)], index=days, dtype=float)
+    flat = pd.Series([100.0] * 20, index=days)
+    text = "\n".join([f"IDEA | 2026-10-0{d}T15:00Z | BUY | UPP | pullback | 100 | [HIGH] dip" for d in range(1, 6)]
+                     + ["IDEA | 2026-10-02T15:00Z | SELL | UPP | gap | 100 | fade", "IDEA | bad | BUY | X | y | 1 | z"])
+    ideas = jr.parse_ideas(text)
+    assert len(ideas) == 6 and ideas[0]["confidence"] == "HIGH"
+    g = jr.grade_ideas(ideas, lambda t: up, spy=flat, now=NOW)
+    assert g["graded"] == 6 and g["by_setup"]["pullback"]["right"] == 1.0 and g["by_setup"]["gap"]["avg_5d"] < 0
+    assert g["by_confidence"]["HIGH"]["ideas"] == 5
+    assert jr.append_note("IDEA | 2026-10-29T15:00Z | BUY | AAA | pullback | 10.5 | [LOW] maybe", upload=False)
+    assert jr.append_note("DEPOSIT | 2026-10-29T15:00Z | 100", upload=False)
+
+
+def test_the_account_is_compared_with_holding_spy_net_of_deposits_and_taxes_are_estimated():
+    runs = jr.parse_runs("RUN | 2026-10-26T15:00Z | 100 | 10 | a\nRUN | 2026-10-29T15:00Z | 205 | 10 | b")
+    deps = jr.parse_deposits("DEPOSIT | 2026-10-27T15:00Z | 100\nDEPOSIT | junk | x")
+    spy = pd.Series([100.0, 101.0, 102.0, 103.0], index=pd.bdate_range("2026-10-26", periods=4))
+    m = jr.vs_market(runs, spy, deps)
+    assert m["account"] == 0.05 and m["spy"] == 0.03 and m["ahead"] == 0.02 and m["deposits"] == 100
+    assert jr.drawdown(jr.parse_runs("RUN | 2026-10-26T15:00Z | 100 | 1 | a\nRUN | 2026-10-27T15:00Z | 90 | 1 | b")) == -0.1
+    fills = [fill("1", "AAA", "buy", 1, 10, "2026-10-01T14:00:00Z"), fill("2", "AAA", "sell", 1, 8, "2026-10-05T14:00:00Z"),
+             fill("3", "AAA", "buy", 1, 8, "2026-10-12T14:00:00Z"), fill("4", "BBB", "buy", 1, 10, "2026-10-01T14:00:00Z"),
+             fill("5", "BBB", "sell", 1, 13, "2026-10-05T14:00:00Z")]
+    s = jr.summarize(fills, [], now=NOW, account="555000111", runs=runs, deposits=deps)
+    assert s["tax"]["realized"] == 1.0 and s["tax"]["wash_sale_losses"] == -2.0
+    text = jr.render_text(s)
+    assert "VS THE MARKET" in text and "TAX 2026" in text and "wash sales" in text

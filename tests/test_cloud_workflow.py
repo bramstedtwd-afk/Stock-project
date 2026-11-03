@@ -73,15 +73,16 @@ def test_the_publish_step_never_opens_the_broker():
 
 
 def test_only_the_drive_token_and_an_optional_healthcheck_are_secrets():
+    """Plus an optional market-data key (Tiingo, read-only prices): never a broker one."""
     used = set(re.findall(r"secrets\.([A-Z_]+)", TEXT))
-    assert used == {"STOCKSAGE_DRIVE_TOKEN", "STOCKSAGE_HEALTHCHECK_URL"}
+    assert used == {"STOCKSAGE_DRIVE_TOKEN", "STOCKSAGE_HEALTHCHECK_URL", "STOCKSAGE_TIINGO_KEY"}
 
 
 def test_secrets_are_never_printed():
     for step in STEPS:
         run = step.get("run", "")
         assert "set -x" not in run and "printenv" not in run
-        assert not re.search(r"\becho\b[^\n]*\$\{?STOCKSAGE_DRIVE_TOKEN", run)
+        assert not re.search(r"\becho\b[^\n]*\$\{?STOCKSAGE_(DRIVE_TOKEN|TIINGO_KEY)", run)
         assert not re.search(r"^\s*env\s*$", run, flags=re.M)
 
 

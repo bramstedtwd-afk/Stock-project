@@ -369,18 +369,6 @@ def build_brief(
     except Exception as exc:
         log.warning("social pulse skipped: %s", exc)
 
-    evidence = {}
-    try:                 # look-alike history for every scanned name: the core of the trader's confidence
-        from .analogs import AnalogBook
-
-        book = AnalogBook.load()
-        if book is not None:
-            for t, sug in by_ticker.items():
-                if sug.signals:
-                    evidence[t] = {side: _evidence_dict(book.evidence(sug.signals, side)) for side in ("buy", "sell")}
-    except Exception as exc:
-        log.warning("look-alike evidence skipped: %s", exc)
-
     live_packet = None
     try:                 # what is happening now: calendar, earnings, wires, Fed, prediction-market odds
         from . import live
@@ -388,6 +376,25 @@ def build_brief(
         live_packet = live.wire([f["ticker"] for f in focus] + [s.ticker for s in candidates[:top]])
     except Exception as exc:
         log.warning("live wire skipped: %s", exc)
+
+    evidence = {}
+    try:                 # look-alike history for every scanned name AND what the trader is likely to look at
+        from .analogs import AnalogBook
+
+        book = AnalogBook.load()
+        if book is not None:
+            extra = [t for t in _attention_tickers(social_packet, live_packet) if t not in by_ticker][:EXTRA_EVIDENCE]
+            if extra:
+                try:
+                    more = engine.scan(tickers=extra, portfolio=portfolio, capture_context=False, record=False)
+                    by_ticker.update({x.ticker: x for x in more.suggestions})
+                except Exception as exc:
+                    log.warning("extra evidence scan skipped: %s", exc)
+            for t, sug in by_ticker.items():
+                if sug.signals:
+                    evidence[t] = {side: _evidence_dict(book.evidence(sug.signals, side)) for side in ("buy", "sell")}
+    except Exception as exc:
+        log.warning("look-alike evidence skipped: %s", exc)
 
     crypto_packet = None
     try:                 # the crypto test's context: trend gate, fear/greed, funding, memes, measured lessons
@@ -494,6 +501,34 @@ def market_regime(indexes: dict, sectors: dict) -> dict:
     label = "down" if down >= 3 else "up" if up >= 3 else "mixed"
     return {"label": label, "reasons": reasons, "sectors_up_5d": up_sectors,
             "note": "the tape at the last close, not a forecast"}
+
+
+EXTRA_EVIDENCE = 40
+
+
+def _attention_tickers(social_packet: dict | None, live_packet: dict | None) -> list[str]:
+    """Stocks the trader is likely to look at beyond the scan: what it traded or noted
+    lately (the local trade memory), what the crowd is on, and today's big reporters."""
+    import json
+    import re
+
+    out: list[str] = []
+    try:
+        from .journal import state_dir
+
+        mem = json.loads((state_dir() / "trade_memory.json").read_text(encoding="utf-8"))
+        out += [o.get("ticker", "") for o in mem.get("open") or []]
+        out += [r.get("ticker", "") for r in mem.get("recent") or []]
+        out += [r.get("ticker", "") for r in (mem.get("ideas") or {}).get("recent") or []]
+    except Exception:
+        pass
+    sp = social_packet or {}
+    out += [x.get("ticker", "") for x in sp.get("stocktwits_trending") or [] if x.get("kind", "Stock") in ("Stock", "ETF", "")]
+    out += list(sp.get("reddit_surging") or [])
+    lp = live_packet or {}
+    out += [e.get("ticker", "") for e in (lp.get("earnings_today") or [])[:10] + (lp.get("earnings_next") or [])[:10]]
+    clean = [t.upper() for t in out if t and re.fullmatch(r"[A-Za-z.]{1,6}", t)]
+    return list(dict.fromkeys(clean))
 
 
 def _evidence_dict(ev) -> dict:

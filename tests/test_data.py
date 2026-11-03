@@ -123,3 +123,26 @@ def test_fetch_falls_through_to_calendar_when_frame_is_empty(monkeypatch, tmp_pa
     from datetime import date as _d
 
     assert md._fetch_earnings_date("AAPL", today=_d(2026, 8, 10)) == "2026-10-28"
+
+
+def test_backup_prices_come_from_tiingo_only_with_a_key(monkeypatch):
+    import json as _json
+
+    from stocksage import data as data_mod
+
+    rows = [{"date": f"2026-10-{d:02d}T00:00:00.000Z", "adjOpen": 10.0 + d, "adjHigh": 11.0 + d, "adjLow": 9.0 + d,
+             "adjClose": 10.5 + d, "adjVolume": 1000} for d in range(1, 11)]
+    seen = []
+
+    def fetch(url):
+        seen.append(url)
+        return _json.dumps(rows)
+
+    monkeypatch.delenv("STOCKSAGE_TIINGO_KEY", raising=False)
+    assert data_mod.tiingo_history("AAPL", fetch=fetch) is None and not seen, "no key, no request"
+    monkeypatch.setenv("STOCKSAGE_TIINGO_KEY", "k123")
+    df = data_mod.tiingo_history("BRK.B", fetch=fetch)
+    assert list(df.columns) == ["Open", "High", "Low", "Close", "Volume"] and len(df) == 10 and df["Close"].iloc[-1] == 20.5
+    assert "/brk-b/" in seen[0]
+    assert data_mod.tiingo_history("BTC-USD", fetch=fetch) is None and data_mod.tiingo_history("^VIX", fetch=fetch) is None
+    assert data_mod.tiingo_history("AAPL", fetch=lambda u: (_ for _ in ()).throw(OSError("down"))) is None
