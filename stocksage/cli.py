@@ -1888,8 +1888,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_alerts)
 
     p = sub.add_parser("watch-trader", help="wake the trading routine when a holding moves or has news "
-                       "(install, off, status, once, serve)")
-    p.add_argument("action", nargs="?", default="status", choices=["install", "off", "status", "once", "serve"])
+                       "(install, off, status, once, test, serve)")
+    p.add_argument("action", nargs="?", default="status", choices=["install", "off", "status", "once", "serve", "test"])
     p.set_defaults(func=cmd_watch_trader)
 
     p = sub.add_parser("keys", help="type in the Tiingo/Finnhub keys and the trader's API trigger once; tested and saved")

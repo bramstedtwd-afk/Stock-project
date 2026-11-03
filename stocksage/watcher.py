@@ -353,6 +353,39 @@ def status() -> int:
     print(f"  wake-ups today: {s.get('fires_today', 0) if s.get('fires_day') else 0}; last: {s.get('last_fire') or 'never'}")
     print(f"  starts at sign-in: {'yes' if (startup_dir() / STARTUP_FILE).exists() else 'no'}"
           if sys.platform.startswith("win") else "")
+    try:
+        from .journal import state_dir
+
+        tail = (state_dir() / "watcher.log").read_text(encoding="utf-8").splitlines()[-8:]
+        print("  recent activity:" if tail else "  recent activity: none yet")
+        for line in tail:
+            print("    " + line)
+    except OSError:
+        print("  recent activity: none yet (is the watcher window open?)")
+    return 0
+
+
+def test() -> int:
+    """Fire one wake-up to prove the URL and token work. It starts one real trading run."""
+    from .envfile import load_env
+
+    load_env()
+    now = datetime.now(timezone.utc)
+    text = (f"StockSage watcher TEST, {now.astimezone(ET).strftime('%a %I:%M %p ET')}: the owner is checking that "
+            "wake-ups reach you. No position event. Run as usual and mention 'wake-up test received' in the RUN line.")
+    try:
+        res = fire(text)
+    except Exception as exc:
+        msg = str(exc)
+        if "401" in msg or "403" in msg:
+            msg += " (the token is wrong or was regenerated: run .\\start.bat keys and paste the newest one)"
+        print(f"Wake-up FAILED: {msg}")
+        log(f"test wake-up failed: {msg}")
+        return 1
+    print("Wake-up sent. The trader is starting a run now.")
+    if res.get("claude_code_session_url"):
+        print(f"Watch it here: {res['claude_code_session_url']}")
+    log("test wake-up sent")
     return 0
 
 
@@ -406,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
         sent = run_once()
         print(sent or "Nothing worth waking the trader for right now.")
         return 0
-    return {"serve": serve, "install": install, "off": off, "status": status}.get(action[0], status)()
+    return {"serve": serve, "install": install, "off": off, "status": status, "test": test}.get(action[0], status)()
 
 
 if __name__ == "__main__":

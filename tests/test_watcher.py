@@ -157,3 +157,16 @@ def test_finnhub_parses_quotes_and_news_and_needs_a_key(monkeypatch):
     assert q["price"] == 751.2 and q["day_change"] == -0.0055 and got[0][1] == "k" and "k" not in got[0][0]
     news = finnhub.company_news("SPY", fetch=lambda u, k: fetch(u, k))
     assert len(news) == 1 and news[0]["id"] == "9"
+
+
+def test_the_test_wake_up_reports_a_bad_token_plainly(monkeypatch, capsys):
+    import urllib.error
+
+    def refuse(*a, **k):
+        raise urllib.error.HTTPError("u", 401, "Unauthorized", {}, None)
+
+    monkeypatch.setattr(watcher, "_post", refuse)
+    assert watcher.test() == 1
+    assert "start.bat keys" in capsys.readouterr().out
+    monkeypatch.setattr(watcher, "_post", lambda u, t, b: {"claude_code_session_url": "https://claude.ai/code/s"})
+    assert watcher.test() == 0 and "claude.ai/code/s" in capsys.readouterr().out
