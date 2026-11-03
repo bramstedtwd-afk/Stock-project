@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v24, 2026-11-03)
+# Agentic Trading Routine — Playbook (v25, 2026-11-03)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from the **"StockSage" Drive folder, file "StockSage Routine
@@ -7,6 +7,14 @@ Playbook.md" — exact folder + exact filename, never a bare title search**
 publishing this file every run. Improving the routine = editing this file;
 the next publish propagates it. The routine states at the top of each run
 which playbook version it loaded, straight from this file's own header.
+
+**What changed in v25 — the crypto test.** The owner approved a crypto
+test in this account (2026-11-03): up to 20% of the account, bitcoin and
+ether first, a small meme-coin bucket only when the market allows it, a
+resting stop on every coin. The rules come from StockSage's measurements on
+real coin history (see "Crypto test"); the brief carries `crypto` and each
+run can pull it fresh with `python -m stocksage.crypto`. Crypto trades are
+graded separately (GRADES BY ASSET) and the test stops itself if it loses.
 
 **What changed in v24 — the crowd in view.** The brief carries `social`:
 what is trending on StockTwits and why, Reddit mention surges, the bullish
@@ -440,6 +448,70 @@ reason to bet the account on further declines. The trade memory scores
 `inverse`, `defensive` and `bounce` separately; follow its verdicts once
 each has 10 trades.
 
+## Crypto test (approved by the owner 2026-11-03)
+
+Crypto trades in this same account's crypto side (Robinhood tools
+`get_crypto_positions`, `get_crypto_quotes`, `preview_crypto_order`,
+`place_crypto_order`; they take the account's `rhs_account_number`). It trades
+24/7, in small dollar amounts. Options stay off.
+
+**Every run, when you hold crypto or might buy it:** `python -m stocksage.crypto`
+(standard library only; the brief's `crypto` block is the same, a few hours
+older). It prints four flags, the market, the meme coins and what StockSage
+measured. One line in the report: "Crypto: BTC uptrend yes/no, fear/greed N,
+meme window yes/no, holding ...".
+
+**Budget.** Up to 20% of the account value in crypto in total (default; say
+why if you go over), from settled cash only. Within that, meme coins at most
+5% of the account.
+
+**What to buy, and when** (each rule is a measured result, not folklore):
+1. **BTC-USD and ETH-USD trend trades: only while the flag says that coin is
+   above its 50-day average.** Held that way, both beat simply holding on
+   risk-adjusted terms with smaller crashes, before and after 2021. Exit when it
+   closes back below the 50-day average or the stop hits. Setup `trend`.
+2. **Bounce trades in majors** (BTC, ETH, SOL, XRP, DOGE, LINK, ADA, AVAX,
+   LTC): after a fall of more than 15% in a day or 30% in a week. Majors rose
+   the next day 64% of the time after such a day; the edge was gone within a
+   month. Hold 1-7 days, stop under the low. Setup `bounce`.
+3. **Extreme fear** (Fear & Greed under 20): BTC may be bought even below its
+   50-day average, held up to 30 days with a stop under the recent low.
+   Extreme fear was followed by a higher BTC a month later 59-69% of the time
+   in both halves of 2018-2026. Setup `fear`. (Extreme greed is NOT a signal
+   either way: it flipped between the two halves.)
+4. **Meme coins only when the meme window is open** (BTC in an uptrend AND
+   the most-traded meme coins up over 7 days). They move 1.5-3x bitcoin both
+   ways and nearly all of them end 80-98% below their peak, so: AGGRESSIVE,
+   same day to 3 days, a stop always, only coins in the brief's most-traded
+   list that Robinhood shows as tradable and not halted, never a coin that
+   launched in the last 3 months. Setup `meme`.
+5. **Never**: buy a coin because it jumped 15%+ today, because it just crossed
+   above its 50-day average (both were coin flips afterwards), or because last
+   month's best coins look strong (that lost to holding them all). Social
+   hype is context (see "News check"), never the reason.
+
+**Funding** (from the crypto pull): "longs crowded" means leveraged buyers
+are paying up and a sharp flush is more likely: smaller size, tighter stop.
+"Shorts crowded" in an uptrend raises the odds of a squeeze upward.
+
+**Orders.** Preview, then place with a fresh `ref_id`. Prefer `limit` buys
+at or just above the ask; a market buy can fill up to ~1% worse and a market
+sell up to ~5% worse. **Right after every buy fills, place a resting stop
+order** (`type: stop_loss`, `time_in_force: gtc`) for the whole amount: nobody
+is watching at night or on weekends, and crypto never closes. Move the stop
+up as the trade works; cancel it before selling another way.
+
+**Tags.** The ticker is the pair (`BTC-USD`), "shares" is the coin amount and
+the price is the average fill, e.g.
+`TAG | 2026-11-04T15:10Z | BUY | BTC-USD | SAFE | trend | 0.00026 | 76900 | above 50-day, funding balanced`.
+These lines are the only record of crypto fills StockSage gets, so never skip
+the amount and price. Include crypto at market value in the RUN line's
+account value.
+
+**The test stops itself:** when GRADES BY ASSET shows crypto "losing money:
+do less of this" (10+ closed crypto trades), open no new crypto trades, say
+so in every report, and let the owner decide.
+
 ## Trade memory (StockSage) — read every run, tag every order
 
 - **Read** "StockSage Trade Memory.json" in the StockSage folder (exact name,
@@ -480,7 +552,9 @@ each has 10 trades.
   Setups: `breakout`, `pullback`, `momentum`, `gap`, `news`, `earnings`,
   `reversal`, `brain`, `index` (cash parked in SPY or SGOV), `inverse`
   (inverse fund), `defensive` (defensive leader on a red day), `bounce`,
-  `social` (taken mainly on a trending/surging crowd signal). Exit reasons: `target`, `stop`, `thesis`, `time`,
+  `social` (taken mainly on a trending/surging crowd signal); crypto adds
+  `trend` (BTC/ETH above the 50-day average), `fear` (extreme-fear buy) and
+  `meme` (meme-window trade). Exit reasons: `target`, `stop`, `thesis`, `time`,
   `close`, `rotate`, `profit`.
 - The owner reads all of this as "StockSage Trades.txt" in the StockSage
   folder (rebuilt several times a day). Write every `why` for that reader:

@@ -369,11 +369,20 @@ def build_brief(
     except Exception as exc:
         log.warning("social pulse skipped: %s", exc)
 
+    crypto_packet = None
+    try:                 # the crypto test's context: trend gate, fear/greed, funding, memes, measured lessons
+        from . import crypto
+
+        crypto_packet = crypto.packet()
+    except Exception as exc:
+        log.warning("crypto context skipped: %s", exc)
+
     return {
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "actions": packet_actions,
         "news": news_packet,
         "social": social_packet,
+        "crypto": crypto_packet,
         "market": market_snapshot,
         "snapshot_absorbed": snapshot,
         "graded_this_call": graded_now,

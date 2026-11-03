@@ -177,3 +177,28 @@ def test_free_text_setups_fold_into_the_playbook_words():
     assert jr.setup_word("stopped out") == "stop"
     assert jr.setup_word("pullbacks") == "pullback"
     assert jr.setup_word("vibes") == "vibes" and jr.setup_word("") == "unspecified"
+
+
+def test_crypto_trades_come_from_notes_and_are_graded_apart_from_stocks(tmp_path, monkeypatch):
+    monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path))
+
+    class Client:
+        def order_history(self, account_number=None):
+            return [fill("1", "AAA", "buy", 1, 20, "2026-10-28T14:01:00Z"),
+                    fill("2", "AAA", "sell", 1, 21, "2026-10-29T15:01:00Z")]
+
+    class Eng:
+        class market:
+            @staticmethod
+            def history(t):
+                return None
+
+    tags = ("TAG | 2026-10-27T14:00Z | BUY | BTC-USD | AGGRESSIVE | pullback | 0.0002 | 70000 | dip in uptrend\n"
+            "TAG | 2026-10-29T18:00Z | SELL | BTC-USD | AGGRESSIVE | target | 0.0002 | 77000 | hit the target")
+    assert jr.is_crypto("btc-usd") and not jr.is_crypto("AAA")
+    s = jr.refresh(Eng(), Client(), upload=False, account="555000111", tags_text=tags)
+    assert s["by_asset"]["crypto"]["trades"] == 1 and s["by_asset"]["stocks"]["trades"] == 1
+    assert "GRADES BY ASSET" in jr.render_text(s)
+    cloud = jr.refresh_without_broker(Eng(), upload=False, previous=s, tags_text=tags)
+    assert cloud["by_asset"]["crypto"]["trades"] == 1, "older crypto notes survive the cloud rebuild, counted once"
+    assert cloud["overall"]["trades"] == 2

@@ -87,6 +87,7 @@ def _num(value, allow_zero: bool = False) -> float | None:
 
 SETUP_WORDS = ("breakout", "pullback", "momentum", "gap", "news", "earnings", "reversal", "brain", "index", "inverse",
                "defensive", "bounce", "social",
+               "trend", "fear", "meme",
                "target", "stop", "thesis", "time", "close", "rotate", "profit")
 
 
@@ -139,6 +140,16 @@ def parse_runs(text: str) -> list[dict]:
                     "cash": _num(parts[3], allow_zero=True) if len(parts) > 3 else None,
                     "note": " | ".join(parts[4:])[:200]})
     return sorted(out, key=lambda r: r["at"])
+
+
+def is_crypto(ticker: str) -> bool:
+    """Crypto is tagged as a pair (BTC-USD). Robinhood's stock order history never
+    contains it, so its fills come from the trader's notes (shares and price)."""
+    return str(ticker).upper().endswith("-USD")
+
+
+def crypto_fills(tags: list[dict]) -> list[dict]:
+    return fills_from_tags([t for t in tags if is_crypto(t["ticker"])])
 
 
 def fills_from_tags(tags: list[dict], after: datetime | None = None) -> list[dict]:
@@ -301,7 +312,7 @@ def lessons(summary: dict) -> list[str]:
         return ["No closed trades yet: nothing to learn from. Tag every order so the memory can sort them."]
     out.append(f"{total['trades']} closed trades: {total['wins']} won, {_pct(total['avg_return'])} average, "
                f"${total['pnl']:+.2f} in all. {total['verdict'].capitalize()}.")
-    for name in ("by_play", "by_style", "by_setup", "by_exit"):
+    for name in ("by_asset", "by_play", "by_style", "by_setup", "by_exit"):
         judged = {k: v for k, v in summary[name].items() if v["trades"] >= MIN_TO_JUDGE}
         if len(judged) < 2:
             continue
@@ -363,6 +374,7 @@ def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | Non
         "source": source,
         "account": f"••••{account[-4:]}" if account else "",
         "overall": stats(trips),
+        "by_asset": _grouped(trips, lambda t: "crypto" if is_crypto(t.ticker) else "stocks"),
         "by_play": _grouped(trips, lambda t: t.play),
         "by_style": _grouped(trips, lambda t: t.style),
         "by_setup": _grouped(trips, lambda t: t.setup),
@@ -406,8 +418,8 @@ def render_text(summary: dict) -> str:
         if t.get("last_note"):
             lines.append(f"  Last run said: {t['last_note']}")
     lines += ["", "LESSONS", *("  " + x for x in summary["lessons"])]
-    for name in ("by_play", "by_style", "by_setup", "by_exit"):
-        if summary[name]:
+    for name in ("by_asset", "by_play", "by_style", "by_setup", "by_exit"):
+        if summary.get(name) and (name != "by_asset" or len(summary[name]) > 1):
             lines += ["", name.replace("by_", "GRADES BY ").upper()]
             for k, st in summary[name].items():
                 lines.append(f"  {k:<12}{st['trades']:>3} trades, won {st['win_rate'] * 100:.0f}%, "
@@ -530,6 +542,7 @@ def refresh(engine, client, upload: bool = True, account: str | None = None,
         return None
     if tags_text is None:
         tags_text = _read_drive_tags() if upload else ""
+    fills = list(fills) + crypto_fills(parse_tags(tags_text))
     if grades is None:
         try:
             from .scorekeeping import lines as grade_lines
@@ -569,7 +582,9 @@ def refresh_without_broker(engine, upload: bool = True, previous: dict | None = 
                    and abs(float(c["quantity"]) - f["quantity"]) <= 0.02 * max(f["quantity"], 1e-9)
                    for c in confirmed)
 
-    fills = confirmed + [f for f in fills_from_tags(tags, after=last) if not already_confirmed(f)]
+    stock_tags = [t for t in tags if not is_crypto(t["ticker"])]
+    fills = (confirmed + [f for f in fills_from_tags(stock_tags, after=last) if not already_confirmed(f)]
+             + crypto_fills(tags))
     account = (previous.get("account") or "").replace("••••", "")
     summary = summarize(fills, tags, spy=_spy_closes(engine), account=account, runs=parse_runs(tags_text),
                         source="robinhood" if not fills or len(fills) == len(confirmed) else "robinhood+notes",

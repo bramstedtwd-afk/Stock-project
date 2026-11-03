@@ -831,6 +831,22 @@ def cmd_groups(args) -> int:
     return 0
 
 
+def cmd_cryptolab(args) -> int:
+    """What worked on real coin history: trend filters, chasing, bounces, meme coins, fear/greed."""
+    from . import crypto, cryptolab
+
+    if args.now:
+        print(crypto.render(crypto.packet()))
+        return 0
+    print("Crypto lab: about a dozen major coins and four meme coins (under a minute)...\n")
+    try:
+        print(cryptolab.run())
+    except Exception as exc:
+        print(f"Could not get coin prices: {exc}")
+        return 1
+    return 0
+
+
 def cmd_earnings(args) -> int:
     """Post-earnings drift on S&P 500 companies, industry by industry."""
     from . import earnings, today
@@ -1872,6 +1888,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--draws", type=int, default=2000)
     p.add_argument("--top", type=int, default=15)
     p.set_defaults(func=cmd_groups)
+
+    p = sub.add_parser("cryptolab", help="crypto: what worked on real coin history (--now: today's crypto market)")
+    p.add_argument("--now", action="store_true", help="show today's crypto market and flags instead")
+    p.set_defaults(func=cmd_cryptolab)
 
     p = sub.add_parser("earnings", help="do stocks keep moving after an earnings surprise? (by industry)")
     p.add_argument("--draws", type=int, default=2000)

@@ -205,6 +205,51 @@ t = 1.8 on 1,098 events) but within luck. Research finds the effect mostly in
 small companies, where free prices exist only for survivors, so a small-cap
 test here would be flattered and was not run.
 
+## Crypto: what worked on real coin history (run `.\start.bat cryptolab`; last run 2026-11-03)
+
+For the owner-approved crypto test in the agentic account (playbook v25). Daily
+closes from Yahoo: 13 major coins (BTC/LTC from 2014, most from 2017-2020) and
+four meme coins with clean data (DOGE, WIF, POPCAT, PNUT); SHIB, PEPE, BONK
+and FLOKI are left out because Yahoo rounds their sub-cent prices to zero.
+Costs 0.5% per side. **Every coin here is a survivor** (dead coins are
+missing, which flatters meme coins most), and events in different coins
+cluster on the same days, so real samples are smaller than the counts.
+
+- **Trend filter (the one result that held up):** holding BTC or ETH only
+  while above the 50-day average (signal at the close, earn the next day)
+  beat holding on risk-adjusted terms both before and after 2021 (BTC Sharpe
+  1.52 vs 1.27, then 0.75 vs 0.58; max drop -61% vs -77% after 2021; ETH 0.98
+  vs 0.77, then 0.79 vs 0.63). The 100-day was mixed (BTC better, ETH worse
+  after 2021: 0.54 vs 0.63). **The 20-day failed after 2021** (BTC Sharpe
+  -0.02 vs 0.58), and 8 variants were tried, so this
+  is "smaller crashes for similar return", not a proven edge. Consistent with
+  published work on crypto time-series momentum.
+- **Chasing failed:** after a +15% or +30% day, or a first close above the
+  50-day average, majors were a coin flip over the next 1-30 days. Holding
+  last month's top 3 majors (weekly) grew x2.4 vs x9.4 for holding all of
+  them equally (2021+), with a -91% drop.
+- **Crashes bounce briefly:** after a major fell >15% in a day it rose the next
+  day 64% of the time (median +3.5%, n=272); after a -30% week it rose over the
+  next 7 days 65% of the time (median +5.2%). No edge by 30 days.
+- **Meme coins** move 1.5-2.8x bitcoin (beta since 2024: DOGE 1.5, WIF 2.0,
+  POPCAT 2.4, PNUT 2.8) and every one with clean data sits 81-98% below its
+  peak. New ones jumped in their first year (WIF +1741%, POPCAT +4669%) then
+  lost 63-95%; DOGE is the exception. Their big-day follow-through results
+  (e.g. +20% median a week after a +30% day, n=68) come from the early pumps
+  of coins we only know about because they survived: **not usable**.
+- **Crypto Fear & Greed (2018-2026):** extreme fear (<20) was followed by a
+  higher BTC 30 days later 59% / 69% of the time in the two halves (median
+  +2.4% / +3.8%). Extreme greed flipped sign between halves (+22% then -2%): not a
+  signal.
+- **Weekends are calmer** (BTC Saturday 1.7%/day vs ~3% weekdays) and
+  yesterday's BTC move does not predict altcoins today (correlation ~0).
+
+Policy (playbook v25): BTC/ETH trend trades only above the 50-day average;
+1-7 day bounce trades after crashes; extreme-fear BTC buys; meme coins only
+in a "meme window" (BTC uptrend and memes up over 7 days), at most 5% of the
+account; a resting stop on every coin; never chase a jump. The test stops
+itself if crypto trades grade "losing money" after 10.
+
 ## The owner's goal (2026-10-01)
 
 **Maximum growth: hold the market, manage risk only.** The trend rules are

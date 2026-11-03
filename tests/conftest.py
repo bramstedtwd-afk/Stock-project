@@ -81,3 +81,6 @@ def _no_news_downloads(monkeypatch):
 
     monkeypatch.setattr(news, "_get", offline)
     monkeypatch.setattr(news, "lookup_name", lambda t: "")
+    from stocksage import crypto
+
+    monkeypatch.setattr(crypto, "GECKO_SPACING", 0)    # social/crypto go through news._get; no waiting offline
