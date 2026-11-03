@@ -414,6 +414,44 @@ SECTOR_SYMBOLS = {
     "XLY": "Consumer Discretionary", "XLP": "Consumer Staples", "XLU": "Utilities", "XLRE": "Real Estate",
     "XLC": "Communication Services", "XLB": "Materials",
 }
+# What can still make money in a falling market from a cash account (no shorting,
+# no margin): funds that rise when the index falls, and the usual places money hides.
+HEDGE_SYMBOLS = {
+    "SH": "S&P 500 inverse (1x)", "PSQ": "Nasdaq 100 inverse (1x)", "RWM": "Russell 2000 inverse (1x)",
+    "SDS": "S&P 500 inverse (2x)", "QID": "Nasdaq 100 inverse (2x)",
+    "TLT": "Long Treasury bonds", "GLD": "Gold fund", "SGOV": "T-bills (cash-like)",
+}
+
+
+def market_regime(indexes: dict, sectors: dict) -> dict:
+    """Up, down or mixed, from the S&P 500's trend, its last week, the fear gauge
+    and how many sectors rose. A description of the tape at the last close, not a
+    forecast: StockSage's timing tests found no trend rule that beat holding."""
+    spy, vix = indexes.get("SPY") or {}, indexes.get("^VIX") or {}
+    if not spy:
+        return {}
+    vs50, d5 = spy.get("vs_50d"), spy.get("d5") or 0.0
+    vix_last, vix_d5 = vix.get("last"), vix.get("d5") or 0.0
+    up_sectors = sum(1 for m in sectors.values() if (m.get("d5") or 0) > 0)
+    reasons, down, up = [], 0, 0
+    if vs50 is not None:
+        (reasons.append(f"S&P 500 {abs(vs50):.1%} {'below' if vs50 < 0 else 'above'} its 50-day average"))
+        down += vs50 < 0
+        up += vs50 > 0
+    reasons.append(f"S&P 500 {d5:+.1%} over 5 days")
+    down += d5 < -0.01
+    up += d5 > 0.005
+    if vix_last is not None:
+        reasons.append(f"VIX {vix_last:.1f} ({vix_d5:+.0%} over 5 days)")
+        down += vix_last >= 20 or vix_d5 >= 0.15
+        up += vix_last < 18 and vix_d5 <= 0
+    if sectors:
+        reasons.append(f"{up_sectors} of {len(sectors)} sectors up over 5 days")
+        down += up_sectors <= len(sectors) // 3
+        up += up_sectors >= 2 * len(sectors) // 3
+    label = "down" if down >= 3 else "up" if up >= 3 else "mixed"
+    return {"label": label, "reasons": reasons, "sectors_up_5d": up_sectors,
+            "note": "the tape at the last close, not a forecast"}
 
 
 def _moves(df) -> dict | None:
@@ -434,12 +472,13 @@ def _moves(df) -> dict | None:
 def build_market_snapshot(engine) -> dict:
     """The market as of the last completed session, from the same cached price
     history the scan uses: major indexes, volatility, rates, oil, gold, the dollar,
-    every sector ranked by its 5-day move, and unusual macro readings. Context only."""
+    every sector ranked by its 5-day move, an up/down/mixed regime read, the funds that
+rise in a falling market, and unusual macro readings. Context only."""
     market = getattr(engine, "market", None)
     if market is None:
         return {}
     try:
-        market.prefetch(list(MARKET_SYMBOLS) + list(SECTOR_SYMBOLS))
+        market.prefetch(list(MARKET_SYMBOLS) + list(SECTOR_SYMBOLS) + list(HEDGE_SYMBOLS))
     except Exception:
         pass
 
@@ -463,7 +502,10 @@ def build_market_snapshot(engine) -> dict:
         drivers = _driver_lines()
     except Exception:
         drivers = []
-    return {"indexes": read(MARKET_SYMBOLS),
+    indexes = read(MARKET_SYMBOLS)
+    return {"indexes": indexes,
+            "regime": market_regime(indexes, sectors),
+            "hedges": read(HEDGE_SYMBOLS),
             "sectors": dict(ranked),
             "leaders_5d": [k for k, _ in ranked[:3]], "laggards_5d": [k for k, _ in ranked[-3:]],
             "macro": drivers}

@@ -85,7 +85,8 @@ def _num(value, allow_zero: bool = False) -> float | None:
     return v if (v > 0 or (allow_zero and v == 0)) and math.isfinite(v) else None
 
 
-SETUP_WORDS = ("breakout", "pullback", "momentum", "gap", "news", "earnings", "reversal", "brain", "index",
+SETUP_WORDS = ("breakout", "pullback", "momentum", "gap", "news", "earnings", "reversal", "brain", "index", "inverse",
+               "defensive", "bounce",
                "target", "stop", "thesis", "time", "close", "rotate", "profit")
 
 

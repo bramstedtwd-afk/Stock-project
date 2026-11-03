@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v22, 2026-11-03)
+# Agentic Trading Routine — Playbook (v23, 2026-11-03)
 
 This is the routine's COMPLETE operating manual. The connector routine reads
 it from the **"StockSage" Drive folder, file "StockSage Routine
@@ -7,6 +7,14 @@ Playbook.md" — exact folder + exact filename, never a bare title search**
 publishing this file every run. Improving the routine = editing this file;
 the next publish propagates it. The routine states at the top of each run
 which playbook version it loaded, straight from this file's own header.
+
+**What changed in v23 — making money when the market falls.** This is a cash
+account: it cannot short or borrow, but down-moves can still pay. The brief's
+`market.regime` says whether the tape is up, down or mixed, and
+`market.hedges` prices the funds that rise when stocks fall. See "Falling
+markets" for the plays (inverse funds, defensive leaders, oversold bounces)
+and how parking changes in a down tape. New setup words: `inverse`,
+`defensive`, `bounce`.
 
 **What changed in v22 — trading outside market hours, and the whole market
 in view.** Runs that fall before 9:30 or after 4:00 Eastern may trade in the
@@ -243,6 +251,9 @@ simply holding the market. Cash sitting still tests nothing. So:
    can fund tomorrow's buys, not today's. To rotate out of SPY into a setup,
    buy the setup with the reserve today, or sell SPY today and buy tomorrow
    (tag the sale `rotate`). Never buy with unsettled sale money.
+   **In a down tape** (brief `market.regime.label` is `down` AND SPY is red
+   today), park in `SGOV` (T-bills, tag `SAFE`, setup `index`) instead of
+   SPY; go back to SPY when the regime is no longer `down`.
    **Rebuild the reserve:** when settled cash plus unsettled sale money is
    below a third of the account and you hold SPY, the first run of the day
    sells enough SPY to bring it back to about a third (tag `SAFE`, exit
@@ -330,7 +341,9 @@ trades, keep testing both.
   `laggards_5d`, and `macro` (unusual readings in credit, rates, jobs,
   inflation and similar). Start every run by saying in one line what the
   market is doing and which sectors lead; favour setups in leading sectors
-  and be slower to buy into laggards.
+  and be slower to buy into laggards. `regime` (up / down / mixed, with
+  its reasons) decides which plays are open: in `down`, see "Falling
+  markets"; `hedges` prices the inverse funds, bonds, gold and T-bills.
 
 ## Outside market hours (pre-market, after-hours, overnight)
 
@@ -356,6 +369,50 @@ for eligible stocks. Rules there, all hard:
    routine trading: most setups wait for the open.
 6. Settled cash only, as always. Tag these trades like any other and add
    "after-hours" or "overnight" to the why.
+
+## Falling markets (how a cash account makes money when stocks drop)
+
+A cash account cannot sell short, borrow, or use margin. Four things still
+pay in a falling market, from most to least reliable:
+
+1. **Lose less.** Cutting a long that breaks its stop IS the first profit in
+   a selloff. In a `down` regime, tighten stops on longs and do not add to
+   losers.
+2. **Defensive leaders (`defensive`).** Money leaves tech and growth for
+   healthcare, staples, utilities, energy and bonds. Buy the strongest names
+   or sector funds in the brief's `leaders_5d` that are green on a red day.
+   Normal long trades; SAFE or AGGRESSIVE as usual.
+3. **Inverse funds (`inverse`).** These rise when the index falls; they are
+   ordinary long buys, so settled cash is all they need:
+   - 1x: `SH` (S&P 500), `PSQ` (Nasdaq 100), `RWM` (small caps). SAFE or
+     AGGRESSIVE; hold hours to a few days.
+   - 2x: `SDS`, `QID`. AGGRESSIVE only; same day to two days, because a
+     daily-reset fund loses value in a choppy market even if the index ends
+     flat.
+   - 3x funds (`SPXU`, `SQQQ`): default is do not use; if used, same day only
+     and say why.
+   - **Only with confirmation, never on the regime label alone:** the brief's
+     regime is `down` (or `mixed` with a clear catalyst), AND today SPY or
+     QQQ is below its prior-day low or below VWAP, AND VIX is up on the day.
+   - **Always a stop**: on the inverse fund itself, or exit when SPY reclaims
+     VWAP / the prior-day low. Bear-market rallies are the fastest moves in
+     the market; a confident short-side view is wrong often.
+   - TLT (long bonds) and GLD (gold) sometimes rise when stocks fall on growth
+     fears; treat them as normal setups, not automatic hedges.
+4. **Oversold bounces (`bounce`).** After 3+ red days or a flush to a big
+   level with VIX spiking, quality names snap back hard. AGGRESSIVE, small,
+   same day to two days, stop under the low of the flush.
+
+Options (buying puts) are not part of this playbook: StockSage's options lab
+found no options strategy with a real edge, and puts need an options-approved
+account. If the owner later approves options, it gets its own section.
+
+**Honesty check.** StockSage's own tests found that no trend or timing rule
+beat simply holding the market over the decades tested (STRATEGY.md). So a down
+regime is a reason to trade the short side carefully and quickly, not a
+reason to bet the account on further declines. The trade memory scores
+`inverse`, `defensive` and `bounce` separately; follow its verdicts once
+each has 10 trades.
 
 ## Trade memory (StockSage) — read every run, tag every order
 
@@ -395,7 +452,8 @@ for eligible stocks. Rules there, all hard:
   records the account's value over time.
 
   Setups: `breakout`, `pullback`, `momentum`, `gap`, `news`, `earnings`,
-  `reversal`, `brain`, `index` (cash parked in SPY). Exit reasons: `target`, `stop`, `thesis`, `time`,
+  `reversal`, `brain`, `index` (cash parked in SPY or SGOV), `inverse`
+  (inverse fund), `defensive` (defensive leader on a red day), `bounce`. Exit reasons: `target`, `stop`, `thesis`, `time`,
   `close`, `rotate`, `profit`.
 - The owner reads all of this as "StockSage Trades.txt" in the StockSage
   folder (rebuilt several times a day). Write every `why` for that reader:

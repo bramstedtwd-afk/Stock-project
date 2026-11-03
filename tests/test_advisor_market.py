@@ -44,3 +44,20 @@ def test_snapshot_skips_symbols_without_enough_history():
     eng.market = Short({})
     snap = advisor.build_market_snapshot(eng)
     assert snap["indexes"] == {} and snap["sectors"] == {}
+
+
+def test_regime_reads_a_falling_tape_and_lists_the_down_market_funds():
+    falling = {"SPY": -0.004, "QQQ": -0.006, "^VIX": 0.01, "SH": 0.004,
+               **{s: -0.003 for s in advisor.SECTOR_SYMBOLS}, "XLP": 0.002, "XLU": 0.002}
+    snap = advisor.build_market_snapshot(_Engine(falling))
+    assert snap["regime"]["label"] == "down" and snap["regime"]["sectors_up_5d"] == 2
+    assert snap["hedges"]["SH"]["d5"] > 0 and "SGOV" in snap["hedges"]
+    rising = {"SPY": 0.003, **{s: 0.002 for s in advisor.SECTOR_SYMBOLS}, "^VIX": -0.002}
+    assert advisor.build_market_snapshot(_Engine(rising))["regime"]["label"] == "up"
+
+
+def test_regime_is_mixed_on_a_dip_inside_an_uptrend():
+    idx = {"SPY": {"vs_50d": 0.03, "d5": -0.012}, "^VIX": {"last": 17.0, "d5": 0.05}}
+    sectors = {str(i): {"d5": 0.01 if i < 6 else -0.01} for i in range(11)}
+    assert advisor.market_regime(idx, sectors)["label"] == "mixed"
+    assert advisor.market_regime({}, {}) == {}
