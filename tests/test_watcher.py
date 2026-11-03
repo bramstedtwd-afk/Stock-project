@@ -170,3 +170,16 @@ def test_the_test_wake_up_reports_a_bad_token_plainly(monkeypatch, capsys):
     assert "start.bat keys" in capsys.readouterr().out
     monkeypatch.setattr(watcher, "_post", lambda u, t, b: {"claude_code_session_url": "https://claude.ai/code/s"})
     assert watcher.test() == 0 and "claude.ai/code/s" in capsys.readouterr().out
+
+
+def test_funds_never_wake_the_trader_for_news():
+    state = {"news_seen": []}
+    memory = {"open": [{"ticker": "SPY", "dollars_in": 59.0, "entry": 758.0}]}
+    asked = []
+
+    def news(t):
+        asked.append(t)
+        return [{"id": "x", "ticker": t, "title": "Stocks slip", "source": "X", "at": NOW.isoformat()}]
+
+    events = watcher.check(state, NOW, watcher.holdings(memory), quotes({"SPY": (760.0, 0.002)}), lambda t: None, news)
+    assert asked == [] and events == []

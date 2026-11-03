@@ -7,7 +7,8 @@ when one of these happens to something the trader holds:
   * MOVE    a stock moves 3%+ today (crypto 5%+), and again each further 3%/5%
   * DROP    a position sits 5%+ below what it was bought at (once a day each)
   * MARKET  SPY moves 1.5%+ today (once per direction per day)
-  * NEWS    a new company headline on a holding (Finnhub, every 5 minutes)
+  * NEWS    a new company headline on a holding (Finnhub, every 5 minutes;
+            not for index or sector funds, which get market news all day)
 
 Firing costs a full routine run, so it is rationed: never within the 10 minutes
 before or the 15 after a scheduled run (minute :35 of each hour), at least 20
@@ -40,6 +41,10 @@ NEWS_EVERY = timedelta(minutes=5)
 MEMORY_EVERY = timedelta(minutes=15)
 BETA = "experimental-cc-routine-2026-04-01"
 STARTUP_FILE = "StockSage Watcher.cmd"
+# Funds get general market news all day: a NEWS wake-up is for a company's own news only.
+FUNDS = {"SPY", "VOO", "IVV", "VTI", "QQQ", "DIA", "IWM", "SGOV", "BIL", "SHV", "TLT", "IEF", "GLD", "SLV",
+         "SH", "PSQ", "RWM", "SDS", "QID", "SPXU", "SQQQ", "TQQQ", "SSO", "QLD", "UPRO",
+         "XLK", "XLF", "XLV", "XLE", "XLI", "XLY", "XLP", "XLU", "XLRE", "XLC", "XLB"}
 
 
 def state_path() -> Path:
@@ -225,7 +230,7 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
         first_look = "news_seen" not in state      # the first check only learns what is already out
         seen = set(state.get("news_seen", []))
         for h in held:
-            if is_crypto(h["ticker"]):
+            if is_crypto(h["ticker"]) or h["ticker"] in FUNDS:
                 continue
             try:
                 items = news(h["ticker"])
