@@ -125,6 +125,46 @@ def stated_stop(note: str) -> float | None:
     return float(m.group(1)) if m and float(m.group(1)) > 0 else None
 
 
+TARGET_RE = re.compile(r"\btarget(?:[\s\-]*(?:at|of|near|@|:|=))*\s*(\d+(?:\.\d+)?)", re.I)
+
+
+def stated_target(note: str) -> float | None:
+    """The target a buy's why names ("target 310"), if any."""
+    m = TARGET_RE.search(note or "")
+    return float(m.group(1)) if m and float(m.group(1)) > 0 else None
+
+
+def parse_stops(text: str) -> list[dict]:
+    """`STOP | <UTC time> | TICKER | stop price | target price (optional) | why (optional)`:
+    the trader moved a stop (or set one for a position that had none). Fractional
+    shares cannot carry a resting stop order at Robinhood, so this line is what the
+    watcher uses to wake the trader the minute a stop is touched."""
+    out = []
+    for raw in (text or "").splitlines():
+        parts = [p.strip() for p in raw.split("|")]
+        if len(parts) < 4 or parts[0].upper() != "STOP":
+            continue
+        at, ticker, stop = _ts(parts[1]), parts[2].upper(), _num(parts[3])
+        if at is None or not stop or not re.fullmatch(r"[A-Z.\-]{1,10}", ticker):
+            continue
+        out.append({"at": at, "ticker": ticker, "stop": stop,
+                    "target": _num(parts[4]) if len(parts) > 4 else None,
+                    "note": " | ".join(parts[5:])[:200]})
+    return sorted(out, key=lambda x: x["at"])
+
+
+def apply_stops(open_lots: list[dict], stops: list[dict]) -> list[dict]:
+    """Each open lot takes the latest STOP line for its ticker written after it was bought."""
+    for lot in open_lots:
+        opened = _ts(lot.get("opened"))
+        for st in stops:
+            if st["ticker"] == lot["ticker"] and (opened is None or st["at"] >= opened - timedelta(minutes=5)):
+                lot["stop"] = st["stop"]
+                if st.get("target"):
+                    lot["target"] = st["target"]
+    return open_lots
+
+
 def parse_tags(text: str) -> list[dict]:
     """Tag lines from the routine's file. Anything malformed is skipped, not guessed."""
     out = []
@@ -146,7 +186,8 @@ def parse_tags(text: str) -> list[dict]:
                     "setup": setup_word(parts[5]),
                     "confidence": level.group(1).upper() if level else "unrated",
                     "qty": qty, "price": price, "note": note,
-                    "stop": stated_stop(note) if side == "buy" else None})
+                    "stop": stated_stop(note) if side == "buy" else None,
+                    "target": stated_target(note) if side == "buy" else None})
     return out
 
 
@@ -264,15 +305,46 @@ def _style(opened: datetime, closed: datetime) -> str:
     return "same day" if days == 0 else "1-3 days" if days <= 3 else "4+ days"
 
 
+SPY_KEEP = 300               # trading days of SPY closes carried in the memory for the light path
+
+
 def _spy_arrays(spy):
-    """(dates, closes) as arrays, once per call instead of a pandas slice per trade."""
-    if spy is None or len(spy) == 0:
+    """SPY's daily closes as (dates, closes) lists, sorted. Accepts a pandas Series (the
+    engine), a {"YYYY-MM-DD": close} dict (carried in the memory file, so the trader's
+    light path, with no pandas and no market data, still grades against the market),
+    or an already-converted tuple. Pure Python, so the light path never needs numpy."""
+    if spy is None:
         return None
     if isinstance(spy, tuple):
-        return spy
-    import pandas as pd
+        return spy if spy[0] else None
+    from datetime import date as _date
 
-    return pd.DatetimeIndex(spy.index).values, spy.to_numpy(dtype=float)
+    if isinstance(spy, dict):
+        items = []
+        for k, v in spy.items():
+            try:
+                items.append((_date.fromisoformat(str(k)[:10]), float(v)))
+            except (TypeError, ValueError):
+                continue
+    else:
+        if len(spy) == 0:
+            return None
+        items = [(ts.date() if hasattr(ts, "date") else ts, float(v)) for ts, v in zip(spy.index, spy.tolist())]
+    items = sorted(i for i in items if i[1] > 0)
+    return ([d for d, _ in items], [v for _, v in items]) if items else None
+
+
+def spy_for_memory(spy) -> dict:
+    """The last SPY_KEEP closes as {"YYYY-MM-DD": close}, carried in the memory file."""
+    arrays = _spy_arrays(spy)
+    if arrays is None:
+        return {}
+    idx, vals = arrays
+    return {d.isoformat(): round(v, 4) for d, v in zip(idx[-SPY_KEEP:], vals[-SPY_KEEP:])}
+
+
+def _day(at):
+    return at if not isinstance(at, datetime) else _et_date(at)
 
 
 def regime_of_closes(closes) -> str:
@@ -291,16 +363,21 @@ def regime_of_closes(closes) -> str:
 
 def regime_before(spy, at) -> str:
     """The regime as it stood before the open of `at`'s day (closes strictly earlier)."""
+    from bisect import bisect_left
+
     arrays = _spy_arrays(spy)
     if arrays is None:
         return "mixed"
-    import numpy as np
-    import pandas as pd
+    idx, vals = arrays
+    return regime_of_closes(vals[:bisect_left(idx, _day(at))])
+
+
+def _close_on_or_before(arrays, at) -> tuple[int, float] | None:
+    from bisect import bisect_right
 
     idx, vals = arrays
-    day = at if not isinstance(at, datetime) else _et_date(at)
-    cut = int(np.searchsorted(idx, pd.Timestamp(day).to_datetime64(), side="left"))
-    return regime_of_closes(vals[:cut])
+    i = bisect_right(idx, _day(at)) - 1
+    return (i, vals[i]) if i >= 0 else None
 
 
 def _spy_return(spy, opened: datetime, closed: datetime) -> float | None:
@@ -308,15 +385,10 @@ def _spy_return(spy, opened: datetime, closed: datetime) -> float | None:
     arrays = _spy_arrays(spy)
     if arrays is None or _et_date(opened) == _et_date(closed):
         return None
-    import numpy as np
-    import pandas as pd
-
-    idx, vals = arrays
-    ia = int(np.searchsorted(idx, pd.Timestamp(_et_date(opened)).to_datetime64(), side="right")) - 1
-    ib = int(np.searchsorted(idx, pd.Timestamp(_et_date(closed)).to_datetime64(), side="right")) - 1
-    if ia < 0 or ib <= ia:
+    a, b = _close_on_or_before(arrays, opened), _close_on_or_before(arrays, closed)
+    if a is None or b is None or b[0] <= a[0]:
         return None
-    return float(vals[ib] / vals[ia] - 1)
+    return float(b[1] / a[1] - 1)
 
 
 def round_trips(fills: list[dict], spy=None, now: datetime | None = None) -> tuple[list[Trip], list[dict]]:
@@ -335,7 +407,7 @@ def round_trips(fills: list[dict], spy=None, now: datetime | None = None) -> tup
                                                 "play": tag.get("play", "untagged"),
                                                 "setup": tag.get("setup", "untagged"), "note": tag.get("note", ""),
                                                 "confidence": tag.get("confidence", "unrated"),
-                                                "stop": tag.get("stop")})
+                                                "stop": tag.get("stop"), "target": tag.get("target")})
             continue
         if f["side"] != "sell":
             continue
@@ -364,7 +436,8 @@ def round_trips(fills: list[dict], spy=None, now: datetime | None = None) -> tup
     open_lots = [{"ticker": t, "dollars_in": round(lot["qty"] * lot["price"], 2), "entry": lot["price"],
                   "opened": lot["at"].isoformat(timespec="minutes"),
                   "hours_held": round((now - lot["at"]).total_seconds() / 3600, 1),
-                  "play": lot["play"], "setup": lot["setup"], "why": lot["note"], "stop": lot.get("stop")}
+                  "play": lot["play"], "setup": lot["setup"], "why": lot["note"], "stop": lot.get("stop"),
+                  "target": lot.get("target")}
                  for t, queue in lots.items() for lot in queue if lot["qty"] > 1e-9]
     return trips, open_lots
 
@@ -571,6 +644,7 @@ def grade_ideas(ideas: list[dict], history, spy=None, now: datetime | None = Non
     now = now or datetime.now(timezone.utc)
     graded, cache = [], {}
     spy_idx = spy_vals = None
+    spy_arr = _spy_arrays(spy)
     if spy is not None and len(spy):
         spy_idx, spy_vals = spy.index.values, spy.to_numpy(dtype=float)
     for idea in ideas:
@@ -587,7 +661,7 @@ def grade_ideas(ideas: list[dict], history, spy=None, now: datetime | None = Non
         day = pd.Timestamp(_et_date(idea["at"])).to_datetime64()
         first_after = int(np.searchsorted(idx, day, side="right"))      # first close strictly after the idea's day
         row = {"ticker": t, "setup": idea["setup"], "confidence": idea["confidence"], "side": idea["side"],
-               "setup_regime": f"{idea['setup']}|{regime_before(spy, idea['at'])}" if spy is not None else None}
+               "setup_regime": f"{idea['setup']}|{regime_before(spy_arr, idea['at'])}" if spy_arr else None}
         sign = 1 if idea["side"] == "buy" else -1
         for h in IDEA_HORIZONS:
             if len(vals) - first_after < h:
@@ -644,13 +718,11 @@ def vs_market(runs: list[dict], spy=None, deposits: list[dict] | None = None) ->
     mine = (last["equity"] - added) / first["equity"] - 1 if first["equity"] else None
     out = {"since": first["at"].isoformat(timespec="minutes"), "account": None if mine is None else round(mine, 4),
            "deposits": round(added, 2), "spy": None, "ahead": None}
-    if spy is not None and len(spy):
-        import pandas as pd
-
-        a, b = pd.Timestamp(_et_date(first["at"])), pd.Timestamp(_et_date(last["at"]))
-        before_a, before_b = spy.loc[:a], spy.loc[:b]
-        if not before_a.empty and not before_b.empty:
-            out["spy"] = round(float(before_b.iloc[-1] / before_a.iloc[-1] - 1), 4)
+    arrays = _spy_arrays(spy)
+    if arrays is not None:
+        a, b = _close_on_or_before(arrays, first["at"]), _close_on_or_before(arrays, last["at"])
+        if a is not None and b is not None:
+            out["spy"] = round(float(b[1] / a[1] - 1), 4)
             if mine is not None:
                 out["ahead"] = round(mine - out["spy"], 4)
     return out
@@ -788,6 +860,8 @@ def trader_state(runs: list[dict], now: datetime) -> dict:
             "minutes_since": round((now - runs[-1]["at"]).total_seconds() / 60),
             "runs_today": sum(_et_date(r["at"]) == today for r in runs),
             "last_note": runs[-1]["note"],
+            "playbook": next((int(m.group(1)) for r in reversed(runs)
+                              for m in [re.match(r"\s*v(\d{1,3})\b", r["note"] or "", re.I)] if m), None),
             "equity": eq[-1]["equity"] if eq else None, "cash": runs[-1]["cash"],
             "equity_first": eq[0]["equity"] if eq else None,
             "equity_first_at": eq[0]["at"].isoformat(timespec="minutes") if eq else None,
@@ -796,7 +870,8 @@ def trader_state(runs: list[dict], now: datetime) -> dict:
 
 def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | None = None,
               account: str = "", runs: list[dict] | None = None, source: str = "robinhood",
-              grades: list[str] | None = None, deposits: list[dict] | None = None) -> dict:
+              grades: list[str] | None = None, deposits: list[dict] | None = None,
+              stops: list[dict] | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     trips, open_lots = round_trips(attach_tags(fills, tags), spy=spy, now=now)
     spy_arrays = _spy_arrays(spy)
@@ -825,7 +900,7 @@ def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | Non
         "by_exit": _grouped(trips, lambda t: t.exit),
         "by_ticker": dict(list(_grouped(trips, lambda t: t.ticker).items())[:10]),
         "today": {"orders": len(todays), "buys": sum(f["side"] == "buy" for f in todays)},
-        "open": open_lots,
+        "open": apply_stops(open_lots, stops or []),
         "recent": [asdict(t) for t in trips[-15:][::-1]],
         "trader": trader_state(runs or [], now),
         "vs_market": vs_market(runs or [], spy, deposits),
@@ -834,6 +909,7 @@ def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | Non
         "discipline": discipline(trips, runs or [], now),
         "risk": risk_view(tags, runs or [], trips, now),
         "tax": tax_view(trips, fills, now),
+        "spy_closes": spy_for_memory(spy_arrays),
         "grades": list(grades or []),
         "fills": [{k: f.get(k) for k in ("order_id", "ticker", "side", "quantity", "price", "executed_at")}
                   for f in sorted(fills, key=lambda f: str(f["executed_at"]))],
@@ -860,7 +936,9 @@ def render_text(summary: dict) -> str:
         lines.append("  No run has checked in yet.")
     else:
         lines.append(f"  Last run {_et(t['last_run'])} ({t['minutes_since']} min before this update), "
-                     f"{t['runs_today']} run(s) today.")
+                     f"{t['runs_today']} run(s) today"
+                     + (f", on playbook v{t['playbook']}." if t.get("playbook") else
+                        "; playbook version not stated in the RUN line."))
         if t.get("equity") is not None:
             lines.append(f"  Account ${t['equity']:,.2f}" + (f", cash ${t['cash']:,.2f}" if t.get("cash") is not None else "")
                          + f". First recorded ${t['equity_first']:,.2f} on {_et(t['equity_first_at'], '%d %b')}, "
@@ -915,7 +993,9 @@ def render_text(summary: dict) -> str:
         lines.append("  Nothing open.")
     for o in summary["open"]:
         lines.append(f"  {o['ticker']}: ${o['dollars_in']:.2f} at ${o['entry']:.2f}, held {o['hours_held']:.0f}h, "
-                     f"{o['play']} {o['setup']}")
+                     f"{o['play']} {o['setup']}"
+                     + (f", stop {o['stop']:g}" if o.get("stop") else ", NO STOP ON RECORD")
+                     + (f", target {o['target']:g}" if o.get("target") else ""))
         if o.get("why"):
             lines.append(f"    why: {o['why']}")
     lines += ["", "RECENT TRADES (newest first)"]
@@ -947,11 +1027,19 @@ def _spy_closes(engine):
         return None
 
 
-def _with_ideas(summary: dict, engine, tags_text: str) -> dict:
-    """Grade the trader's IDEA lines with the same price source the scan uses."""
+def _with_ideas(summary: dict, engine, tags_text: str, previous: dict | None = None) -> dict:
+    """Grade the trader's IDEA lines with the same price source the scan uses. Without
+    prices (the trader's own light path after every note, or a blocked cloud runner)
+    the last grades are carried forward: wiping them made every confidence check
+    between two full runs blind to the ideas, the memory's best evidence."""
+    empty = {"graded": 0, "by_setup": {}, "by_confidence": {}, "recent": []}
+    carried = (previous or {}).get("ideas") or empty
     ideas = parse_ideas(tags_text)
     if not ideas:
-        summary["ideas"] = {"graded": 0, "by_setup": {}, "by_confidence": {}, "recent": []}
+        summary["ideas"] = empty
+        return summary
+    if engine is None:
+        summary["ideas"] = carried
         return summary
 
     def closes(t):
@@ -959,10 +1047,11 @@ def _with_ideas(summary: dict, engine, tags_text: str) -> dict:
         return None if hist is None else hist["Close"]
 
     try:
-        summary["ideas"] = grade_ideas(ideas, closes, spy=_spy_closes(engine))
+        graded = grade_ideas(ideas, closes, spy=_spy_closes(engine))
     except Exception as exc:
         log.warning("ideas not graded: %s", exc)
-        summary["ideas"] = {"graded": 0, "by_setup": {}, "by_confidence": {}, "recent": []}
+        graded = empty
+    summary["ideas"] = graded if graded.get("graded", 0) >= carried.get("graded", 0) else carried
     return summary
 
 
@@ -1025,8 +1114,10 @@ def append_note(line: str, upload: bool = True) -> str:
         parts = [p.strip() for p in line.split("|")]
         if len(parts) < 3 or _ts(parts[1]) is None:
             raise ValueError(f"not a valid {kind} line: {kind} | UTC time | what happened")
-    if kind not in ("TAG", "RUN", "IDEA", "DEPOSIT", "WAKE", "WATCH"):
-        raise ValueError("a note starts with TAG, RUN, IDEA, DEPOSIT, WAKE or WATCH")
+    if kind == "STOP" and not parse_stops(line):
+        raise ValueError("not a valid STOP line: STOP | UTC time | TICKER | stop price | target price (optional)")
+    if kind not in ("TAG", "RUN", "IDEA", "DEPOSIT", "WAKE", "WATCH", "STOP"):
+        raise ValueError("a note starts with TAG, RUN, IDEA, DEPOSIT, STOP, WAKE or WATCH")
     if not upload:
         return line
     from .drive_api import ensure_folder, get_service, upload_or_update
@@ -1074,7 +1165,7 @@ def refresh(engine, client, upload: bool = True, account: str | None = None,
             grades = []
     summary = summarize(fills, parse_tags(tags_text), spy=_spy_closes(engine), account=account,
                         runs=parse_runs(tags_text), source="robinhood", grades=grades,
-                        deposits=parse_deposits(tags_text))
+                        deposits=parse_deposits(tags_text), stops=parse_stops(tags_text))
     _with_ideas(summary, engine, tags_text or "")
     _save_and_publish(summary, upload)
     return summary
@@ -1116,12 +1207,16 @@ def refresh_without_broker(engine, upload: bool = True, previous: dict | None = 
     fills = (confirmed + [f for f in fills_from_tags(stock_tags, after=last) if not already_confirmed(f)]
              + crypto_confirmed + crypto_noted)
     account = (previous.get("account") or "").replace("••••", "")
-    summary = summarize(fills, tags, spy=_spy_closes(engine), account=account, runs=parse_runs(tags_text),
+    spy = _spy_closes(engine) if engine is not None else None
+    if spy is None or len(spy) == 0:
+        spy = previous.get("spy_closes") or None       # the last full run's SPY closes, carried in the file
+    summary = summarize(fills, tags, spy=spy, account=account, runs=parse_runs(tags_text),
+                        stops=parse_stops(tags_text),
                         deposits=parse_deposits(tags_text),
                         source="robinhood" if not fills or len(fills) == len(confirmed) + len(crypto_confirmed)
                         else "robinhood+notes",
                         grades=previous.get("grades"))
-    _with_ideas(summary, engine, tags_text or "")
+    _with_ideas(summary, engine, tags_text or "", previous)
     _save_and_publish(summary, upload)
     return summary
 

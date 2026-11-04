@@ -55,7 +55,8 @@ from datetime import datetime, timezone
 LEVELS = (("HIGH", 4), ("MEDIUM", 2), ("LOW", 0))
 SIZE_GUIDE = {"HIGH": "no limit beyond settled cash; may add to a winner",
               "MEDIUM": "up to 25% of the account", "LOW": "a test position, 5-8% of the account",
-              "NO": "do not open (exits are never gated)"}
+              "NO": "do not open (exits are never gated)",
+              "PARK": "park idle cash by the playbook's rule (section 4): up to two thirds of settled cash"}
 SHORT_SIDE_SETUPS = {"inverse", "defensive", "bounce", "fear"}
 MIN_GROUP = 10
 MIN_IDEAS = 20
@@ -163,6 +164,10 @@ def score(*, side: str = "buy", setup: str = "", asset: str = "stocks", play: st
           crypto_flags: dict | None = None, confirmations: int = 0, ticker: str = "",
           now: datetime | None = None) -> dict:
     """Points from each kind of evidence, the level, and the reasons in plain words."""
+    if setup == "index":
+        return {"level": "PARK", "score": 0, "size": SIZE_GUIDE["PARK"],
+                "reasons": ["PARKING idle cash in SPY (or SGOV in a down tape) is not a trade: it is not scored, "
+                            "look-alikes do not apply, and it needs no IDEA line (playbook section 4)"]}
     parts: list[tuple[int, str]] = []
     if asset == "stocks":
         parts.append(_lookalike_points(lookalike))
@@ -225,10 +230,37 @@ def for_trade(ticker: str, setup: str, *, side: str = "buy", play: str = "", con
                 crypto_flags=(brief.get("crypto") or {}).get("flags"), confirmations=confirmations,
                 ticker=ticker, now=now)
     out["ticker"] = ticker.upper()
+    wash = _wash_sale(memory, ticker, side)
+    if wash:
+        out["reasons"].append(wash)
     return out
 
 
+def _wash_sale(memory: dict, ticker: str, side: str) -> str:
+    """A buy within 30 days of selling the same stock at a loss defers that loss for tax
+    (a note only: it never changes the level; tiny at this account's size)."""
+    if side != "buy":
+        return ""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    for t in memory.get("recent") or []:
+        try:
+            closed = datetime.fromisoformat(str(t.get("closed")))
+        except ValueError:
+            continue
+        if closed.tzinfo is None:
+            closed = closed.replace(tzinfo=timezone.utc)
+        if t.get("ticker") == ticker.upper() and (t.get("pnl") or 0) < 0 and now - closed <= timedelta(days=30):
+            return (f"TAX NOTE: {ticker.upper()} was sold at a {t['pnl']:+.2f} loss on {str(t['closed'])[:10]}; buying it "
+                    "again within 30 days makes that a wash sale (the loss is deferred, not lost). Fine to do; "
+                    "say so in the why")
+    return ""
+
+
 def render(r: dict) -> str:
+    if r["level"] == "PARK":
+        return "\n".join([f"PARKING {r.get('ticker', '')}: {r['size']}", *("  " + x for x in r["reasons"])])
     return "\n".join([f"CONFIDENCE {r.get('ticker', '')}: {r['level']} (score {r['score']:+d}) -> {r['size']}",
                       *("  " + x for x in r["reasons"]),
                       f"  Start the buy's why with [{r['level']}] and name its stop ('stop 118.40'): the level and the "

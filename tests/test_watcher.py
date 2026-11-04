@@ -208,3 +208,32 @@ def test_wake_and_watch_lines_are_valid_notes():
     assert jr.append_note("WATCH | 2026-11-03T16:05Z | watching PLD | 0 wake-up(s) today", upload=False)
     with pytest.raises(ValueError):
         jr.append_note("WAKE | not a time | x", upload=False)
+
+
+def test_a_touched_stop_wakes_the_trader_at_once_but_only_when_it_can_sell():
+    memory = {"open": [{"ticker": "MSFT", "dollars_in": 7.0, "entry": 549.4, "opened": "2026-11-03T14:37+00:00",
+                        "stop": 540.0, "target": 600.0}], "trader": {"equity": 100.0}}
+    sent = []
+    state = {"last_fire": (NOW - timedelta(minutes=5)).isoformat(), "fires_day": "2026-11-03",
+             "fires_today": watcher.DAILY_CAP}                     # cooldown AND cap: a stop goes through both
+    args = dict(quote=quotes({"MSFT": (538.9, -0.019), "SPY": (750.0, -0.004)}), crypto_quote=lambda t: None,
+                news=None, memory=memory, post=lambda u, t, b: sent.append(b), push=lambda *a: None)
+    text = watcher.tick(state, NOW, **args)
+    assert text and "STOP: MSFT at 538.90 has touched its stop 540.00" in text
+    assert watcher.tick(state, NOW + timedelta(minutes=2), **args) is None, "once per stop level a day"
+    early = datetime(2026, 11, 3, 13, 0, tzinfo=timezone.utc)      # 8:00 AM ET: a fractional share cannot sell
+    events = watcher.check({}, early, watcher.holdings(memory), args["quote"], lambda t: None, None)
+    assert not any(e.startswith("STOP") for e in events)
+    up = watcher.check({}, NOW, watcher.holdings(memory), quotes({"MSFT": (601.0, 0.02), "SPY": (750.0, 0.0)}),
+                       lambda t: None, None)
+    assert any(e.startswith("TARGET: MSFT") for e in up)
+
+
+def test_a_position_bought_today_moves_from_its_buy_price_not_yesterdays_close():
+    memory = {"open": [{"ticker": "GOOGL", "dollars_in": 7.0, "entry": 293.34, "opened": "2026-11-03T15:37+00:00"}]}
+    rally = quotes({"GOOGL": (292.9, 0.046), "SPY": (750.0, 0.016)})
+    assert not any(e.startswith("MOVE") for e in watcher.check({}, NOW, watcher.holdings(memory), rally,
+                                                               lambda t: None, None)), "the rally it was bought into"
+    fall = quotes({"GOOGL": (283.0, 0.01), "SPY": (750.0, 0.0)})
+    assert any("MOVE: GOOGL -3.5% since it was bought today" in e
+               for e in watcher.check({}, NOW, watcher.holdings(memory), fall, lambda t: None, None))

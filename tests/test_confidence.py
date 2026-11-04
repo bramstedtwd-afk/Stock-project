@@ -94,3 +94,14 @@ def test_the_drawdown_brake_caps_new_buys_but_never_sells():
     assert r["level"] == "LOW" and any("BRAKE" in x for x in r["reasons"])
     assert cf.score(**{**strong, "memory": {"by_setup": {"pullback": WORKING}, "drawdown": -0.05}})["level"] == "HIGH"
     assert "BRAKE" not in " ".join(cf.score(**{**strong, "side": "sell"})["reasons"])
+
+
+def test_parking_cash_is_not_scored_and_a_wash_sale_is_noted():
+    r = cf.score(setup="index", lookalike=LOSES, regime="down")
+    assert r["level"] == "PARK" and "not a trade" in r["reasons"][0] and "PARKING" in cf.render(r)
+    from datetime import datetime, timedelta, timezone
+
+    sold = (datetime.now(timezone.utc) - timedelta(days=9)).isoformat()
+    w = cf.for_trade("GOOGL", "bounce", memory={"recent": [{"ticker": "GOOGL", "pnl": -2.45, "closed": sold}]})
+    assert any("wash sale" in x for x in w["reasons"])
+    assert not any("wash sale" in x for x in cf.for_trade("MSFT", "bounce", memory={})["reasons"])

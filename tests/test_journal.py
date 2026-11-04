@@ -293,3 +293,48 @@ def test_test_lines_are_not_graded_as_ideas():
         "IDEA | 2026-11-03T16:45Z | BUY | MSFT | pullback | 515.81 | test --help",
         "IDEA | 2026-11-04T15:01Z | BUY | AMD | earnings | 499.01 | [LOW] passed: earnings eased AI fears"])
     assert [i["ticker"] for i in jr.parse_ideas(text)] == ["AMD"]
+
+
+def test_the_trader_s_own_notes_keep_the_market_and_the_idea_grades(tmp_path, monkeypatch):
+    """Each note rebuilds the memory on the trader's light path (no prices). It used to drop
+    SPY and the idea grades, so confidence between two full runs was blind to both."""
+    monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path))
+    days = pd.bdate_range("2026-08-03", periods=70)
+    spy = pd.Series([600 + i for i in range(70)], index=days)
+    tags = ("TAG | 2026-10-28T14:00Z | BUY | AAA | SAFE | pullback | 1 | 10 | [LOW] stop 9.5 target 11\n"
+            "TAG | 2026-11-02T15:00Z | SELL | AAA | SAFE | target | 1 | 11 | hit\n"
+            "IDEA | 2026-10-28T14:00Z | BUY | BBB | pullback | 20 | [LOW] x\n"
+            "RUN | 2026-10-28T14:05Z | 100 | 50 | v32: bought AAA\n"
+            "RUN | 2026-11-02T15:05Z | 101 | 61 | v32: sold AAA")
+    full = jr.summarize(jr.fills_from_tags(jr.parse_tags(tags)), jr.parse_tags(tags), spy=spy,
+                        runs=jr.parse_runs(tags), now=datetime(2026, 11, 3, 15, tzinfo=timezone.utc))
+    full["ideas"] = {"graded": 25, "by_setup": {"pullback": {"ideas": 25, "avg_5d": 0.004, "right": 0.6,
+                                                             "verdict": "no clear edge yet"}},
+                     "by_confidence": {}, "recent": []}
+    assert len(full["spy_closes"]) == 70 and full["regime_now"] == "up" and full["trader"]["playbook"] == 32
+    light = jr.refresh_without_broker(None, upload=False, previous=full, tags_text=tags)
+    assert light["spy_closes"] and light["regime_now"] == "up", "SPY came from the previous memory"
+    assert light["vs_market"]["spy"] is not None and light["recent"][0]["vs_spy"] is not None
+    assert light["ideas"]["graded"] == 25, "idea grades carried forward, not wiped"
+
+
+def test_stop_lines_move_the_stop_and_targets_are_read_from_the_why():
+    assert jr.stated_target("[LOW] stop 520 target 600, pullback") == 600.0
+    text = ("TAG | 2026-11-04T14:37Z | BUY | MSFT | SAFE | pullback | 0.0127 | 549.40 | [LOW] stop 520, test\n"
+            "STOP | 2026-11-04T15:01Z | MSFT | 540 | 590 | raised after a 6 percent day\n"
+            "STOP | 2026-11-04T15:02Z | PLD | 126.5\n"
+            "STOP | 2026-11-04T15:03Z | bad ticker 9 | x")
+    stops = jr.parse_stops(text)
+    assert [(s["ticker"], s["stop"], s["target"]) for s in stops] == [("MSFT", 540.0, 590.0), ("PLD", 126.5, None)]
+    tags = jr.parse_tags(text)
+    s = jr.summarize(jr.fills_from_tags(tags), tags, stops=stops, now=datetime(2026, 11, 4, 16, tzinfo=timezone.utc))
+    lot = s["open"][0]
+    assert lot["stop"] == 540.0 and lot["target"] == 590.0
+    assert "stop 540, target 590" in jr.render_text(s)
+    assert jr.append_note("STOP | 2026-11-04T15:01Z | MSFT | 540", upload=False)
+
+
+def test_runs_that_name_no_playbook_say_so():
+    s = jr.summarize([], [], runs=jr.parse_runs("RUN | 2026-11-04T15:00Z | 100 | 10 | held"),
+                     now=datetime(2026, 11, 4, 16, tzinfo=timezone.utc))
+    assert s["trader"]["playbook"] is None and "playbook version not stated" in jr.render_text(s)

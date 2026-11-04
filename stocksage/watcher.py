@@ -4,11 +4,18 @@ The routine runs hourly. Between runs nobody watches, so this runs on the
 always-on computer, checks every minute, and fires the routine's API trigger
 when one of these happens to something the trader holds:
 
-  * MOVE    a stock moves 3%+ today (crypto 5%+), and again each further 3%/5%
+  * MOVE    a stock moves 3%+ today (crypto 5%+), and again each further 3%/5%;
+            a position bought today counts from its buy price, not yesterday's
+            close (the rally it was bought into is not news)
   * DROP    a position sits 5%+ below what it was bought at (once a day each)
   * MARKET  SPY moves 1.5%+ today (once per direction per day)
   * NEWS    a new company headline on a holding (Finnhub, every 5 minutes;
             not for index or sector funds, which get market news all day)
+  * STOP    a holding touches the stop the trader named (its buy's why, or a later
+            STOP line). Fractional shares cannot carry a resting stop order, so
+            this is the stop: urgent, once per stop level a day, past the
+            cooldown and cap, kept through the quiet window
+  * TARGET  a holding reaches the target the trader named (once a day)
   * LIMIT   the account is 4%+ down on the day (today's moves on what is held,
             plus trades bought and sold today, against the last check-in
             before today): the daily loss limit. Once a day; it skips the cooldown and
@@ -44,7 +51,7 @@ SCHEDULED_MINUTE, QUIET_BEFORE, QUIET_AFTER = 35, 10, 15
 COOLDOWN = timedelta(minutes=20)
 DAILY_CAP = 10
 NEWS_EVERY = timedelta(minutes=5)
-MEMORY_EVERY = timedelta(minutes=15)
+MEMORY_EVERY = timedelta(minutes=5)             # new positions and moved stops reach the watcher fast
 BETA = "experimental-cc-routine-2026-04-01"
 HEARTBEAT = timedelta(hours=2)
 STARTUP_FILE = "StockSage Watcher.cmd"
@@ -95,6 +102,12 @@ def stock_hours(now: datetime) -> bool:
     return et.weekday() < 5 and 7 <= et.hour < 20
 
 
+def regular_session(now: datetime) -> bool:
+    """9:30 AM to 4:00 PM Eastern on weekdays: when a fractional position can be sold."""
+    et = now.astimezone(ET)
+    return et.weekday() < 5 and (et.hour, et.minute) >= (9, 30) and et.hour < 16
+
+
 def near_scheduled_run(now: datetime) -> bool:
     """The trader runs at :35 past each hour from 12:35 to 23:35 UTC on weekdays."""
     utc = now.astimezone(timezone.utc)
@@ -106,6 +119,9 @@ def near_scheduled_run(now: datetime) -> bool:
                 timedelta(0) <= utc - r <= timedelta(minutes=QUIET_AFTER):
             return 12 <= r.hour <= 23
     return False
+
+
+URGENT = ("LIMIT", "STOP")
 
 
 def may_fire(state: dict, now: datetime, urgent: bool = False) -> tuple[bool, str]:
@@ -137,6 +153,10 @@ def holdings(memory: dict) -> list[dict]:
         cur["shares"] += dollars / entry if entry else 0.0
         if entry:
             cur["lots"].append({"shares": dollars / entry, "entry": entry, "opened": lot.get("opened")})
+        if lot.get("stop"):
+            cur["stop"] = max(cur.get("stop") or 0.0, float(lot["stop"]))      # the most protective one
+        if lot.get("target"):
+            cur["target"] = min(cur.get("target") or float("inf"), float(lot["target"]))
     out = []
     for h in by.values():
         h["entry"] = round(h["dollars"] / h["shares"], 4) if h["shares"] else None
@@ -209,7 +229,7 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
 
     day = now.astimezone(ET).date().isoformat()
     if state.get("day") != day:
-        state.update(day=day, moved={}, dropped=[], market=[], crypto_open={}, limit=False)
+        state.update(day=day, moved={}, dropped=[], market=[], crypto_open={}, limit=False, stopped=[], targeted=[])
     events: list[str] = []
     in_hours = stock_hours(now)
     day_pnl = 0.0
@@ -231,12 +251,16 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
                 q = quote(t)
                 price = q["price"] if q else None
                 change = q["day_change"] if q else None
-                if change is not None:
-                    level = int(abs(change) // STOCK_MOVE) * (1 if change > 0 else -1)
+                bought_today = bool(h.get("lots")) and all(_opened_today(lot, now) for lot in h["lots"])
+                move, since = change, "today"
+                if bought_today and price and h.get("entry"):
+                    move, since = price / h["entry"] - 1, "since it was bought today"
+                if move is not None:
+                    level = int(abs(move) // STOCK_MOVE) * (1 if move > 0 else -1)
                     done = state["moved"].get(t, 0)
                     if level and (abs(level) > abs(done) or level * done < 0):
                         state["moved"][t] = level
-                        events.append(f"MOVE: {t} {change:+.1%} today, now {_p(price)}"
+                        events.append(f"MOVE: {t} {move:+.1%} {since}, now {_p(price)}"
                                       + (f" (bought at {_p(h['entry'])})" if h.get("entry") else ""))
         except Exception:
             continue
@@ -250,6 +274,18 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
             basis = lot["entry"] if _opened_today(lot, now) else day_open
             if basis:
                 day_pnl += lot["shares"] * (price - basis)
+        stop, target = h.get("stop"), h.get("target")
+        if not crypto and not regular_session(now):
+            stop = target = None                # a fractional position cannot be sold now: tell the run that can
+        if stop and price <= stop and f"{t}@{stop:g}" not in state.setdefault("stopped", []):
+            state["stopped"].append(f"{t}@{stop:g}")
+            events.insert(0, f"STOP: {t} at {_p(price)} has touched its stop {_p(stop)}"
+                             + (f" (bought at {_p(h['entry'])})" if h.get("entry") else "")
+                             + ": sell, or say in the RUN line why not")
+        if target and price >= target and t not in state.setdefault("targeted", []):
+            state["targeted"].append(t)
+            events.append(f"TARGET: {t} at {_p(price)} has reached its target {_p(target)}: take the profit "
+                          "or raise the stop (STOP line)")
         if h.get("entry") and t not in state["dropped"] and price / h["entry"] - 1 <= DROP:
             state["dropped"].append(t)
             events.append(f"DROP: {t} is {price / h['entry'] - 1:+.1%} below its entry {_p(h['entry'])} "
@@ -372,6 +408,9 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
          push=None) -> str | None:
     """One check. Returns the message that was sent, or None."""
     events = check(state, now, holdings(memory), quote, crypto_quote, news, account=account_view(memory, now))
+    if any(e.startswith("STOP") for e in events):
+        phone("StockSage: a stop was touched", "A position in the agentic account touched the stop the trader "
+              "set. The trader is being woken to act on it.", push)
     if any(e.startswith("LIMIT") for e in events):
         log(events[0])
         phone("StockSage: daily loss limit", "The agentic account hit its daily loss limit. The trader is being "
@@ -379,13 +418,13 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
     pending = state.get("pending", []) + events
     if not pending:
         return None
-    ok, why = may_fire(state, now, urgent=any(e.startswith("LIMIT") for e in pending))
+    ok, why = may_fire(state, now, urgent=any(e.startswith(URGENT) for e in pending))
     if not ok:
         if near_scheduled_run(now):
             if events:
                 log(f"held back (scheduled run covers it): {'; '.join(events)}")
             # the scheduled run sees the same prices; a LIMIT is still sent once it has run
-            state["pending"] = [e for e in pending if e.startswith("LIMIT")][-1:]
+            state["pending"] = [e for e in pending if e.startswith(URGENT)][-5:]
         else:
             state["pending"] = pending[-10:]
             log(f"waiting to wake the trader ({why}): {'; '.join(events) or 'earlier events'}")
