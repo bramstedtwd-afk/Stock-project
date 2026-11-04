@@ -533,6 +533,9 @@ IDEA_HORIZONS = (1, 5)          # trading days after the idea
 MIN_IDEAS = 20                  # an idea group speaks only with this many graded
 
 
+NOT_AN_IDEA = re.compile(r"not a real idea|\btest (check|only|line|run)\b|--help", re.I)
+
+
 def parse_ideas(text: str) -> list[dict]:
     """`IDEA | <UTC time> | BUY or SELL | TICKER | setup | price | [LEVEL] why`: a trade the
     trader considered (taken or not). Graded later against the market, free evidence."""
@@ -546,6 +549,8 @@ def parse_ideas(text: str) -> list[dict]:
         if at is None or side not in ("buy", "sell") or not re.fullmatch(r"[A-Z.\-]{1,10}", ticker) or not price:
             continue
         note = " | ".join(parts[6:])[:200]
+        if NOT_AN_IDEA.search(note):
+            continue                       # a check of the command, not a trade considered
         level = re.match(r"\s*\[(HIGH|MEDIUM|LOW|NO)\]", note, re.I)
         setup = setup_word(parts[4])
         if any(o["ticker"] == ticker and o["side"] == side and o["setup"] == setup
