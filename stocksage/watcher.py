@@ -9,6 +9,12 @@ when one of these happens to something the trader holds:
   * MARKET  SPY moves 1.5%+ today (once per direction per day)
   * NEWS    a new company headline on a holding (Finnhub, every 5 minutes;
             not for index or sector funds, which get market news all day)
+  * LIMIT   the account is 4%+ down on the day (today's moves on what is held,
+            plus trades bought and sold today, against the last check-in
+            before today): the daily loss limit. Once a day; it skips the cooldown and
+            the daily cap, and also tells the owner's phone. The playbook then
+            allows no new buys until tomorrow. StockSage still never trades:
+            the owner's own switch is trade approvals ON in Robinhood.
 
 Firing costs a full routine run, so it is rationed: never within the 10 minutes
 before or the 15 after a scheduled run (minute :35 of each hour), at least 20
@@ -102,9 +108,11 @@ def near_scheduled_run(now: datetime) -> bool:
     return False
 
 
-def may_fire(state: dict, now: datetime) -> tuple[bool, str]:
+def may_fire(state: dict, now: datetime, urgent: bool = False) -> tuple[bool, str]:
     if near_scheduled_run(now):
         return False, "a scheduled run is about to start or just ran"
+    if urgent:
+        return True, ""
     day = now.astimezone(ET).date().isoformat()
     if state.get("fires_day") == day and state.get("fires_today", 0) >= DAILY_CAP:
         return False, f"daily cap of {DAILY_CAP} wake-ups reached"
@@ -123,10 +131,12 @@ def holdings(memory: dict) -> list[dict]:
         t = str(lot.get("ticker", "")).upper()
         if not t:
             continue
-        cur = by.setdefault(t, {"ticker": t, "dollars": 0.0, "shares": 0.0})
+        cur = by.setdefault(t, {"ticker": t, "dollars": 0.0, "shares": 0.0, "lots": []})
         dollars, entry = float(lot.get("dollars_in") or 0), float(lot.get("entry") or 0)
         cur["dollars"] += dollars
         cur["shares"] += dollars / entry if entry else 0.0
+        if entry:
+            cur["lots"].append({"shares": dollars / entry, "entry": entry, "opened": lot.get("opened")})
     out = []
     for h in by.values():
         h["entry"] = round(h["dollars"] / h["shares"], 4) if h["shares"] else None
@@ -159,6 +169,24 @@ def read_memory(state: dict, now: datetime, reader=None) -> dict:
     return {}
 
 
+def account_view(memory: dict, now: datetime) -> dict | None:
+    """What the daily limit is measured against: the last check-in before today and
+    today's realized result, from the trade memory (only if worked out today)."""
+    from .confidence import todays_discipline
+
+    d = todays_discipline(memory, now)
+    start = d.get("day_start_equity") or (memory.get("trader") or {}).get("equity")
+    # Older positions sold today are left out: their loss from entry is not today's loss.
+    return {"start": float(start), "realized": float(d.get("realized_today_new") or 0)} if start else None
+
+
+def _opened_today(lot: dict, now: datetime) -> bool:
+    try:
+        return datetime.fromisoformat(str(lot.get("opened"))).astimezone(ET).date() == now.astimezone(ET).date()
+    except (TypeError, ValueError):
+        return False
+
+
 def crypto_price(pair: str, fetch=None) -> float | None:
     from .crypto import _json
 
@@ -174,19 +202,22 @@ def _p(x: float) -> str:
     return f"{x:,.0f}" if x >= 1000 else f"{x:,.2f}" if x >= 1 else f"{x:.6g}"
 
 
-def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, news) -> list[str]:
+def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, news,
+          account: dict | None = None) -> list[str]:
     """Plain-language events since the last check. Updates `state` so each fires once."""
-    from .journal import is_crypto
+    from .journal import DAILY_LOSS_LIMIT, is_crypto
 
     day = now.astimezone(ET).date().isoformat()
     if state.get("day") != day:
-        state.update(day=day, moved={}, dropped=[], market=[])
+        state.update(day=day, moved={}, dropped=[], market=[], crypto_open={}, limit=False)
     events: list[str] = []
     in_hours = stock_hours(now)
+    day_pnl = 0.0
     for h in held:
         t, crypto = h["ticker"], is_crypto(h["ticker"])
         if not crypto and not in_hours:
             continue
+        change = None
         try:
             if crypto:
                 price = crypto_quote(t)
@@ -211,6 +242,14 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
             continue
         if price is None:
             continue
+        if crypto:
+            day_open = state.setdefault("crypto_open", {}).setdefault(t, price)
+        else:
+            day_open = price / (1 + change) if change is not None and change > -1 else None
+        for lot in h.get("lots") or []:
+            basis = lot["entry"] if _opened_today(lot, now) else day_open
+            if basis:
+                day_pnl += lot["shares"] * (price - basis)
         if h.get("entry") and t not in state["dropped"] and price / h["entry"] - 1 <= DROP:
             state["dropped"].append(t)
             events.append(f"DROP: {t} is {price / h['entry'] - 1:+.1%} below its entry {_p(h['entry'])} "
@@ -225,6 +264,14 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
                     events.append(f"MARKET: SPY {spy['day_change']:+.1%} today")
         except Exception:
             pass
+    if account and account.get("start") and not state.get("limit"):
+        total = day_pnl + account.get("realized", 0.0)
+        if total / account["start"] <= DAILY_LOSS_LIMIT:
+            state["limit"] = True
+            events.insert(0, f"LIMIT: the account is about {total / account['start']:+.1%} today "
+                             f"({total:+.2f}: holdings {day_pnl:+.2f}, sold {account.get('realized', 0.0):+.2f}); "
+                             f"the daily loss limit is {DAILY_LOSS_LIMIT:.0%}. Playbook: no new buys until "
+                             "tomorrow; manage exits and stops")
     last_news = state.get("news_checked")
     if news is not None and (not last_news or now - datetime.fromisoformat(last_news) >= NEWS_EVERY):
         state["news_checked"] = now.isoformat()
@@ -248,6 +295,21 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
 
 
 # --- firing -----------------------------------------------------------------------
+
+def phone(title: str, text: str, push=None) -> None:
+    """A push to the owner's phone (ntfy), if alerts are set up. Role and verb only:
+    ntfy topics are not private, so no amounts or account numbers."""
+    from . import notify
+
+    topic = notify.topic_from_env()
+    if not topic:
+        return
+    try:
+        (push or notify._post)(notify.NTFY_URL.format(topic=topic), text.encode("utf-8"),
+                               {"Title": title, "Priority": "high", "Tags": "warning"})
+    except Exception as exc:
+        log(f"could not alert the phone ({type(exc).__name__})")
+
 
 def message(events: list[str], now: datetime) -> str:
     head = f"StockSage watcher, {now.astimezone(ET).strftime('%a %I:%M %p ET')}. Wake-up reason(s):"
@@ -306,18 +368,24 @@ def fire(text: str, post=None) -> dict:
     return (post or _post)(url, token, {"text": text[:4000]})
 
 
-def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict, post=None) -> str | None:
+def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict, post=None,
+         push=None) -> str | None:
     """One check. Returns the message that was sent, or None."""
-    events = check(state, now, holdings(memory), quote, crypto_quote, news)
+    events = check(state, now, holdings(memory), quote, crypto_quote, news, account=account_view(memory, now))
+    if any(e.startswith("LIMIT") for e in events):
+        log(events[0])
+        phone("StockSage: daily loss limit", "The agentic account hit its daily loss limit. The trader is being "
+              "told: no new buys today, exits and stops only. Your switch: Robinhood trade approvals ON.", push)
     pending = state.get("pending", []) + events
     if not pending:
         return None
-    ok, why = may_fire(state, now)
+    ok, why = may_fire(state, now, urgent=any(e.startswith("LIMIT") for e in pending))
     if not ok:
         if near_scheduled_run(now):
             if events:
                 log(f"held back (scheduled run covers it): {'; '.join(events)}")
-            state["pending"] = []           # the scheduled run sees the same prices
+            # the scheduled run sees the same prices; a LIMIT is still sent once it has run
+            state["pending"] = [e for e in pending if e.startswith("LIMIT")][-1:]
         else:
             state["pending"] = pending[-10:]
             log(f"waiting to wake the trader ({why}): {'; '.join(events) or 'earlier events'}")

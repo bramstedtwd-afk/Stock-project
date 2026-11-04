@@ -22,6 +22,13 @@ each counted only when there is enough of it:
 Brake: once the account is 10% below its highest check-in, new trades are
 LOW size whatever the score, until it recovers. Selling is never braked.
 
+Discipline (the trade memory's `discipline`, rebuilt at every note; it resets
+each trading day, so a bad day never turns into a timid week):
+  DAILY LIMIT  account 4%+ down on the day: NO new buys until tomorrow.
+  NO REVENGE   a name sold at a loss today: NO buying it back today.
+  COOL-OFF     2 losing sales in a row, the latest today: the next buy is LOW,
+               until a winning sale or tomorrow.
+
 Score -> level -> what the trader may do (defaults, the owner set no hard caps):
   HIGH   (>= 4) : no size limit beyond settled cash; may add to a winner.
   MEDIUM (2-3)  : up to a quarter of the account.
@@ -38,6 +45,7 @@ Standard library only: `python -m stocksage.confidence TICKER --setup pullback`.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 LEVELS = (("HIGH", 4), ("MEDIUM", 2), ("LOW", 0))
 SIZE_GUIDE = {"HIGH": "no limit beyond settled cash; may add to a winner",
@@ -91,9 +99,34 @@ def _idea_points(group: dict | None, setup: str) -> tuple[int, str]:
     return 0, desc
 
 
+def todays_discipline(memory: dict | None, now: datetime | None = None) -> dict:
+    """The memory's discipline state, only if it was worked out for today (Eastern)."""
+    from zoneinfo import ZoneInfo
+
+    d = (memory or {}).get("discipline") or {}
+    today = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo("America/New_York")).date().isoformat()
+    return d if d.get("day") == today else {}
+
+
+def _discipline(level: str, reasons: list[str], d: dict, ticker: str) -> str:
+    if d.get("limit_hit"):
+        reasons.append(f"DAILY LIMIT: the account is {d.get('day_change', 0):+.1%} today (limit "
+                       f"{d.get('limit', -0.04):.0%}): no new buys until tomorrow, exits and stops only")
+        return "NO"
+    if ticker and ticker.upper() in (d.get("stopped_today") or []):
+        reasons.append(f"NO REVENGE: you sold {ticker.upper()} at a loss today; it can be bought again tomorrow")
+        return "NO"
+    if d.get("cool_off") and level in ("HIGH", "MEDIUM"):
+        reasons.append(f"COOL-OFF: {d.get('losses_in_a_row')} losing sales in a row, the latest today: this buy is "
+                       "test size; full size again after a winning sale or tomorrow")
+        return "LOW"
+    return level
+
+
 def score(*, side: str = "buy", setup: str = "", asset: str = "stocks", play: str = "",
           lookalike: dict | None = None, memory: dict | None = None, regime: str | None = None,
-          crypto_flags: dict | None = None, confirmations: int = 0) -> dict:
+          crypto_flags: dict | None = None, confirmations: int = 0, ticker: str = "",
+          now: datetime | None = None) -> dict:
     """Points from each kind of evidence, the level, and the reasons in plain words."""
     parts: list[tuple[int, str]] = []
     if asset == "stocks":
@@ -132,6 +165,8 @@ def score(*, side: str = "buy", setup: str = "", asset: str = "stocks", play: st
     if side == "buy" and dd is not None and dd <= BRAKE_AT and level in ("HIGH", "MEDIUM"):
         level = "LOW"
         reasons.append(f"BRAKE: the account is {dd:.1%} below its peak, so new trades are LOW size until it recovers")
+    if side == "buy":
+        level = _discipline(level, reasons, todays_discipline(memory, now), ticker)
     return {"level": level, "score": total, "size": SIZE_GUIDE[level], "reasons": reasons}
 
 
@@ -140,7 +175,7 @@ def evidence_for(brief: dict, ticker: str, side: str = "buy") -> dict | None:
 
 
 def for_trade(ticker: str, setup: str, *, side: str = "buy", play: str = "", confirmations: int = 0,
-              brief: dict | None = None, memory: dict | None = None) -> dict:
+              brief: dict | None = None, memory: dict | None = None, now: datetime | None = None) -> dict:
     """Score a trade from the brief (look-alikes, regime, crypto flags) and the trade memory."""
     brief, memory = brief or {}, memory or {}
     from .journal import is_crypto, setup_word
@@ -149,7 +184,8 @@ def for_trade(ticker: str, setup: str, *, side: str = "buy", play: str = "", con
     out = score(side=side, setup=setup_word(setup), asset=asset, play=play.upper(),
                 lookalike=evidence_for(brief, ticker, side), memory=memory,
                 regime=((brief.get("market") or {}).get("regime") or {}).get("label"),
-                crypto_flags=(brief.get("crypto") or {}).get("flags"), confirmations=confirmations)
+                crypto_flags=(brief.get("crypto") or {}).get("flags"), confirmations=confirmations,
+                ticker=ticker, now=now)
     out["ticker"] = ticker.upper()
     return out
 
@@ -157,7 +193,8 @@ def for_trade(ticker: str, setup: str, *, side: str = "buy", play: str = "", con
 def render(r: dict) -> str:
     return "\n".join([f"CONFIDENCE {r.get('ticker', '')}: {r['level']} (score {r['score']:+d}) -> {r['size']}",
                       *("  " + x for x in r["reasons"]),
-                      f"  Tag the buy's why starting with [{r['level']}] so this level gets graded."])
+                      f"  Start the buy's why with [{r['level']}] and name its stop ('stop 118.40'): the level and the "
+                      "risk both get graded."])
 
 
 def _drive_json(name: str) -> dict:

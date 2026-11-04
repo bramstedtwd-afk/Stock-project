@@ -59,6 +59,11 @@ CONFIDENCE_TRADES = 30
 MATCH_WINDOW = timedelta(hours=3)
 MIN_TO_JUDGE = 10
 ET = "America/New_York"
+# Discipline (playbook "Discipline"): the habits a good trader keeps on a bad day.
+DAILY_LOSS_LIMIT = -0.04   # account this far down on the day: no new buys until tomorrow
+COOL_OFF_LOSSES = 2        # this many losing trades in a row, the latest today: next buy at test size
+RISK_GUIDE = {"SAFE": 0.01, "AGGRESSIVE": 0.05}   # planned risk to the stop, share of the account
+STOP_RE = re.compile(r"\bstop(?:[\s\-]*(?:loss|at|under|below|@|:|=))*\s*(\d+(?:\.\d+)?)", re.I)
 
 
 def _ts(value) -> datetime | None:
@@ -108,6 +113,12 @@ def setup_word(text: str) -> str:
     return words[0] if words else "unspecified"
 
 
+def stated_stop(note: str) -> float | None:
+    """The stop a buy's why names ("stop 118.40", "stop under 0.95"), if any."""
+    m = STOP_RE.search(note or "")
+    return float(m.group(1)) if m and float(m.group(1)) > 0 else None
+
+
 def parse_tags(text: str) -> list[dict]:
     """Tag lines from the routine's file. Anything malformed is skipped, not guessed."""
     out = []
@@ -128,7 +139,8 @@ def parse_tags(text: str) -> list[dict]:
                     "play": play if play in PLAYS else "untagged",
                     "setup": setup_word(parts[5]),
                     "confidence": level.group(1).upper() if level else "unrated",
-                    "qty": qty, "price": price, "note": note})
+                    "qty": qty, "price": price, "note": note,
+                    "stop": stated_stop(note) if side == "buy" else None})
     return out
 
 
@@ -235,6 +247,8 @@ class Trip:
     buy_why: str = ""
     sell_why: str = ""  # return minus SPY's over the same closes; None for same-day trades
     confidence: str = "unrated"   # the level the trader stated on the buy ([HIGH] / [MEDIUM] / [LOW])
+    risk: float | None = None     # dollars that were at risk to the buy's stated stop
+    r: float | None = None        # the result in units of that risk (+2.0 = made twice what was risked)
 
 
 def _style(opened: datetime, closed: datetime) -> str:
@@ -269,7 +283,8 @@ def round_trips(fills: list[dict], spy=None, now: datetime | None = None) -> tup
             lots.setdefault(ticker, []).append({"qty": qty, "price": price, "at": at,
                                                 "play": tag.get("play", "untagged"),
                                                 "setup": tag.get("setup", "untagged"), "note": tag.get("note", ""),
-                                                "confidence": tag.get("confidence", "unrated")})
+                                                "confidence": tag.get("confidence", "unrated"),
+                                                "stop": tag.get("stop")})
             continue
         if f["side"] != "sell":
             continue
@@ -279,6 +294,9 @@ def round_trips(fills: list[dict], spy=None, now: datetime | None = None) -> tup
             take = min(remaining, lot["qty"])
             ret = price / lot["price"] - 1
             spy_ret = _spy_return(spy, lot["at"], at)
+            stop = lot.get("stop")
+            risk = round(take * (lot["price"] - stop), 2) if stop and stop < lot["price"] else None
+            pnl = take * (price - lot["price"])
             trips.append(Trip(ticker=ticker, dollars_in=round(take * lot["price"], 2),
                               pnl=round(take * (price - lot["price"]), 2), ret=round(ret, 4),
                               opened=lot["at"].isoformat(timespec="minutes"), closed=at.isoformat(timespec="minutes"),
@@ -286,7 +304,8 @@ def round_trips(fills: list[dict], spy=None, now: datetime | None = None) -> tup
                               play=lot["play"], setup=lot["setup"], exit=tag.get("setup", "untagged"),
                               vs_spy=None if spy_ret is None else round(ret - spy_ret, 4),
                               buy_why=lot["note"], sell_why=tag.get("note", ""),
-                              confidence=lot.get("confidence", "unrated")))
+                              confidence=lot.get("confidence", "unrated"), risk=risk,
+                              r=round(pnl / risk, 2) if risk else None))
             lot["qty"] -= take
             remaining -= take
             if lot["qty"] <= 1e-9:
@@ -294,7 +313,7 @@ def round_trips(fills: list[dict], spy=None, now: datetime | None = None) -> tup
     open_lots = [{"ticker": t, "dollars_in": round(lot["qty"] * lot["price"], 2), "entry": lot["price"],
                   "opened": lot["at"].isoformat(timespec="minutes"),
                   "hours_held": round((now - lot["at"]).total_seconds() / 3600, 1),
-                  "play": lot["play"], "setup": lot["setup"], "why": lot["note"]}
+                  "play": lot["play"], "setup": lot["setup"], "why": lot["note"], "stop": lot.get("stop")}
                  for t, queue in lots.items() for lot in queue if lot["qty"] > 1e-9]
     return trips, open_lots
 
@@ -322,12 +341,14 @@ def stats(trips: list[Trip]) -> dict:
         return {"trades": 0}
     rets = [t.ret for t in trips]
     excess = [t.vs_spy for t in trips if t.vs_spy is not None]
+    rs = [t.r for t in trips if t.r is not None]
     return {"trades": len(trips), "wins": sum(t.pnl > 0 for t in trips),
             "win_rate": round(sum(t.pnl > 0 for t in trips) / len(trips), 3),
             "pnl": round(sum(t.pnl for t in trips), 2), "avg_return": round(sum(rets) / len(rets), 4),
             "avg_vs_spy": round(sum(excess) / len(excess), 4) if excess else None,
             "avg_hours": round(sum(t.hours for t in trips) / len(trips), 1),
-            "best": round(max(rets), 4), "worst": round(min(rets), 4), "verdict": verdict(rets)}
+            "best": round(max(rets), 4), "worst": round(min(rets), 4), "verdict": verdict(rets),
+            "avg_r": round(sum(rs) / len(rs), 2) if rs else None, "r_trades": len(rs)}
 
 
 def _grouped(trips: list[Trip], key) -> dict:
@@ -357,6 +378,7 @@ def lessons(summary: dict) -> list[str]:
                        f"({_pct(lo.get('avg_return'))}): confidence is not calibrated yet. Size HIGH like MEDIUM.")
         else:
             out.append(f"Confidence is calibrated: HIGH {_pct(hi.get('avg_return'))} vs LOW {_pct(lo.get('avg_return'))} a trade.")
+    out += _risk_lessons(summary.get("risk") or {})
     for name in ("by_asset", "by_confidence", "by_play", "by_style", "by_setup", "by_exit"):
         judged = {k: v for k, v in summary[name].items() if v["trades"] >= MIN_TO_JUDGE}
         if len(judged) < 2:
@@ -373,6 +395,31 @@ def lessons(summary: dict) -> list[str]:
         out.append(f"{untagged} trades have no tag, so they cannot be sorted by play or setup. Tag every order.")
     if total["trades"] < MIN_TO_JUDGE:
         out.append("Small sample: treat every number here as a hint, not proof.")
+    return out
+
+
+def _risk_lessons(rk: dict) -> list[str]:
+    """What a disciplined trader checks: a stop on every buy, risk near the guide,
+    losses no bigger than planned, and the result in units of risk (R)."""
+    out = []
+    if rk.get("without_stop"):
+        out.append(f"{rk['without_stop']} of the last {rk['buys']} buys named no stop: write 'stop 118.40' in every "
+                   "buy's why, so the risk can be measured.")
+    if rk.get("over_guide"):
+        out.append("Risked more than the guide (about 1% SAFE, up to 5% AGGRESSIVE) on " + ", ".join(rk["over_guide"])
+                   + ": size so that hitting the stop costs about the guide.")
+    if rk.get("stops_blown"):
+        out.append(f"{len(rk['stops_blown'])} trade(s) lost more than 1.5x the planned risk ("
+                   + ", ".join(sorted(set(rk["stops_blown"]))) + "): honour the stop, use a resting stop order.")
+    n, avg = rk.get("r_trades", 0), rk.get("avg_r")
+    if n >= MIN_TO_JUDGE and avg is not None:
+        out.append(f"Average result {avg:+.2f}R over {n} trades with a stated stop: "
+                   + ("winners outweigh losers. Losing trades are the cost of this plan: keep taking the setups "
+                      "the evidence backs, at the size it allows." if avg > 0 else
+                      "losers outweigh winners: be pickier on entries or let winners run to the target."))
+    elif n >= 3 and not rk.get("stops_blown"):
+        out.append(f"All {n} trades with a stated stop kept their losses within the plan: that is the discipline "
+                   "working, whatever the result.")
     return out
 
 
@@ -514,6 +561,89 @@ def drawdown(runs: list[dict]) -> float | None:
     return round(eq[-1] / max(eq) - 1, 4) if eq else None
 
 
+def _equity_at(runs: list[dict], at: datetime) -> float | None:
+    """The account value at the last check-in before `at` (else the first one after)."""
+    eq = [r for r in runs if r.get("equity")]
+    before = [r for r in eq if r["at"] <= at]
+    return (before[-1] if before else eq[0])["equity"] if eq else None
+
+
+def _sales(trips: list) -> list[dict]:
+    """One row per sale: FIFO splits one sell across lots, but it is one decision."""
+    rows: dict[tuple, dict] = {}
+    for t in trips:
+        row = rows.setdefault((t.ticker, t.closed), {"ticker": t.ticker, "closed": t.closed, "pnl": 0.0})
+        row["pnl"] += t.pnl
+    return sorted(rows.values(), key=lambda r: r["closed"])
+
+
+def discipline(trips: list, runs: list[dict], now: datetime) -> dict:
+    """The bad-day habits, as of `now` (they reset each trading day):
+    DAILY LIMIT  the account is 4%+ below its last check-in before today: no new buys today.
+    NO REVENGE   a name sold at a loss today is not bought back today.
+    COOL-OFF     2 losing sales in a row, the latest today: the next buy is test size.
+                 It ends with the next winning sale or the next day: a stop doing its
+                 job is the plan working, not a reason to stop trading well."""
+    today = _et_date(now)
+    sales = _sales(trips)
+    streak = 0
+    for row in reversed(sales):
+        if row["pnl"] >= 0:
+            break
+        streak += 1
+    todays = [r for r in sales if _ts(r["closed"]) and _et_date(_ts(r["closed"])) == today]
+    eq = [r for r in runs if r.get("equity")]
+    start = next((r["equity"] for r in reversed(eq) if _et_date(r["at"]) < today), None)
+    latest = next((r["equity"] for r in reversed(eq) if _et_date(r["at"]) == today), None)
+    change = round(latest / start - 1, 4) if start and latest else None
+    out = {"day": today.isoformat(), "losses_in_a_row": streak,
+           "stopped_today": sorted({r["ticker"] for r in todays if r["pnl"] < 0}),
+           "realized_today": round(sum(r["pnl"] for r in todays), 2),
+           # bought and sold today: the part of today's result the watcher cannot see in what is still held
+           "realized_today_new": round(sum(t.pnl for t in trips if _ts(t.closed) and _ts(t.opened)
+                                           and _et_date(_ts(t.closed)) == today == _et_date(_ts(t.opened))), 2),
+           "day_start_equity": start, "day_change": change,
+           "limit": DAILY_LOSS_LIMIT,
+           "limit_hit": change is not None and change <= DAILY_LOSS_LIMIT,
+           "cool_off": streak >= COOL_OFF_LOSSES and bool(todays) and todays[-1]["pnl"] < 0}
+    if out["limit_hit"]:
+        out["line"] = (f"DAILY LIMIT HIT: the account is {change:+.1%} today (limit {DAILY_LOSS_LIMIT:.0%}). "
+                       "No new buys until tomorrow; manage exits and stops only.")
+    elif out["cool_off"]:
+        out["line"] = (f"COOL-OFF: {streak} losing sales in a row, the latest today. The next buy is test size; "
+                       "back to normal after a winning sale or tomorrow.")
+    elif out["stopped_today"]:
+        out["line"] = "No buying back today: " + ", ".join(out["stopped_today"]) + " (sold at a loss today)."
+    else:
+        out["line"] = "Clear: no daily limit, no cool-off."
+    return out
+
+
+def risk_view(tags: list[dict], runs: list[dict], trips: list, now: datetime) -> dict:
+    """Did each buy state its stop, and how much of the account did it risk?
+    The playbook's guide: about 1% for SAFE, 2-5% for AGGRESSIVE (index parking exempt).
+    Losses much bigger than the planned risk mean stops were not honoured."""
+    recent = [t for t in tags if t["side"] == "buy" and t.get("qty") and t.get("price")
+              and t["setup"] != "index" and now - t["at"] <= timedelta(days=30)]
+    sized = []
+    for t in recent:
+        eq = _equity_at(runs, t["at"])
+        if t.get("stop") and t["stop"] < t["price"] and eq:
+            pct = t["qty"] * (t["price"] - t["stop"]) / eq
+            guide = RISK_GUIDE.get(t["play"], RISK_GUIDE["SAFE"])
+            sized.append({"ticker": t["ticker"], "play": t["play"], "risk_pct": round(pct, 4),
+                          "over": pct > guide * 1.5})
+    with_r = [t for t in trips if t.r is not None]
+    blown = [t for t in with_r if t.r < -1.5]
+    return {"buys": len(recent), "with_stop": len(sized), "without_stop": len(recent) - len(sized),
+            "avg_risk_pct": round(sum(x["risk_pct"] for x in sized) / len(sized), 4) if sized else None,
+            "max_risk_pct": max((x["risk_pct"] for x in sized), default=None),
+            "over_guide": [x["ticker"] for x in sized if x["over"]],
+            "r_trades": len(with_r),
+            "avg_r": round(sum(t.r for t in with_r) / len(with_r), 2) if with_r else None,
+            "stops_blown": [t.ticker for t in blown]}
+
+
 def tax_view(trips: list, fills: list[dict], now: datetime) -> dict:
     """This calendar year's realized gains (all short-term: nothing here is held a
     year) and possible wash sales: a loss sale with a buy of the same ticker within
@@ -575,6 +705,8 @@ def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | Non
         "trader": trader_state(runs or [], now),
         "vs_market": vs_market(runs or [], spy, deposits),
         "drawdown": drawdown(runs or []),
+        "discipline": discipline(trips, runs or [], now),
+        "risk": risk_view(tags, runs or [], trips, now),
         "tax": tax_view(trips, fills, now),
         "grades": list(grades or []),
         "fills": [{k: f.get(k) for k in ("order_id", "ticker", "side", "quantity", "price", "executed_at")}
@@ -620,6 +752,17 @@ def render_text(summary: dict) -> str:
     if summary.get("drawdown") is not None and summary["drawdown"] <= -0.05:
         lines.append(f"  DRAWDOWN: {summary['drawdown']:.1%} below the peak"
                      + ("; brake on: new trades LOW size only until it recovers." if summary["drawdown"] <= -0.10 else "."))
+    dsc = summary.get("discipline") or {}
+    if dsc.get("line"):
+        lines.append(f"  DISCIPLINE: {dsc['line']}")
+    rk = summary.get("risk") or {}
+    if rk.get("buys"):
+        line = f"  RISK (30 days): {rk['buys']} buys, {rk['with_stop']} with a stated stop"
+        if rk.get("avg_risk_pct") is not None:
+            line += f", {rk['avg_risk_pct']:.1%} of the account at risk on average"
+        if rk.get("avg_r") is not None:
+            line += f"; average result {rk['avg_r']:+.2f}R over {rk['r_trades']} trades"
+        lines.append(line + ".")
     tx = summary.get("tax") or {}
     if tx.get("realized") is not None and (tx.get("gains") or tx.get("losses")):
         lines.append(f"  TAX {tx['year']}: realized ${tx['realized']:+,.2f} (all short-term)"
