@@ -148,9 +148,9 @@ memory and adds up the evidence:
 - **Brake:** when your trades' own results have given back 10% of the
   account from their best point, new buys are LOW size whatever the score,
   until they win it back (the command does this). A market dip of parked
-  SPY does not count: the scenario lab showed that version fired on every
-  dip and cost about 5% a year in crashes and chop, right when rebound
-  setups paid best. Selling is never braked.
+  SPY does not count: it says nothing about your decisions. (In the scenario
+  lab both versions earned about the same; this one keeps the brake about
+  you.) Selling is never braked.
 - **Calibration:** start every BUY tag's and IDEA's why with the level, e.g.
   `[MEDIUM] pullback to the 21-day in an uptrend`. The scorecard grades
   trades and ideas by level and reports it; ten of each is mostly luck, so

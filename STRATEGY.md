@@ -250,6 +250,70 @@ in a "meme window" (BTC uptrend and memes up over 7 days), at most 5% of the
 account; a resting stop on every coin; never chase a jump. The test stops
 itself if crypto trades grade "losing money" after 10.
 
+## The trader's rules in every kind of market (run `.\start.bat scenarios`; last run 2026-11-04)
+
+The trader is Claude, so its judgement cannot be replayed; everything it obeys
+is code. `scenarios.py` runs a rule-following stand-in through simulated
+markets where the truth is PLANTED (which setups make money in which market),
+writing the same TAG/IDEA/RUN lines, so the real journal and confidence code
+build its memory and size its trades. Six worlds (bull, melt-up, a 2022-style
+bear, a 2020-shaped crash and rebound, sideways chop, and a no-edge null
+world), 10 one-year markets each, 13 rule sets on the same markets. Planted
+edges are assumptions sized like real retail edges (0.4-1% a trade). The lab
+proves the rules and the learning loop behave; it cannot say what edges real
+markets offer.
+
+**Fixed because of it**
+- Verdicts were graded on raw returns: a falling market made a zero-edge
+  setup "losing", a rising one makes anything look skilled. Now graded on the
+  return beyond SPY over the same closes (`journal.market_adjusted`; same-day
+  trades, crypto and inverse funds on their own return).
+- Verdict bar raised to t >= 2.5: wrong idea verdicts fell from 11% to 4% of
+  decided calls at no measurable cost in return.
+- The brake follows the trades' own realized results (`trading_drawdown`),
+  not the account's value, which every market dip of parked SPY moved. Both
+  earned about the same in the lab; this one measures the trader.
+- A mechanical "size HIGH like MEDIUM when HIGH trails LOW" cap cost 2-3% a
+  year with no drawdown benefit (10 trades of each is luck); now reported only.
+- Setups are graded per market regime (`by_setup_regime`) and confidence
+  prefers "this setup in this kind of market" once decided. In one year it
+  never decided (zero effect either way): it needs more history.
+
+**What each rule is worth** (variant minus the live rules, median paired over
+the same markets; return / worst drawdown)
+
+| Variant | bull | melt-up | bear | crash | chop | no edge |
+|---|---|---|---|---|---|---|
+| no memory (no learning) | -6.4 / -0.1 | +3.4 / +0.6 | 0.0 / +0.5 | -5.6 / -1.0 | -1.1 / +0.1 | -1.9 / +0.6 |
+| no discipline at all | +1.5 / -0.1 | +3.9 / -1.4 | +2.1 / +0.7 | +6.5 / -0.2 | +3.5 / -0.4 | -2.8 / -3.3 |
+| tilt (no discipline, double risk after losses) | +6.3 / -4.9 | +9.0 / -2.3 | -2.2 / -3.4 | +23.0 / +3.9 | -5.6 / -2.0 | -4.3 / -4.0 |
+| no brake | +0.4 / 0.0 | 0.0 / -0.1 | +0.1 / +0.1 | 0.0 / 0.0 | +1.9 / +2.7 | +1.3 / -2.0 |
+| no cool-off | -0.9 / -0.1 | +1.9 / -0.8 | 0.0 / +0.5 | +2.2 / -0.2 | +4.2 / +0.3 | -2.0 / -0.2 |
+| no daily limit | 0 | 0 | 0 | 0 | 0 | 0 |
+| no "no revenge" rule | +0.8 / 0.0 | -0.2 / 0.0 | 0.0 / 0.0 | +0.6 / 0.0 | +0.4 / -0.1 | +0.1 / -0.1 |
+| ignore an undecided record's lean | -5.3 / -0.2 | +5.9 / +0.7 | +0.9 / -0.2 | -5.2 / -2.1 | -1.2 / 0.0 | -4.1 / +0.2 |
+
+Reading it: the memory pays (+6% bull, +6% crash); the guardrails are
+insurance, costing a few percent in crashes and chop and saving ~3% of
+drawdown in the no-edge world, which is the most realistic one for a new
+trader; tilting (sizing up after losses) deepens the worst drawdown by 2-5
+points in five of six worlds; the daily limit almost never binds (it is tail
+insurance); even an undecided record's lean carries signal, so it keeps its
++/-1 point. Trading added +35% (bull), +43% (melt-up), +29% (crash), +9%
+(chop), +5% (no edge) and +0.5% (bear) over just parking the cash, with
+drawdowns 2-6 points deeper: entirely because edges were planted. In the
+null world the honest expectation is costs and a deeper drawdown.
+
+**How right the memory's verdicts are** (every setup in every market, t >= 2.5):
+ideas: 86 right, 4 wrong, found 28% of the real edges; closed trades: 19
+right, 10 wrong, found 7.5%. Ideas are about four times the teacher trades
+are (more of them, and a passed idea teaches as much as a taken one), which is
+why the playbook requires 3+ every run. Proving a 0.5% a trade edge takes ~140
+trades; a 1% edge ~60. Within a year most verdicts stay "no clear edge yet",
+and that is the correct answer. The lab also prints what the rules make of 16
+situations (the confidence level for each) and the watcher's wake-ups through
+a selloff, minute by minute.
+
 ## The owner's goal (2026-10-01)
 
 **Maximum growth: hold the market, manage risk only.** The trend rules are

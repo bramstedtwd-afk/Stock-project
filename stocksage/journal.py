@@ -659,9 +659,8 @@ def drawdown(runs: list[dict]) -> float | None:
 
 def trading_drawdown(trips: list, equity: float | None) -> float | None:
     """How far the trades' own realized result sits below its best point, as a share of
-    the account. Unlike the account's drawdown it ignores what parked cash did: the
-    scenario lab found a brake on the account's value fired on every market dip and
-    shrank trading right when rebounds paid best."""
+    the account. Unlike the account's drawdown it ignores what parked cash did, so
+    the brake answers "are MY trades failing?", not "did the market dip?"."""
     if not equity or equity <= 0:
         return None
     cum = peak = 0.0

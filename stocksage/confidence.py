@@ -21,10 +21,10 @@ each counted only when there is enough of it:
 
 Brake: once the trades' own results have given back 10% of the account from
 their best point, new trades are LOW size whatever the score, until they win
-it back. Market moves of parked cash do not count: the scenario lab found a
-brake on the account's value fired on every market dip and cost about 5% a
-year in crash and choppy markets while protecting nothing. Selling is never
-braked.
+it back. Market moves of parked cash do not count: they say nothing about the
+trader's decisions (in the scenario lab the two versions earned about the
+same; a brake costs ~2% a year in chop and saves ~2% of drawdown when no setup
+has an edge). Selling is never braked.
 
 Discipline (the trade memory's `discipline`, rebuilt at every note; it resets
 each trading day, so a bad day never turns into a timid week):

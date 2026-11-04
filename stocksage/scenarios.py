@@ -351,6 +351,8 @@ def _simulate(world: str, seed: int, agent: Agent, mkt: dict | None, days: int |
                     dsc["stopped_today"] = []
                 memory = dict(memory, discipline=dsc, drawdown=round(eq / peak - 1, 4) if agent.brake == "abs" else None,
                               trading_drawdown=jr.trading_drawdown(trip_cache[1], eq) if agent.brake == "trade" else None)
+                if agent.brake == "abs":                    # the old rule: the account's own value
+                    memory.pop("trading_drawdown")
             for ev in [e for e in by_day.get(d, []) if e["step"] == s and agent.trade]:
                 ticker, setup = ev["ticker"], ev["setup"]
                 play, hold, stop_vols, _ = SETUPS[setup]
