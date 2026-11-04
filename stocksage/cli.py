@@ -896,6 +896,27 @@ def cmd_cryptolab(args) -> int:
     return 0
 
 
+def cmd_scenarios(args) -> int:
+    """The scenario lab: the trader's rules and memory in bull, bear, crash, chop and no-edge markets."""
+    import os
+
+    from . import scenarios
+
+    print(f"Scenario lab: {args.seeds} markets per world, {len(scenarios.AGENTS)} rule sets each "
+          "(several minutes; uses all but one processor)...\n", flush=True)
+    out = scenarios.run(args.seeds, args.world, args.agent, workers=max(1, (os.cpu_count() or 2) - 1))
+    text = scenarios.report(out)
+    print(text)
+    try:
+        from .journal import state_dir
+
+        (state_dir() / "scenarios.txt").write_text(text, encoding="utf-8")
+        print(f"\n(Saved to {state_dir() / 'scenarios.txt'})")
+    except OSError:
+        pass
+    return 0
+
+
 def cmd_earnings(args) -> int:
     """Post-earnings drift on S&P 500 companies, industry by industry."""
     from . import earnings, today
@@ -1949,6 +1970,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("cryptolab", help="crypto: what worked on real coin history (--now: today's crypto market)")
     p.add_argument("--now", action="store_true", help="show today's crypto market and flags instead")
     p.set_defaults(func=cmd_cryptolab)
+
+    p = sub.add_parser("scenarios", help="what the trader's rules and memory do in every kind of market (simulated)")
+    p.add_argument("--seeds", type=int, default=10, help="random markets per world (default 10)")
+    p.add_argument("--world", action="append", help="only this world (bull, meltup, bear, crash, chop, noise)")
+    p.add_argument("--agent", action="append", help="only this rule set (system, no_learning, tilt, ...)")
+    p.set_defaults(func=cmd_scenarios)
 
     p = sub.add_parser("earnings", help="do stocks keep moving after an earnings surprise? (by industry)")
     p.add_argument("--draws", type=int, default=2000)

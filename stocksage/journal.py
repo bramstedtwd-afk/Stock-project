@@ -76,10 +76,16 @@ def _ts(value) -> datetime | None:
     return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
 
 
-def _et_date(ts: datetime):
-    from zoneinfo import ZoneInfo
+_ET_ZONE = None
 
-    return ts.astimezone(ZoneInfo(ET)).date()
+
+def _et_date(ts: datetime):
+    global _ET_ZONE
+    if _ET_ZONE is None:
+        from zoneinfo import ZoneInfo
+
+        _ET_ZONE = ZoneInfo(ET)
+    return ts.astimezone(_ET_ZONE).date()
 
 
 # --- tags -----------------------------------------------------------------------------
@@ -212,17 +218,19 @@ def fills_from_tags(tags: list[dict], after: datetime | None = None) -> list[dic
 
 def attach_tags(fills: list[dict], tags: list[dict]) -> list[dict]:
     """Give each fill the nearest unused tag for the same ticker and side within 3 hours."""
-    free = sorted(tags, key=lambda t: t["at"])
+    free: dict[tuple, list] = {}
+    for t in sorted(tags, key=lambda t: t["at"]):
+        free.setdefault((t["ticker"], t["side"]), []).append(t)
     out = []
     for f in sorted(fills, key=lambda f: (_ts(f["executed_at"]) or datetime.min.replace(tzinfo=timezone.utc))):
         at = _ts(f["executed_at"])
         best = None
         if at is not None:
-            near = [t for t in free if t["ticker"] == f["ticker"].upper() and t["side"] == f["side"]
-                    and abs(t["at"] - at) <= MATCH_WINDOW]
+            pool = free.get((f["ticker"].upper(), f["side"]), [])
+            near = [t for t in pool if abs(t["at"] - at) <= MATCH_WINDOW]
             best = min(near, key=lambda t: abs(t["at"] - at), default=None)
-        if best is not None:
-            free.remove(best)
+            if best is not None:
+                pool.remove(best)
         out.append({**f, "tag": best})
     return out
 
@@ -256,22 +264,65 @@ def _style(opened: datetime, closed: datetime) -> str:
     return "same day" if days == 0 else "1-3 days" if days <= 3 else "4+ days"
 
 
-def _spy_return(spy, opened: datetime, closed: datetime) -> float | None:
-    """SPY close-to-close over the trade's dates; None for a same-day trade or missing data."""
-    if spy is None or len(spy) == 0 or _et_date(opened) == _et_date(closed):
+def _spy_arrays(spy):
+    """(dates, closes) as arrays, once per call instead of a pandas slice per trade."""
+    if spy is None or len(spy) == 0:
         return None
+    if isinstance(spy, tuple):
+        return spy
     import pandas as pd
 
-    a, b = pd.Timestamp(_et_date(opened)), pd.Timestamp(_et_date(closed))
-    before_a, before_b = spy.loc[:a], spy.loc[:b]
-    if before_a.empty or before_b.empty or before_b.index[-1] <= before_a.index[-1]:
+    return pd.DatetimeIndex(spy.index).values, spy.to_numpy(dtype=float)
+
+
+def regime_of_closes(closes) -> str:
+    """The market's mood from SPY's daily closes up to yesterday: up (above its 50-day
+    average and up 0.5%+ in 5 days), down (below it and down 1%+), else mixed. The
+    memory grades setups per regime with it, so a setup that works only in rising
+    markets is learned as exactly that."""
+    if closes is None or len(closes) < 51:
+        return "mixed"
+    c = closes
+    vs50, d5 = c[-1] / (sum(c[-50:]) / 50) - 1, c[-1] / c[-6] - 1
+    down = (vs50 < 0) + (d5 < -0.01)
+    up = (vs50 > 0) + (d5 > 0.005)
+    return "down" if down == 2 else "up" if up == 2 else "mixed"
+
+
+def regime_before(spy, at) -> str:
+    """The regime as it stood before the open of `at`'s day (closes strictly earlier)."""
+    arrays = _spy_arrays(spy)
+    if arrays is None:
+        return "mixed"
+    import numpy as np
+    import pandas as pd
+
+    idx, vals = arrays
+    day = at if not isinstance(at, datetime) else _et_date(at)
+    cut = int(np.searchsorted(idx, pd.Timestamp(day).to_datetime64(), side="left"))
+    return regime_of_closes(vals[:cut])
+
+
+def _spy_return(spy, opened: datetime, closed: datetime) -> float | None:
+    """SPY close-to-close over the trade's dates; None for a same-day trade or missing data."""
+    arrays = _spy_arrays(spy)
+    if arrays is None or _et_date(opened) == _et_date(closed):
         return None
-    return float(before_b.iloc[-1] / before_a.iloc[-1] - 1)
+    import numpy as np
+    import pandas as pd
+
+    idx, vals = arrays
+    ia = int(np.searchsorted(idx, pd.Timestamp(_et_date(opened)).to_datetime64(), side="right")) - 1
+    ib = int(np.searchsorted(idx, pd.Timestamp(_et_date(closed)).to_datetime64(), side="right")) - 1
+    if ia < 0 or ib <= ia:
+        return None
+    return float(vals[ib] / vals[ia] - 1)
 
 
 def round_trips(fills: list[dict], spy=None, now: datetime | None = None) -> tuple[list[Trip], list[dict]]:
     """Closed trips and still-open lots from tagged fills (first in, first out)."""
     now = now or datetime.now(timezone.utc)
+    spy = _spy_arrays(spy)
     lots: dict[str, list[dict]] = {}
     trips: list[Trip] = []
     for f in sorted(fills, key=lambda f: f["executed_at"]):
@@ -321,25 +372,53 @@ def round_trips(fills: list[dict], spy=None, now: datetime | None = None) -> tup
 # --- verdicts -------------------------------------------------------------------------
 
 
+# How sure before a group is called working or losing. The scenario lab (STRATEGY.md) found
+# t >= 2 wrong on 11% of decided idea verdicts and t >= 2.5 on 4%, at no cost in returns.
+VERDICT_T = 2.5
+
+
+def tstat(rets: list[float]) -> float | None:
+    """Mean over its standard error: how far from luck the average is."""
+    n = len(rets)
+    if n < 2:
+        return None
+    mean = sum(rets) / n
+    sd = math.sqrt(sum((r - mean) ** 2 for r in rets) / (n - 1))
+    return round(mean / (sd / math.sqrt(n)), 2) if sd > 0 else 0.0
+
+
 def verdict(rets: list[float]) -> str:
     """Plain words, and no judgement on fewer than MIN_TO_JUDGE trades."""
     n = len(rets)
     if n < MIN_TO_JUDGE:
         return f"too few to judge ({n} of {MIN_TO_JUDGE} trades)"
-    mean = sum(rets) / n
-    sd = math.sqrt(sum((r - mean) ** 2 for r in rets) / (n - 1)) if n > 1 else 0.0
-    t = mean / (sd / math.sqrt(n)) if sd > 0 else 0.0
-    if t >= 2:
+    t = tstat(rets) or 0.0
+    if t >= VERDICT_T:
         return "working: keep doing it"
-    if t <= -2:
+    if t <= -VERDICT_T:
         return "losing money: do less of this"
     return "no clear edge yet"
+
+
+RAW_GRADED = {"inverse"}    # judged against cash: an inverse fund's job is to make money while SPY falls
+
+
+def market_adjusted(t: Trip) -> float:
+    """What a trade earned beyond simply holding SPY over the same closes. Verdicts use
+    this, so a rising market cannot make a setup look skilled (nor a falling one make
+    it look broken): the scenario lab caught a zero-edge setup judged "losing" in a
+    bear market on raw returns. Same-day trades (hours of market exposure), crypto
+    and inverse funds are judged on their own return."""
+    if t.vs_spy is None or is_crypto(t.ticker) or t.setup in RAW_GRADED:
+        return t.ret
+    return t.vs_spy
 
 
 def stats(trips: list[Trip]) -> dict:
     if not trips:
         return {"trades": 0}
     rets = [t.ret for t in trips]
+    adj = [market_adjusted(t) for t in trips]
     excess = [t.vs_spy for t in trips if t.vs_spy is not None]
     rs = [t.r for t in trips if t.r is not None]
     return {"trades": len(trips), "wins": sum(t.pnl > 0 for t in trips),
@@ -347,7 +426,8 @@ def stats(trips: list[Trip]) -> dict:
             "pnl": round(sum(t.pnl for t in trips), 2), "avg_return": round(sum(rets) / len(rets), 4),
             "avg_vs_spy": round(sum(excess) / len(excess), 4) if excess else None,
             "avg_hours": round(sum(t.hours for t in trips) / len(trips), 1),
-            "best": round(max(rets), 4), "worst": round(min(rets), 4), "verdict": verdict(rets),
+            "best": round(max(rets), 4), "worst": round(min(rets), 4), "verdict": verdict(adj),
+            "avg_adj": round(sum(adj) / len(adj), 4), "t": tstat(adj),
             "avg_r": round(sum(rs) / len(rs), 2) if rs else None, "r_trades": len(rs)}
 
 
@@ -362,6 +442,12 @@ def _pct(x: float | None) -> str:
     return "n/a" if x is None else f"{x * 100:+.1f}%"
 
 
+def _adj(group: dict) -> float:
+    """A group's average market-adjusted return (older memories have only the raw one)."""
+    v = group.get("avg_adj")
+    return (group.get("avg_return") or 0.0) if v is None else v
+
+
 def lessons(summary: dict) -> list[str]:
     """A few plain sentences the routine can act on. Only groups with enough trades speak."""
     out = []
@@ -373,22 +459,24 @@ def lessons(summary: dict) -> list[str]:
     conf = summary.get("by_confidence") or {}
     hi, lo = conf.get("HIGH") or {}, conf.get("LOW") or {}
     if hi.get("trades", 0) >= MIN_TO_JUDGE and lo.get("trades", 0) >= MIN_TO_JUDGE:
-        if (hi.get("avg_return") or 0) <= (lo.get("avg_return") or 0):
-            out.append(f"HIGH-confidence trades ({_pct(hi.get('avg_return'))}) are not beating LOW ones "
-                       f"({_pct(lo.get('avg_return'))}): confidence is not calibrated yet. Size HIGH like MEDIUM.")
+        if _adj(hi) <= _adj(lo):
+            out.append(f"HIGH-confidence trades ({_pct(_adj(hi))} vs the market) are not beating LOW ones "
+                       f"({_pct(_adj(lo))}) yet: confidence is not calibrated yet. Ten of each is mostly luck, so "
+                       "keep sizing by the evidence and watch this line.")
         else:
-            out.append(f"Confidence is calibrated: HIGH {_pct(hi.get('avg_return'))} vs LOW {_pct(lo.get('avg_return'))} a trade.")
+            out.append(f"Confidence is calibrated: HIGH {_pct(_adj(hi))} vs LOW {_pct(_adj(lo))} a trade, "
+                       "beyond the market.")
     out += _risk_lessons(summary.get("risk") or {})
     for name in ("by_asset", "by_confidence", "by_play", "by_style", "by_setup", "by_exit"):
         judged = {k: v for k, v in summary[name].items() if v["trades"] >= MIN_TO_JUDGE}
         if len(judged) < 2:
             continue
-        best = max(judged.items(), key=lambda kv: kv[1]["avg_return"])
-        worst = min(judged.items(), key=lambda kv: kv[1]["avg_return"])
+        best = max(judged.items(), key=lambda kv: _adj(kv[1]))
+        worst = min(judged.items(), key=lambda kv: _adj(kv[1]))
         if best[0] != worst[0]:
             label = name.replace("by_", "")
-            out.append(f"By {label}: '{best[0]}' does best ({_pct(best[1]['avg_return'])} a trade, "
-                       f"{best[1]['verdict']}); '{worst[0]}' does worst ({_pct(worst[1]['avg_return'])}, "
+            out.append(f"By {label}: '{best[0]}' does best ({_pct(_adj(best[1]))} a trade vs the market, "
+                       f"{best[1]['verdict']}); '{worst[0]}' does worst ({_pct(_adj(worst[1]))}, "
                        f"{worst[1]['verdict']}).")
     untagged = summary["by_play"].get("untagged", {}).get("trades", 0)
     if untagged:
@@ -473,31 +561,38 @@ def grade_ideas(ideas: list[dict], history, spy=None, now: datetime | None = Non
     direction and (for stocks) against SPY. `history(ticker)` returns daily closes."""
     import pandas as pd
 
+    import numpy as np
+
     now = now or datetime.now(timezone.utc)
     graded, cache = [], {}
+    spy_idx = spy_vals = None
+    if spy is not None and len(spy):
+        spy_idx, spy_vals = spy.index.values, spy.to_numpy(dtype=float)
     for idea in ideas:
         t = idea["ticker"]
         if t not in cache:
             try:
-                cache[t] = history(t)
+                got = history(t)
+                cache[t] = None if got is None or len(got) == 0 else (got.index.values, got.to_numpy(dtype=float))
             except Exception:
                 cache[t] = None
-        closes = cache[t]
-        if closes is None or len(closes) == 0:
+        if cache[t] is None:
             continue
-        day = pd.Timestamp(_et_date(idea["at"]))
-        after = closes.loc[closes.index > day]
-        row = {"ticker": t, "setup": idea["setup"], "confidence": idea["confidence"], "side": idea["side"]}
+        idx, vals = cache[t]
+        day = pd.Timestamp(_et_date(idea["at"])).to_datetime64()
+        first_after = int(np.searchsorted(idx, day, side="right"))      # first close strictly after the idea's day
+        row = {"ticker": t, "setup": idea["setup"], "confidence": idea["confidence"], "side": idea["side"],
+               "setup_regime": f"{idea['setup']}|{regime_before(spy, idea['at'])}" if spy is not None else None}
         sign = 1 if idea["side"] == "buy" else -1
         for h in IDEA_HORIZONS:
-            if len(after) < h:
+            if len(vals) - first_after < h:
                 break
-            ret = float(after.iloc[h - 1] / idea["price"] - 1)
+            ret = float(vals[first_after + h - 1] / idea["price"] - 1)
             bench = None
-            if spy is not None and not is_crypto(t):
-                s_before, s_after = spy.loc[:day], spy.loc[spy.index > day]
-                if not s_before.empty and len(s_after) >= h:
-                    bench = float(s_after.iloc[h - 1] / s_before.iloc[-1] - 1)
+            if spy_idx is not None and not is_crypto(t):
+                cut = int(np.searchsorted(spy_idx, day, side="right"))
+                if cut > 0 and len(spy_vals) - cut >= h:
+                    bench = float(spy_vals[cut + h - 1] / spy_vals[cut - 1] - 1)
             row[f"d{h}"] = round(sign * (ret - (bench or 0.0)), 4)
         if "d1" in row:
             graded.append(row)
@@ -508,13 +603,14 @@ def grade_ideas(ideas: list[dict], history, spy=None, now: datetime | None = Non
             rows = [g for g in graded if g[key] == k and "d5" in g]
             if rows:
                 vals = [r["d5"] for r in rows]
-                out[k] = {"ideas": len(rows), "avg_5d": round(sum(vals) / len(vals), 4),
+                out[k] = {"ideas": len(rows), "avg_5d": round(sum(vals) / len(vals), 4), "t": tstat(vals),
                           "right": round(sum(v > 0 for v in vals) / len(vals), 2),
                           "verdict": verdict(vals) if len(vals) >= MIN_IDEAS else
                           f"too few to judge ({len(vals)} of {MIN_IDEAS} ideas)"}
         return out
 
     return {"graded": len(graded), "by_setup": group("setup"), "by_confidence": group("confidence"),
+            "by_setup_regime": group("setup_regime") if spy is not None else {},
             "recent": graded[-10:][::-1]}
 
 
@@ -559,6 +655,20 @@ def drawdown(runs: list[dict]) -> float | None:
     """How far the latest account value sits below its highest check-in (0 at a peak)."""
     eq = [r["equity"] for r in runs if r.get("equity")]
     return round(eq[-1] / max(eq) - 1, 4) if eq else None
+
+
+def trading_drawdown(trips: list, equity: float | None) -> float | None:
+    """How far the trades' own realized result sits below its best point, as a share of
+    the account. Unlike the account's drawdown it ignores what parked cash did: the
+    scenario lab found a brake on the account's value fired on every market dip and
+    shrank trading right when rebounds paid best."""
+    if not equity or equity <= 0:
+        return None
+    cum = peak = 0.0
+    for t in sorted(trips, key=lambda t: t.closed):
+        cum += t.pnl
+        peak = max(peak, cum)
+    return round((cum - peak) / equity, 4)
 
 
 def _equity_at(runs: list[dict], at: datetime) -> float | None:
@@ -685,6 +795,14 @@ def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | Non
               grades: list[str] | None = None, deposits: list[dict] | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     trips, open_lots = round_trips(attach_tags(fills, tags), spy=spy, now=now)
+    spy_arrays = _spy_arrays(spy)
+    regimes: dict = {}
+
+    def regime_day(day):
+        if day not in regimes:
+            regimes[day] = regime_before(spy_arrays, day)
+        return regimes[day]
+
     today = _et_date(now)
     todays = [f for f in fills if _ts(f["executed_at"]) and _et_date(_ts(f["executed_at"])) == today]
     summary = {
@@ -693,6 +811,9 @@ def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | Non
         "account": f"••••{account[-4:]}" if account else "",
         "overall": stats(trips),
         "by_asset": _grouped(trips, lambda t: "crypto" if is_crypto(t.ticker) else "stocks"),
+        "regime_now": regime_day(today) if spy is not None else None,
+        "by_setup_regime": _grouped(trips, lambda t: f"{t.setup}|{regime_day(_et_date(_ts(t.opened)))}")
+        if spy is not None else {},
         "by_confidence": _grouped(trips, lambda t: t.confidence),
         "by_play": _grouped(trips, lambda t: t.play),
         "by_style": _grouped(trips, lambda t: t.style),
@@ -705,6 +826,7 @@ def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | Non
         "trader": trader_state(runs or [], now),
         "vs_market": vs_market(runs or [], spy, deposits),
         "drawdown": drawdown(runs or []),
+        "trading_drawdown": trading_drawdown(trips, (trader_state(runs or [], now) or {}).get("equity")),
         "discipline": discipline(trips, runs or [], now),
         "risk": risk_view(tags, runs or [], trips, now),
         "tax": tax_view(trips, fills, now),
@@ -750,8 +872,11 @@ def render_text(summary: dict) -> str:
             line += f" (deposits of ${m['deposits']:,.2f} taken out)"
         lines.append(line)
     if summary.get("drawdown") is not None and summary["drawdown"] <= -0.05:
-        lines.append(f"  DRAWDOWN: {summary['drawdown']:.1%} below the peak"
-                     + ("; brake on: new trades LOW size only until it recovers." if summary["drawdown"] <= -0.10 else "."))
+        lines.append(f"  DRAWDOWN: the account is {summary['drawdown']:.1%} below its peak.")
+    tdd = summary.get("trading_drawdown")
+    if tdd is not None and tdd <= -0.05:
+        lines.append(f"  TRADES' DRAWDOWN: the trades have given back {-tdd:.1%} of the account from their best"
+                     + ("; brake on: new trades LOW size until they win it back." if tdd <= -0.10 else "."))
     dsc = summary.get("discipline") or {}
     if dsc.get("line"):
         lines.append(f"  DISCIPLINE: {dsc['line']}")
@@ -779,7 +904,8 @@ def render_text(summary: dict) -> str:
             lines += ["", name.replace("by_", "GRADES BY ").upper()]
             for k, st in summary[name].items():
                 lines.append(f"  {k:<12}{st['trades']:>3} trades, won {st['win_rate'] * 100:.0f}%, "
-                             f"avg {_pct(st['avg_return'])}, ${st['pnl']:+.2f}: {st['verdict']}")
+                             f"avg {_pct(st['avg_return'])} ({_pct(st.get('avg_adj'))} vs the market), "
+                             f"${st['pnl']:+.2f}: {st['verdict']}")
     lines += ["", "OPEN NOW"]
     if not summary["open"]:
         lines.append("  Nothing open.")

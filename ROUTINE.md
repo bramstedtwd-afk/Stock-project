@@ -1,10 +1,17 @@
-# Agentic Trading Routine — Playbook (v31, 2026-11-04)
+# Agentic Trading Routine — Playbook (v32, 2026-11-04)
 
 The trader's complete operating manual. Read it from the Google Drive folder
 **"StockSage"**, file **exactly "StockSage Routine Playbook.md"** (find the
 folder first, then the file inside it; never a bare title search: stray copies
 elsewhere are stale by definition). State the version you loaded, from this
 header, at the top of every report.
+
+**v32: learned from the scenario lab** (STRATEGY.md). The brake now follows
+your trades' own results, not the market (section 3); verdicts are judged
+against the market and need t >= 2.5; the memory grades every setup per
+market regime and confidence uses "this setup in this kind of market"; the
+regime map (section 8) says what to look for in each. Ideas are the best
+teacher: note them for every setup word, in every regime.
 
 **v31: discipline, like a great trader** (section 3a). A daily loss limit
 (account 4% down on the day: no new buys until tomorrow), no buying back a
@@ -138,13 +145,16 @@ memory and adds up the evidence:
 | **LOW** | 0-1 | A test position, 5-8% of the account. No evidence is LOW |
 | **NO** | below 0 | Do not open |
 
-- **Brake:** when the account is 10% or more below its highest check-in, new
-  buys are LOW size whatever the score, until it recovers (the command does
-  this). Selling is never braked.
+- **Brake:** when your trades' own results have given back 10% of the
+  account from their best point, new buys are LOW size whatever the score,
+  until they win it back (the command does this). A market dip of parked
+  SPY does not count: the scenario lab showed that version fired on every
+  dip and cost about 5% a year in crashes and chop, right when rebound
+  setups paid best. Selling is never braked.
 - **Calibration:** start every BUY tag's and IDEA's why with the level, e.g.
   `[MEDIUM] pullback to the 21-day in an uptrend`. The scorecard grades
-  trades and ideas by level; if HIGH is not beating LOW after 10 of each it
-  says "not calibrated": size HIGH like MEDIUM until it is.
+  trades and ideas by level and reports it; ten of each is mostly luck, so
+  keep sizing by the evidence until the record is large.
 - **Report it**: "AAPL: MEDIUM (+3): look-alikes lean right, pullback record
   working, regime mixed."
 - The crypto test keeps its own budget (section 9) until crypto has 10
@@ -348,6 +358,21 @@ StockSage's tests found no timing rule that beat holding the market over
 decades: a down regime is a reason to trade the short side carefully and
 quickly, not to bet the account on further declines.
 
+**The regime map: what to look for in each kind of market.** The trade
+memory now grades every setup separately per regime (`by_setup_regime`, the
+memory's `regime_now`: up / down / mixed from SPY's trend before today's
+open), and the confidence command uses "this setup in this kind of market"
+once that record or its ideas are decided. These are STARTING HYPOTHESES from
+how markets usually behave, not proven edges: write IDEA lines for them in
+every regime and let the grading confirm or kill each one.
+
+| Regime | Look for (test with IDEAs) | Usually fails | The rules |
+|---|---|---|---|
+| **up** | pullbacks to the 20/50-day in leaders, breakouts on volume, momentum and news continuation | fading strong names, buying laggards because they are "cheap" | full sizes from the evidence; idle cash in SPY |
+| **mixed / chop** | pullbacks and bounces to support, oversold quality, gap fills | breakouts and momentum chases (they reverse), wide stops | smaller AGGRESSIVE trades; take targets quickly |
+| **down (grind)** | inverse funds with confirmation, defensive leaders green on red days, small quick bounces | pullbacks in falling names (falling knives), breakouts, holding through bad news | long setups score -1; idle cash in SGOV |
+| **crash, then rebound** | after a capitulation day (VIX spike, extreme fear, a flush), quality bounces; the first strong rebound days | catching the knife before the flush; inverse funds after the turn | daily limit and brake protect; a crash is when the brake on your *trades* (not the market) matters |
+
 ## 9. Crypto test (owner-approved 2026-11-03)
 
 Crypto trades in this account's crypto side (`get_crypto_positions`,
@@ -411,9 +436,12 @@ Trade Tags.txt" yourself. Times are UTC, e.g. `2026-11-04T15:10Z`.
   ideal; wake-up runs too). Pick the best candidates from the four screens and
   the brief, score each with the confidence command, and record each one with
   its level, taken or passed. No settled cash is never a reason to skip them:
-  the ideas are graded against the market a day and a week later either way. StockSage grades each a day and a week later against the market;
-  20+ graded ideas on a setup count toward your confidence. This is the
-  fastest way to learn which setups and which confidence levels work.
+  StockSage grades each a day and a week later against the market, per setup
+  and per regime. **Ideas are your best teacher:** in the scenario lab, idea
+  verdicts were wrong 4% of the time and found real edges about four times as often
+  as verdicts on closed trades (there are many more of them, and a passed
+  idea teaches as much as a taken one). Note ideas of every setup word,
+  including ones you would not take today, so each regime gets graded.
 - **DEPOSIT** when the account's cash jumps from a transfer (check
   Robinhood's transfers if unsure), so added money never counts as gains.
 - **RUN** at the end of every run, trade or not: it is the heartbeat (the

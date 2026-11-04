@@ -19,8 +19,12 @@ each counted only when there is enough of it:
      days later): cheaper evidence, used only while the setup has no 10-trade
      record, and weighted lower.
 
-Brake: once the account is 10% below its highest check-in, new trades are
-LOW size whatever the score, until it recovers. Selling is never braked.
+Brake: once the trades' own results have given back 10% of the account from
+their best point, new trades are LOW size whatever the score, until they win
+it back. Market moves of parked cash do not count: the scenario lab found a
+brake on the account's value fired on every market dip and cost about 5% a
+year in crash and choppy markets while protecting nothing. Selling is never
+braked.
 
 Discipline (the trade memory's `discipline`, rebuilt at every note; it resets
 each trading day, so a bad day never turns into a timid week):
@@ -36,8 +40,9 @@ Score -> level -> what the trader may do (defaults, the owner set no hard caps):
   NO     (< 0)  : do not open. Exits are never gated by confidence.
 
 Confidence is graded too: every buy's TAG carries its level ("[HIGH] why..."),
-the scorecard groups trades by it, and if HIGH trades do not beat LOW ones
-after 10 of each, the trader sizes HIGH like MEDIUM until they do.
+and the scorecard groups trades by it. It is reported, not enforced: the
+scenario lab found capping HIGH whenever HIGH trailed LOW cost 2-3% a year
+with no drawdown benefit (10 trades of each is mostly luck).
 
 Standard library only: `python -m stocksage.confidence TICKER --setup pullback`.
 """
@@ -55,6 +60,11 @@ SHORT_SIDE_SETUPS = {"inverse", "defensive", "bounce", "fear"}
 MIN_GROUP = 10
 MIN_IDEAS = 20
 BRAKE_AT = -0.10          # account this far below its peak: new trades at LOW size until it recovers
+
+
+def _adj(group: dict) -> float:
+    v = group.get("avg_adj")
+    return (group.get("avg_return") or 0.0) if v is None else v
 
 
 def _lookalike_points(ev: dict | None) -> tuple[int, str]:
@@ -76,8 +86,9 @@ def _record_points(group: dict | None, label: str) -> tuple[int, str]:
         n = (group or {}).get("trades", 0)
         return 0, f"your {label}: {n} closed trades, too few to count"
     v = group.get("verdict", "")
-    avg = group.get("avg_return") or 0.0
-    desc = f"your {label}: {group['trades']} trades, avg {avg:+.1%}, {v}"
+    avg = group.get("avg_adj")
+    avg = (group.get("avg_return") or 0.0) if avg is None else avg
+    desc = f"your {label}: {group['trades']} trades, avg {avg:+.1%} vs the market, {v}"
     if v.startswith("working"):
         return 2, desc
     if v.startswith("losing"):
@@ -123,6 +134,30 @@ def _discipline(level: str, reasons: list[str], d: dict, ticker: str) -> str:
     return level
 
 
+def _decided(group: dict | None) -> bool:
+    return str((group or {}).get("verdict", "")).startswith(("working", "losing"))
+
+
+def _context_points(memory: dict, setup: str) -> tuple[int | None, str]:
+    """This setup in THIS kind of market (the memory's regime today): the trades'
+    verdict first, then the graded ideas', each only once it is decided. A setup
+    can work in rising markets and fail in falling ones; the plain setup record
+    averages that away."""
+    reg = memory.get("regime_now")
+    if not reg:
+        return None, ""
+    key = f"{setup}|{reg}"
+    group = (memory.get("by_setup_regime") or {}).get(key)
+    if _decided(group) and group.get("trades", 0) >= MIN_GROUP:
+        return _record_points(group, f"'{setup}' trades in a {reg} market")
+    ideas = ((memory.get("ideas") or {}).get("by_setup_regime") or {}).get(key)
+    if _decided(ideas):
+        return _idea_points(ideas, f"{setup}' in a {reg} market, '{setup}")[0], \
+            f"your '{setup}' ideas in a {reg} market: {ideas['ideas']} graded, avg {ideas.get('avg_5d', 0):+.1%} " \
+            f"over 5 days, {ideas['verdict']}"
+    return None, ""
+
+
 def score(*, side: str = "buy", setup: str = "", asset: str = "stocks", play: str = "",
           lookalike: dict | None = None, memory: dict | None = None, regime: str | None = None,
           crypto_flags: dict | None = None, confirmations: int = 0, ticker: str = "",
@@ -133,7 +168,9 @@ def score(*, side: str = "buy", setup: str = "", asset: str = "stocks", play: st
         parts.append(_lookalike_points(lookalike))
     memory = memory or {}
     setup_group = (memory.get("by_setup") or {}).get(setup)
-    pts, why = _record_points(setup_group, f"'{setup}' trades")
+    pts, why = _context_points(memory, setup)
+    if pts is None:
+        pts, why = _record_points(setup_group, f"'{setup}' trades")
     if pts == 0 and (setup_group or {}).get("trades", 0) < MIN_GROUP:
         ipts, iwhy = _idea_points(((memory.get("ideas") or {}).get("by_setup") or {}).get(setup), setup)
         if ipts:
@@ -161,10 +198,11 @@ def score(*, side: str = "buy", setup: str = "", asset: str = "stocks", play: st
     total = sum(p for p, _ in parts)
     level = next((name for name, floor in LEVELS if total >= floor), "NO")
     reasons = [f"{p:+d}  {w}" for p, w in parts]
-    dd = memory.get("drawdown")
+    dd = memory["trading_drawdown"] if "trading_drawdown" in memory else memory.get("drawdown")
     if side == "buy" and dd is not None and dd <= BRAKE_AT and level in ("HIGH", "MEDIUM"):
         level = "LOW"
-        reasons.append(f"BRAKE: the account is {dd:.1%} below its peak, so new trades are LOW size until it recovers")
+        reasons.append(f"BRAKE: your trades have given back {-dd:.1%} of the account from their best point, so new "
+                       "trades are LOW size until they win it back")
     if side == "buy":
         level = _discipline(level, reasons, todays_discipline(memory, now), ticker)
     return {"level": level, "score": total, "size": SIZE_GUIDE[level], "reasons": reasons}
