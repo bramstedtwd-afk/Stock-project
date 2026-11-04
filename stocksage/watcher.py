@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -55,6 +56,12 @@ MEMORY_EVERY = timedelta(minutes=5)             # new positions and moved stops 
 BETA = "experimental-cc-routine-2026-04-01"
 HEARTBEAT = timedelta(hours=2)
 STARTUP_FILE = "StockSage Watcher.cmd"
+# Brands people write instead of the listed name.
+ALIASES = {"GOOGL": ["Google", "Alphabet", "YouTube"], "GOOG": ["Google", "Alphabet", "YouTube"],
+           "META": ["Meta", "Facebook", "Instagram"], "BRK.B": ["Berkshire"], "JPM": ["JPMorgan"],
+           "KO": ["Coca-Cola"], "PG": ["Procter"], "WMT": ["Walmart"], "UNH": ["UnitedHealth"]}
+NAME_SKIP = {"the", "first", "american", "united", "general", "international", "global", "national", "inc", "corp",
+             "group", "holdings", "company", "co"}
 # Funds get general market news all day: a NEWS wake-up is for a company's own news only.
 FUNDS = {"SPY", "VOO", "IVV", "VTI", "QQQ", "DIA", "IWM", "SGOV", "BIL", "SHV", "TLT", "IEF", "GLD", "SLV",
          "SH", "PSQ", "RWM", "SDS", "QID", "SPXU", "SQQQ", "TQQQ", "SSO", "QLD", "UPRO",
@@ -223,7 +230,7 @@ def _p(x: float) -> str:
 
 
 def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, news,
-          account: dict | None = None) -> list[str]:
+          account: dict | None = None, names=None) -> list[str]:
     """Plain-language events since the last check. Updates `state` so each fires once."""
     from .journal import DAILY_LOSS_LIMIT, is_crypto
 
@@ -320,11 +327,13 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
                 items = news(h["ticker"])
             except Exception:
                 continue
-            for item in items[:5]:
+            words = name_words(h["ticker"], names(h["ticker"]) if names else "")
+            for item in items[:8]:
                 fresh = now - datetime.fromisoformat(item["at"]) <= timedelta(hours=2)
                 if item["id"] not in seen:
                     seen.add(item["id"])
-                    if fresh and not first_look:
+                    known = len(words) > 1             # no name known: do not filter (better a spare wake-up)
+                    if fresh and not first_look and (not known or about_company(item["title"], words)):
                         events.append(f"NEWS: {h['ticker']}: {item['title']} ({item['source']})")
         state["news_seen"] = list(seen)[-500:]
     return events
@@ -345,6 +354,26 @@ def phone(title: str, text: str, push=None) -> None:
                                {"Title": title, "Priority": "high", "Tags": "warning"})
     except Exception as exc:
         log(f"could not alert the phone ({type(exc).__name__})")
+
+
+def name_words(ticker: str, name: str = "") -> list[str]:
+    """Words that mark a headline as about THIS company: the ticker, the first real word
+    of its name, and known brands. Finnhub tags market-wide stories ("Dow jumps 1,500
+    points") with every big ticker; three such wake-ups were wasted on 2026-11-04."""
+    words = [ticker.upper()] + ALIASES.get(ticker.upper(), [])
+    for w in re.findall(r"[A-Za-z][A-Za-z&'.-]+", name or ""):
+        if w.lower().strip(".") not in NAME_SKIP and len(w) >= 3:
+            words.append(w.strip("."))
+            break
+    return words
+
+
+def about_company(title: str, words: list[str]) -> bool:
+    for w in words:
+        flags = 0 if w.isupper() and len(w) <= 5 else re.I     # a ticker must match in capitals
+        if re.search(rf"(?<![A-Za-z]){re.escape(w)}(?![A-Za-z])", title or "", flags):
+            return True
+    return False
 
 
 def message(events: list[str], now: datetime) -> str:
@@ -405,9 +434,10 @@ def fire(text: str, post=None) -> dict:
 
 
 def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict, post=None,
-         push=None) -> str | None:
+         push=None, names=None) -> str | None:
     """One check. Returns the message that was sent, or None."""
-    events = check(state, now, holdings(memory), quote, crypto_quote, news, account=account_view(memory, now))
+    events = check(state, now, holdings(memory), quote, crypto_quote, news, account=account_view(memory, now),
+                   names=names)
     if any(e.startswith("STOP") for e in events):
         phone("StockSage: a stop was touched", "A position in the agentic account touched the stop the trader "
               "set. The trader is being woken to act on it.", push)
@@ -456,6 +486,23 @@ def _sources():
     return quote, crypto_price, news
 
 
+def _names(state: dict):
+    """Company names from Finnhub, looked up once per ticker and kept in the state file."""
+    from . import finnhub
+
+    cache = state.setdefault("names", {})
+
+    def name(t):
+        if t not in cache:
+            try:
+                cache[t] = finnhub.company_name(t)
+            except Exception:
+                return ""                       # try again next time
+        return cache[t]
+
+    return name
+
+
 def run_once(memory_reader=None) -> str | None:
     from .envfile import load_env
 
@@ -464,7 +511,7 @@ def run_once(memory_reader=None) -> str | None:
     now = datetime.now(timezone.utc)
     quote, cq, news = _sources()
     memory = read_memory(state, now, reader=memory_reader)
-    sent = tick(state, now, quote=quote, crypto_quote=cq, news=news, memory=memory)
+    sent = tick(state, now, quote=quote, crypto_quote=cq, news=news, memory=memory, names=_names(state))
     heartbeat(state, now, memory, force=state.pop("starting", False))
     save_state(state)
     return sent

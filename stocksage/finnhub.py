@@ -60,6 +60,11 @@ def company_news(symbol: str, days: int = 2, fetch=None, today: date | None = No
     return sorted(out, key=lambda r: r["at"], reverse=True)
 
 
+def company_name(symbol: str, fetch=None) -> str:
+    """The company's name from its Finnhub profile ("Microsoft Corp"), or ''."""
+    return str((_json(f"/stock/profile2?symbol={symbol.upper()}", fetch) or {}).get("name") or "")
+
+
 def market_news(fetch=None, limit: int = 10) -> list[dict]:
     rows = _json("/news?category=general", fetch) or []
     out = []

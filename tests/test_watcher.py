@@ -94,9 +94,12 @@ def test_market_move_and_news_and_crypto():
     headlines.insert(0, {"id": "2", "ticker": "PLD", "title": "Prologis buys warehouses", "source": "AP",
                          "at": (NOW + timedelta(minutes=5)).isoformat()})
     later = NOW + timedelta(minutes=6)
+    headlines.insert(0, {"id": "3", "ticker": "PLD", "title": "Dow skyrockets 1,500 points after the election",
+                         "source": "Yahoo", "at": (NOW + timedelta(minutes=5)).isoformat()})
     events = watcher.check(state, later, watcher.holdings(MEMORY), quotes(table), lambda t: 74000.0,
-                           lambda t: headlines)
+                           lambda t: headlines, names=lambda t: "Prologis, Inc.")
     assert "NEWS: PLD: Prologis buys warehouses (AP)" in events
+    assert not any("Dow skyrockets" in e for e in events), "a market story tagged PLD is not PLD's news"
     assert any(e.startswith("MOVE: BTC-USD +5.7%") for e in events), "crypto: 5% from its check-point"
     assert not any("SPY" in e for e in events), "market move told once per direction"
 
@@ -237,3 +240,14 @@ def test_a_position_bought_today_moves_from_its_buy_price_not_yesterdays_close()
     fall = quotes({"GOOGL": (283.0, 0.01), "SPY": (750.0, 0.0)})
     assert any("MOVE: GOOGL -3.5% since it was bought today" in e
                for e in watcher.check({}, NOW, watcher.holdings(memory), fall, lambda t: None, None))
+
+
+def test_headlines_must_name_the_company():
+    words = watcher.name_words("GOOGL", "Alphabet Inc")
+    assert watcher.about_company("Google is telling schools to take its AI", words)
+    assert watcher.about_company("Alphabet stock rises 1.4%", words)
+    assert not watcher.about_company("Three reasons stocks are moving higher after the midterms", words)
+    ms = watcher.name_words("MSFT", "Microsoft Corp")
+    assert watcher.about_company("Tech split after the sweep: Microsoft jumps", ms)
+    assert not watcher.about_company("Dow skyrockets 1,500 points in best day since the tariff pause", ms)
+    assert not watcher.about_company("msft lowercase is not the ticker", ["MSFT"])
