@@ -688,8 +688,11 @@ def grade_ideas(ideas: list[dict], history, spy=None, now: datetime | None = Non
                           f"too few to judge ({len(vals)} of {MIN_IDEAS} ideas)"}
         return out
 
+    day1 = [g["d1"] for g in graded]
     return {"graded": len(graded), "by_setup": group("setup"), "by_confidence": group("confidence"),
             "by_setup_regime": group("setup_regime") if spy is not None else {},
+            "day1": {"ideas": len(day1), "avg": round(sum(day1) / len(day1), 4) if day1 else None,
+                     "right": round(sum(v > 0 for v in day1) / len(day1), 2) if day1 else None},
             "recent": graded[-10:][::-1]}
 
 
@@ -979,6 +982,12 @@ def render_text(summary: dict) -> str:
     ideas = summary.get("ideas") or {}
     if ideas.get("graded"):
         lines += ["", f"IDEAS GRADED (trades considered, 5 days later, vs the market): {ideas['graded']}"]
+        d1 = ideas.get("day1") or {}
+        if d1.get("ideas"):
+            lines.append(f"  after 1 day: {d1['ideas']} ideas, right {d1['right'] * 100:.0f}%, avg {_pct(d1['avg'])} "
+                         "vs the market (early read; the 5-day grades below are the ones that count)")
+        if not ideas.get("by_setup"):
+            lines.append("  no idea is 5 trading days old yet: per-setup grades start then")
         for k, st in list(ideas.get("by_setup", {}).items()) + [(f"[{k}]", v) for k, v in ideas.get("by_confidence", {}).items()]:
             lines.append(f"  {k:<12}{st['ideas']:>4} ideas, right {st['right'] * 100:.0f}%, avg {_pct(st['avg_5d'])}: {st['verdict']}")
     for name in ("by_asset", "by_confidence", "by_play", "by_style", "by_setup", "by_exit"):

@@ -251,3 +251,14 @@ def test_headlines_must_name_the_company():
     assert watcher.about_company("Tech split after the sweep: Microsoft jumps", ms)
     assert not watcher.about_company("Dow skyrockets 1,500 points in best day since the tariff pause", ms)
     assert not watcher.about_company("msft lowercase is not the ticker", ["MSFT"])
+
+
+def test_after_hours_events_wait_when_nothing_held_can_trade():
+    evening = datetime(2026, 11, 3, 23, 58, tzinfo=timezone.utc)      # 6:58 PM ET, clear of the runs
+    frac = {"open": [{"ticker": "MSFT", "dollars_in": 7.0, "entry": 549.4, "opened": "2026-11-02T14:37+00:00"}]}
+    sent = []
+    args = dict(quote=quotes({"MSFT": (530.0, -0.035), "SPY": (750.0, 0.0)}), crypto_quote=lambda t: None, news=None,
+                post=lambda u, t, b: sent.append(b), push=lambda *a: None)
+    assert watcher.tick({}, evening, memory=frac, **args) is None and not sent
+    whole = {"open": [{"ticker": "MSFT", "dollars_in": 1100.0, "entry": 549.4, "opened": "2026-11-02T14:37+00:00"}]}
+    assert watcher.tick({}, evening, memory=whole, **args), "two whole shares can be sold after hours"

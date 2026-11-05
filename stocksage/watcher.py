@@ -433,11 +433,26 @@ def fire(text: str, post=None) -> dict:
     return (post or _post)(url, token, {"text": text[:4000]})
 
 
+def _can_trade_now(held: list[dict]) -> bool:
+    """Outside 9:30-4:00 only whole shares (extended hours) and crypto can be sold. When
+    every holding is a fractional stock position, an after-hours wake-up can only look:
+    it is left to the next scheduled run instead of costing a run of its own."""
+    from .journal import is_crypto
+
+    return any(is_crypto(h["ticker"]) or (h.get("shares") or 0) >= 1 for h in held)
+
+
 def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict, post=None,
          push=None, names=None) -> str | None:
     """One check. Returns the message that was sent, or None."""
-    events = check(state, now, holdings(memory), quote, crypto_quote, news, account=account_view(memory, now),
-                   names=names)
+    held = holdings(memory)
+    events = check(state, now, held, quote, crypto_quote, news, account=account_view(memory, now), names=names)
+    if events and not regular_session(now) and not _can_trade_now(held):
+        later = [e for e in events if not e.startswith(URGENT)]
+        if later:
+            log("after hours and nothing held can trade now (fractional shares): left to the next scheduled run: "
+                + "; ".join(later))
+        events = [e for e in events if e.startswith(URGENT)]
     if any(e.startswith("STOP") for e in events):
         phone("StockSage: a stop was touched", "A position in the agentic account touched the stop the trader "
               "set. The trader is being woken to act on it.", push)
