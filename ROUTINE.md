@@ -1,10 +1,15 @@
-# Agentic Trading Routine — Playbook (v33, 2026-11-04)
+# Agentic Trading Routine — Playbook (v34, 2026-11-05)
 
 The trader's complete operating manual. Read it from the Google Drive folder
 **"StockSage"**, file **exactly "StockSage Routine Playbook.md"** (find the
 folder first, then the file inside it; never a bare title search: stray copies
 elsewhere are stale by definition). State the version you loaded, from this
 header, at the top of every report.
+
+**v34: a hedge is allowed on a big down day, whatever the regime** (owner,
+2026-11-05; section 8, point 3): SPY down 1.5%+ (or QQQ 2%+) on the day, below
+its prior-day low or VWAP, VIX up. LOW size, 1x SH or PSQ only, out by the next
+session's close unless the regime has turned down. Start RUN lines with `v34:`.
 
 **v33: stops that actually work, and memory that keeps what it learned.**
 Fractional shares cannot carry a stop order, so the watcher now IS the stop:
@@ -110,7 +115,7 @@ app, by changing the loader line to OFF, or by saying "stop" or "pause".
    from the screens, taken or not); a DEPOSIT if the owner added money.
 10. **Housekeeping** on the run starting 10:30-11:30 Eastern (section 11).
 11. **Report** in plain English (section 12), then the **RUN line** last,
-    starting with the playbook version: `v33: held PLD, bought ...`.
+    starting with the playbook version: `v34: held PLD, bought ...`.
 
 ## 2a. Wake-up runs (started by the watcher, not the clock)
 
@@ -364,10 +369,16 @@ Add "after-hours" or "overnight" to the why.
 1. **Lose less**: in a `down` regime tighten stops on longs, never add to losers.
 2. **Defensive leaders** (`defensive`): the strongest names or sector funds
    in the brief's `leaders_5d` that are green on a red day.
-3. **Inverse funds** (`inverse`), only with confirmation (regime `down`, or
-   `mixed` with a clear catalyst, AND SPY/QQQ below its prior-day low or VWAP
-   today, AND VIX up on the day), always with a stop or an exit when SPY
-   reclaims VWAP or the prior-day low:
+3. **Inverse funds** (`inverse`), only with confirmation, always with a stop
+   or an exit when SPY reclaims VWAP or the prior-day low. Either:
+   - **the trend:** regime `down`, or `mixed` with a clear catalyst, AND
+     SPY/QQQ below its prior-day low or VWAP today, AND VIX up on the day; or
+   - **a big down day, whatever the regime** (owner-approved 2026-11-05): SPY
+     down 1.5% or more on the day (or QQQ 2% or more), AND SPY below its
+     prior-day low or VWAP, AND VIX up on the day. This is a hedge, not a bet
+     on a turn: LOW size only, 1x `SH` or `PSQ` only, and out by the close of
+     the next session unless the regime has turned `down` by then (then it
+     is an ordinary inverse trade). Say "big-down-day hedge" in the why.
    1x `SH`, `PSQ`, `RWM` (hours to days); 2x `SDS`, `QID` (AGGRESSIVE, same
    day to two days: daily-reset funds bleed in chop); 3x `SPXU`, `SQQQ` only
    same day, with a stated reason.
@@ -447,7 +458,7 @@ Trade Tags.txt" yourself. Times are UTC, e.g. `2026-11-04T15:10Z`.
     IDEA | time | BUY or SELL | TICKER | setup word | price now | [LEVEL] why (taken or not)
     DEPOSIT | time | amount (negative for a withdrawal)
     STOP | time | TICKER | new stop price | target price (optional) | why (optional)
-    RUN | time | account value | settled cash | v33: one plain sentence on what this run did
+    RUN | time | account value | settled cash | v34: one plain sentence on what this run did
 
 - **TAG** every filled order, from the confirmed fill. Buys start the why
   with the confidence level and name the stop and the target:
