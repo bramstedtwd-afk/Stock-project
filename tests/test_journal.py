@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timezone
 
 import pandas as pd
+import pytest
 
 from stocksage import journal as jr
 
@@ -339,3 +340,32 @@ def test_runs_that_name_no_playbook_say_so():
     s = jr.summarize([], [], runs=jr.parse_runs("RUN | 2026-11-04T15:00Z | 100 | 10 | held"),
                      now=datetime(2026, 11, 4, 16, tzinfo=timezone.utc))
     assert s["trader"]["playbook"] is None and "playbook version not stated" in jr.render_text(s)
+
+
+def test_a_failed_read_never_overwrites_the_trade_history(tmp_path, monkeypatch):
+    monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path))
+
+    def broken(name):
+        raise RuntimeError("Drive said 503")
+
+    with pytest.raises(jr.MemoryUnreadable):
+        jr._read_previous_memory(reader=broken, wait=0)
+    with pytest.raises(jr.MemoryUnreadable):
+        jr._read_previous_memory(reader=lambda n: '{"fills": [', wait=0)
+    assert jr._read_previous_memory(reader=lambda n: None, wait=0) is None, "no file yet is not an error"
+    monkeypatch.setattr(jr, "_read_previous_memory", lambda: (_ for _ in ()).throw(jr.MemoryUnreadable("x")))
+    published = []
+    monkeypatch.setattr(jr, "_save_and_publish", lambda summary, upload: published.append(summary))
+    with pytest.raises(jr.MemoryUnreadable):
+        jr.refresh_without_broker(None, upload=True, tags_text="RUN | 2026-11-05T15:50Z | 104 | 1 | v34: x")
+    assert not published
+
+
+def test_a_short_robinhood_read_keeps_every_confirmed_fill():
+    previous = {"fills": [fill("rh-pld", "PLD", "buy", 0.2, 127.25, "2026-10-20T19:53:42+00:00"),
+                          fill("rh-msft", "MSFT", "buy", 0.01, 549.4, "2026-11-04T14:37:55+00:00"),
+                          fill("tag-x", "ZZZ", "buy", 1, 10, "2026-11-04T14:37:55+00:00")]}
+    short = [fill("rh-msft", "MSFT", "buy", 0.01, 549.4, "2026-11-04T14:37:55+00:00"),
+             fill("rh-msft2", "MSFT", "sell", 0.01, 536.3, "2026-11-05T15:50:00+00:00")]
+    got = jr.keep_confirmed(short, previous)
+    assert [f["order_id"] for f in got] == ["rh-pld", "rh-msft", "rh-msft2"], "PLD kept, tag fill not promoted"

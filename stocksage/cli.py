@@ -688,7 +688,11 @@ def cmd_journal(args) -> int:
     from .robinhood import RobinhoodClient
 
     if args.cloud:                        # no broker login: Robinhood's last fills + the trader's notes
-        print(journal.render_text(journal.refresh_without_broker(Engine(), upload=not args.no_upload)))
+        try:
+            print(journal.render_text(journal.refresh_without_broker(Engine(), upload=not args.no_upload)))
+        except journal.MemoryUnreadable as exc:
+            print(f"Trade report not rebuilt: {exc}")
+            return 1
         return 0
     if not (os.environ.get("STOCKSAGE_AGENTIC_ACCOUNT") or "").strip():
         print("No agentic account set. Add STOCKSAGE_AGENTIC_ACCOUNT=<its number> to .env, then run  "

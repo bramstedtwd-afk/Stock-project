@@ -1157,6 +1157,11 @@ def refresh(engine, client, upload: bool = True, account: str | None = None,
     fills = client.order_history(account_number=account)
     if fills is None:
         return None
+    if upload:
+        try:
+            fills = keep_confirmed(fills, _read_previous_memory())
+        except MemoryUnreadable as exc:
+            log.warning("%s; using Robinhood's list alone", exc)
     if tags_text is None:
         tags_text = _read_drive_tags() if upload else ""
     broker_crypto = None
@@ -1181,19 +1186,63 @@ def refresh(engine, client, upload: bool = True, account: str | None = None,
     return summary
 
 
+class MemoryUnreadable(RuntimeError):
+    """The previous trade memory exists but could not be read: rebuilding without it
+    would publish a memory that has lost every Robinhood-confirmed fill."""
+
+
+def _read_previous_memory(reader=None, tries: int = 2, wait: float = 2.0) -> dict | None:
+    """The trade memory now in Drive, or None only when there truly is none yet.
+    A failed or garbled read raises MemoryUnreadable instead of passing for "empty":
+    on 2026-11-05 a failed read on the trader's light path was taken as no history,
+    and the rebuilt file dropped 28 closed trades and the PLD position."""
+    import time
+
+    if reader is None:
+        from .drive_api import read_drive_text
+
+        reader = read_drive_text
+    last = None
+    for attempt in range(tries):
+        try:
+            raw = reader(MEMORY_NAME)
+            if not raw:
+                return None
+            got = json.loads(raw)
+            if isinstance(got, dict):
+                return got
+            last = ValueError("not a JSON object")
+        except Exception as exc:
+            last = exc
+        if attempt + 1 < tries:
+            time.sleep(wait)
+    raise MemoryUnreadable(f"could not read {MEMORY_NAME} from Drive ({type(last).__name__}); the report was not "
+                           "rebuilt, so the confirmed trade history is kept as it is")
+
+
+def _confirmed(fills: list | None) -> list:
+    return [f for f in fills or [] if not str(f.get("order_id", "")).startswith("tag-")]
+
+
+def keep_confirmed(fills: list[dict], previous: dict | None) -> list[dict]:
+    """Robinhood's fills plus every stock fill it confirmed before. An order once
+    filled never goes away, but a read can come back short: the history skips any
+    order whose ticker lookup fails, and on 2026-11-05 (Robinhood answering 502/503)
+    the memory lost the PLD position and 28 closed trades. Merged by order id."""
+    merged = {f["order_id"]: f for f in _confirmed((previous or {}).get("fills"))
+              if f.get("order_id") and not is_crypto(f.get("ticker", ""))}
+    for f in fills:
+        merged[f["order_id"]] = f
+    return sorted(merged.values(), key=lambda f: str(f.get("executed_at")))
+
+
 def refresh_without_broker(engine, upload: bool = True, previous: dict | None = None,
                            tags_text: str | None = None) -> dict:
     """The cloud runner's run: no broker login. Reuse the fills Robinhood last
     confirmed (kept in the previous memory file) and add only tagged fills that
     came after them, so the phone report stays current while the computer is off."""
     if previous is None and upload:
-        try:
-            from .drive_api import read_drive_text
-
-            raw = read_drive_text(MEMORY_NAME)
-            previous = json.loads(raw) if raw else None
-        except Exception:
-            previous = None
+        previous = _read_previous_memory()
     previous = previous or {}
     if tags_text is None:
         tags_text = _read_drive_tags() if upload else ""
@@ -1227,6 +1276,9 @@ def refresh_without_broker(engine, upload: bool = True, previous: dict | None = 
                         else "robinhood+notes",
                         grades=previous.get("grades"))
     _with_ideas(summary, engine, tags_text or "", previous)
+    if len(_confirmed(summary.get("fills"))) < len(_confirmed(previous.get("fills"))):
+        raise MemoryUnreadable("the rebuilt report would hold fewer Robinhood-confirmed fills than the one in Drive; "
+                               "not published")
     _save_and_publish(summary, upload)
     return summary
 
