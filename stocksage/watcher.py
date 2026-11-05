@@ -229,6 +229,19 @@ def _p(x: float) -> str:
     return f"{x:,.0f}" if x >= 1000 else f"{x:,.2f}" if x >= 1 else f"{x:.6g}"
 
 
+def _fresh(q: dict | None, now: datetime) -> dict | None:
+    """A quote only counts if it was traded today (Eastern). Before the open the free
+    quote still carries yesterday's close and yesterday's change: at 7:00 AM on
+    2026-11-05 that woke the trader with 'MSFT +6.7% today' from the day before."""
+    if not q or not q.get("at"):
+        return q
+    try:
+        at = datetime.fromisoformat(str(q["at"]))
+    except ValueError:
+        return q
+    return q if at.astimezone(ET).date() == now.astimezone(ET).date() else None
+
+
 def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, news,
           account: dict | None = None, names=None) -> list[str]:
     """Plain-language events since the last check. Updates `state` so each fires once."""
@@ -255,7 +268,7 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
                         events.append(f"MOVE: {t} {price / base - 1:+.1%} since the last check-point, now {_p(price)}"
                                       + (f" (bought at {_p(h['entry'])})" if h.get("entry") else ""))
             else:
-                q = quote(t)
+                q = _fresh(quote(t), now)
                 price = q["price"] if q else None
                 change = q["day_change"] if q else None
                 bought_today = bool(h.get("lots")) and all(_opened_today(lot, now) for lot in h["lots"])
@@ -299,7 +312,7 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
                           f"(now {_p(price)}): check its stop")
     if in_hours:
         try:
-            spy = quote("SPY")
+            spy = _fresh(quote("SPY"), now)
             if spy:
                 direction = "up" if spy["day_change"] > 0 else "down"
                 if abs(spy["day_change"]) >= MARKET_MOVE and direction not in state["market"]:

@@ -262,3 +262,15 @@ def test_after_hours_events_wait_when_nothing_held_can_trade():
     assert watcher.tick({}, evening, memory=frac, **args) is None and not sent
     whole = {"open": [{"ticker": "MSFT", "dollars_in": 1100.0, "entry": 549.4, "opened": "2026-11-02T14:37+00:00"}]}
     assert watcher.tick({}, evening, memory=whole, **args), "two whole shares can be sold after hours"
+
+
+def test_yesterdays_quote_before_the_open_wakes_nobody():
+    seven_am = datetime(2026, 11, 5, 12, 0, tzinfo=timezone.utc)
+    yesterday = "2026-11-04T21:00:00+00:00"
+    stale = lambda t: {"symbol": t, "price": 555.8, "day_change": 0.067 if t != "SPY" else 0.017,  # noqa: E731
+                       "at": yesterday}
+    memory = {"open": [{"ticker": "MSFT", "dollars_in": 7.0, "entry": 549.4, "opened": "2026-11-04T14:37+00:00"}]}
+    assert watcher.check({}, seven_am, watcher.holdings(memory), stale, lambda t: None, None) == []
+    live = lambda t: {"symbol": t, "price": 530.0, "day_change": -0.035, "at": seven_am.isoformat()}  # noqa: E731
+    assert any(e.startswith("MOVE: MSFT") for e in watcher.check({}, seven_am, watcher.holdings(memory), live,
+                                                                  lambda t: None, None))
