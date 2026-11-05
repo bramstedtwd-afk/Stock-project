@@ -606,7 +606,8 @@ IDEA_HORIZONS = (1, 5)          # trading days after the idea
 MIN_IDEAS = 20                  # an idea group speaks only with this many graded
 
 
-NOT_AN_IDEA = re.compile(r"not a real idea|\btest (check|only|line|run)\b|--help", re.I)
+NOT_AN_IDEA = re.compile(r"not a real idea|\btest (check|only|line|run)\b|--help|\bdup(licate)? check\b|"
+                         r"^\W*(\[\w+\]\s*)?(test|check|testing)\W*$", re.I)
 
 
 def parse_ideas(text: str) -> list[dict]:

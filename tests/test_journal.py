@@ -291,6 +291,7 @@ def test_test_lines_are_not_graded_as_ideas():
     text = "\n".join([
         "IDEA | 2026-11-04T15:01Z | BUY | XLU | defensive | 43.05 | [NO] test check only, not a real idea",
         "IDEA | 2026-11-03T16:45Z | BUY | MSFT | pullback | 515.81 | test --help",
+        "IDEA | 2026-11-05T13:45Z | BUY | XOM | pullback | 171.75 | [LOW] dup check",
         "IDEA | 2026-11-04T15:01Z | BUY | AMD | earnings | 499.01 | [LOW] passed: earnings eased AI fears"])
     assert [i["ticker"] for i in jr.parse_ideas(text)] == ["AMD"]
 
