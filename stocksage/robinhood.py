@@ -309,10 +309,14 @@ class RobinhoodClient:
         exactly like an account that has not traded yet. The account list (or, since
         Robinhood's list can leave an account out, its profile read by number) says
         which it is."""
+        number = "".join(ch for ch in str(account_number) if ch.isdigit())
+        known = self.__dict__.setdefault("_has_account", {})
+        if number in known:                  # asked once per run: each miss prints a 404 on screen
+            return known[number]
         if not self.login():
             return None
-        number = "".join(ch for ch in str(account_number) if ch.isdigit())
         if any(a.number == number for a in self.accounts()):
+            known[number] = True
             return True
         import robin_stocks.robinhood as rh
 
@@ -321,9 +325,8 @@ class RobinhoodClient:
         except Exception as exc:
             log.warning("could not look up account %s: %s", number[-4:], exc)
             return None
-        if isinstance(profile, dict) and str(profile.get("account_number") or "") == number:
-            return True
-        return False
+        known[number] = isinstance(profile, dict) and str(profile.get("account_number") or "") == number
+        return known[number]
 
     def portfolio_for(self, account_number: str) -> Portfolio | None:
         """Holdings and buying power for ONE named account.

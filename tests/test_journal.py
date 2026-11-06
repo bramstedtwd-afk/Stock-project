@@ -471,3 +471,20 @@ def test_switch_account_saves_the_new_number_and_says_what_is_left(monkeypatch, 
     assert saved["n"] == "999999999" and "••••9999" in out and ".\\start.bat journal" in out
     assert cli.cmd_switch_account(argparse.Namespace(number="999999999")) == 0
     assert "already set" in capsys.readouterr().out
+
+
+def test_the_brief_never_sizes_from_an_account_this_login_cannot_see(monkeypatch):
+    from stocksage import advisor
+
+    class Client:
+        def has_account(self, number):
+            return False
+
+        def portfolio_for(self, number):
+            raise AssertionError("not asked: each ask prints a 404 on the owner's screen")
+
+        def portfolio(self):
+            raise AssertionError("never the default (personal) account's money")
+
+    monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "999999999")
+    assert advisor._agentic_portfolio(Client()) is None

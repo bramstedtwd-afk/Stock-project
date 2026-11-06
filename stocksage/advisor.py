@@ -721,6 +721,13 @@ def _agentic_portfolio(client):
     but the brief should not be misleading in the first place.
     """
     account = (os.environ.get("STOCKSAGE_AGENTIC_ACCOUNT") or "").strip()
+    reachable = getattr(client, "has_account", None)
+    if account and reachable is not None and reachable(account) is False:
+        # Under another Robinhood login (2026-11-06 account move): unknown, not $0 and not
+        # the default account's money. The routine sizes from its own live read.
+        log.warning("account ••••%s is not under this computer's Robinhood login; the brief carries "
+                    "no holdings or buying power for it", account[-4:])
+        return None
     if account:
         try:
             scoped = client.portfolio_for(account)
@@ -864,7 +871,9 @@ def plans_for_accounts(engine: Engine, client, suggestions: list | None = None,
             # even though it can be read by number. Try that before giving up.
             direct = None
             try:
-                direct = client.portfolio_for(agentic)
+                reachable = getattr(client, "has_account", None)
+                if reachable is None or reachable(agentic) is not False:
+                    direct = client.portfolio_for(agentic)
             except Exception as exc:
                 log.warning("could not read routine account directly: %s", exc)
             if direct is not None and (direct.holdings or direct.buying_power > 0
