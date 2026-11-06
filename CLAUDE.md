@@ -168,6 +168,43 @@ publishing, Congress, dollar sizing all landed inside one month). **Fetch
 first, then look.** Never hand the owner a git command you have not
 verified against freshly-fetched refs.
 
+## Picking up in a new session or on another Claude account (read first)
+
+Conversation history does not travel; everything that matters does. A new
+session starts here:
+
+1. **This file**, then `STRATEGY.md` (what the research found and what is in
+   force) and `ROUTINE.md` (the trader's playbook, currently v34).
+2. **The private handoff** in the owner's Google Drive, folder "StockSage",
+   file "StockSage Session Handoff.md": routine settings and full prompt,
+   account ending, file ids, the dashboard link, open items. Personal
+   details live there, never in this public repo.
+3. **Live state, from Drive** (connect the owner's Google Drive): "StockSage
+   Trade Tags.txt" (every TAG/IDEA/RUN/STOP/WAKE/WATCH line, newest last;
+   the file is large, so save the read and print the tail), "StockSage
+   Trades.txt" (the phone report), "StockSage Trade Memory.json",
+   "StockSage Brief.json", "StockSage Today.txt" (its modified time is the
+   always-on PC's last broker run).
+4. **The trader routine's health**: `get_trigger` on the routine (see the
+   handoff for its id) shows `last_run` status; a failure reason of
+   USAGE_LIMIT_REACHED means the owning account is out of usage.
+
+How to check a trader run (the owner asks "check the next run" often): the
+routine fires at :35 past each hour 12:35-23:35 UTC on weekdays plus watcher
+wake-ups; read the tags tail after the run, confirm the RUN line starts with
+the playbook version, buys name a stop, STOP lines exist for every holding,
+3+ IDEA lines, WAKE lines are real (company-named news, real moves,
+STOP/LIMIT), and compare the account with the previous close. Report in
+plain English; never hand the owner a bare command (see below).
+
+Switching the TRADER to another Claude account (it runs on its owner
+account's usage; on 2026-11-05 a usage limit made its runs fail): recreate
+the routine on the new account with the same prompt, cron, model and
+connectors (Robinhood + Google Drive, repo attached), create its API trigger,
+put the new fire URL and token on the always-on PC with `.\start.bat keys`,
+restart the watcher (`.\start.bat watch-trader install`), and DISABLE the
+old routine. Two live routines would trade the same account twice.
+
 ## Current state & first jobs on the owner's machine (2026-07-11)
 
 Everything was built in a cloud sandbox whose proxy **blocked live Yahoo
