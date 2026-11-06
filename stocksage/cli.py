@@ -900,6 +900,39 @@ def cmd_cryptolab(args) -> int:
     return 0
 
 
+def cmd_switch_account(args) -> int:
+    """Point StockSage and the trading routine's playbook at a new agentic Robinhood account.
+    The old account's trades stay in the record (journal.carry_over); its leftover
+    positions are listed, never watched or planned as if they were in the new account."""
+    from . import firstrun
+
+    old = (os.environ.get("STOCKSAGE_AGENTIC_ACCOUNT") or "").strip()
+    print("Switching the trading routine to a new Robinhood account.")
+    print(f"Now: ••••{old[-4:]}" if old else "Now: no account set.")
+    answer = (args.number or "").strip() or _ask("New account number (digits only): ")
+    try:
+        stored = firstrun.set_agentic_account(answer)
+    except ValueError as exc:
+        print(f"Not changed: {exc}.")
+        return 1
+    if old and stored == "".join(ch for ch in old if ch.isdigit()):
+        print("That is the account already set; nothing changed.")
+        return 0
+    os.environ["STOCKSAGE_AGENTIC_ACCOUNT"] = stored
+    print(f"Saved. StockSage now follows ••••{stored[-4:]}.")
+    if (os.environ.get("STOCKSAGE_AGENTIC_CRYPTO_ID") or "").strip():
+        print("Note: a crypto account id is also set (STOCKSAGE_AGENTIC_CRYPTO_ID). If the new account trades "
+              "crypto under a different login, change that line in .env too.")
+    print("\nNext, one at a time:")
+    print("  .\\start.bat journal          (rebuilds the trade memory: the old account's trades stay in the record)")
+    print("  .\\start.bat publish-drive    (the playbook in Drive now names the new account)")
+    print("  .\\start.bat watch-trader install   (after closing the old watcher window)")
+    print("And outside this computer: the routine's stored instructions name the account number too; they must "
+          "be changed to the new one (Claude can do it for you). If the new account uses a different Robinhood "
+          "login, reconnect the Robinhood connector in claude.ai settings.")
+    return 0
+
+
 def cmd_scenarios(args) -> int:
     """The scenario lab: the trader's rules and memory in bull, bear, crash, chop and no-edge markets."""
     import os
@@ -1974,6 +2007,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("cryptolab", help="crypto: what worked on real coin history (--now: today's crypto market)")
     p.add_argument("--now", action="store_true", help="show today's crypto market and flags instead")
     p.set_defaults(func=cmd_cryptolab)
+
+    p = sub.add_parser("switch-account", help="point StockSage and the routine's playbook at a new agentic account")
+    p.add_argument("number", nargs="?", default="", help="the new account number (asked if left out)")
+    p.set_defaults(func=cmd_switch_account)
 
     p = sub.add_parser("scenarios", help="what the trader's rules and memory do in every kind of market (simulated)")
     p.add_argument("--seeds", type=int, default=10, help="random markets per world (default 10)")

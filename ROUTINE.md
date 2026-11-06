@@ -1,10 +1,15 @@
-# Agentic Trading Routine — Playbook (v34, 2026-11-05)
+# Agentic Trading Routine — Playbook (v35, 2026-11-06)
 
 The trader's complete operating manual. Read it from the Google Drive folder
 **"StockSage"**, file **exactly "StockSage Routine Playbook.md"** (find the
 folder first, then the file inside it; never a bare title search: stray copies
 elsewhere are stale by definition). State the version you loaded, from this
 header, at the top of every report.
+
+**v35: moving to a new Robinhood account** (section 14). The trade record
+(trades, ideas, confidence history) carries over; positions left in the old
+account are listed but never traded from the new one. Start RUN lines with
+`v35:`.
 
 **v34: a hedge is allowed on a big down day, whatever the regime** (owner,
 2026-11-05; section 8, point 3): SPY down 1.5%+ (or QQQ 2%+) on the day, below
@@ -115,7 +120,7 @@ app, by changing the loader line to OFF, or by saying "stop" or "pause".
    from the screens, taken or not); a DEPOSIT if the owner added money.
 10. **Housekeeping** on the run starting 10:30-11:30 Eastern (section 11).
 11. **Report** in plain English (section 12), then the **RUN line** last,
-    starting with the playbook version: `v34: held PLD, bought ...`.
+    starting with the playbook version: `v35: held PLD, bought ...`.
 
 ## 2a. Wake-up runs (started by the watcher, not the clock)
 
@@ -458,7 +463,7 @@ Trade Tags.txt" yourself. Times are UTC, e.g. `2026-11-04T15:10Z`.
     IDEA | time | BUY or SELL | TICKER | setup word | price now | [LEVEL] why (taken or not)
     DEPOSIT | time | amount (negative for a withdrawal)
     STOP | time | TICKER | new stop price | target price (optional) | why (optional)
-    RUN | time | account value | settled cash | v34: one plain sentence on what this run did
+    RUN | time | account value | settled cash | v35: one plain sentence on what this run did
 
 - **TAG** every filled order, from the confirmed fill. Buys start the why
   with the confidence level and name the stop and the target:
@@ -544,3 +549,27 @@ push anything in the repository.
   positions defensively on live data, no new entries, log as usual, retry
   next run.
 - **Research unreachable** is a degraded run, not an anomaly.
+
+## 14. Moving to a new Robinhood account
+
+The owner may move this routine to a new agentic account. The account number
+appears in two places: hard rule 1 here (filled in when the owner's computer
+publishes) and your stored instructions. **If they disagree, trade neither:
+manage exits only, say so plainly, and wait for the owner.**
+
+- **Before the move** (when the owner says it is coming): on the last run in
+  the old account, sell what is left there (exit word `close`, why "account
+  switch"), unless the owner says to keep it. Fractional shares cannot be
+  transferred between accounts; selling keeps the record complete.
+- **The first run in the new account:** confirm the number in both places,
+  then write a DEPOSIT line for the difference between the new account's
+  value and the last RUN line's value (positive if the owner added money,
+  negative if less came over), so the comparison with the market stays
+  honest. Set stops (STOP lines) for anything already held there.
+- **The record carries over.** The trade memory keeps the old account's
+  closed trades, your graded ideas and your confidence history: your setups,
+  verdicts and R keep counting. Anything still in the old account is listed
+  under "LEFT IN AN EARLIER ACCOUNT": it is off-limits like the owner's other
+  accounts (hard rule 1); never trade it from here.
+- The daily loss limit compares with the last check-in before today; on the
+  day of the move it can misread, so trade small that day.

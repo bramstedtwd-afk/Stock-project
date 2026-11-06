@@ -875,9 +875,14 @@ def trader_state(runs: list[dict], now: datetime) -> dict:
 def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | None = None,
               account: str = "", runs: list[dict] | None = None, source: str = "robinhood",
               grades: list[str] | None = None, deposits: list[dict] | None = None,
-              stops: list[dict] | None = None) -> dict:
+              stops: list[dict] | None = None, archived: list[dict] | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     trips, open_lots = round_trips(attach_tags(fills, tags), spy=spy, now=now)
+    archived = list(archived or [])
+    left_behind: list[dict] = []
+    if archived:                       # earlier accounts: their closed trades stay in the record
+        old_trips, left_behind = round_trips(attach_tags(archived, tags), spy=spy, now=now)
+        trips = sorted(old_trips + trips, key=lambda t: t.closed)
     spy_arrays = _spy_arrays(spy)
     regimes: dict = {}
 
@@ -912,7 +917,9 @@ def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | Non
         "trading_drawdown": trading_drawdown(trips, (trader_state(runs or [], now) or {}).get("equity")),
         "discipline": discipline(trips, runs or [], now),
         "risk": risk_view(tags, runs or [], trips, now),
-        "tax": tax_view(trips, fills, now),
+        "tax": tax_view(trips, fills + archived, now),
+        "archived_fills": archived,
+        "old_account_open": left_behind,
         "spy_closes": spy_for_memory(spy_arrays),
         "grades": list(grades or []),
         "fills": [{k: f.get(k) for k in ("order_id", "ticker", "side", "quantity", "price", "executed_at")}
@@ -1008,6 +1015,10 @@ def render_text(summary: dict) -> str:
                      + (f", target {o['target']:g}" if o.get("target") else ""))
         if o.get("why"):
             lines.append(f"    why: {o['why']}")
+    if summary.get("old_account_open"):
+        lines += ["", "LEFT IN AN EARLIER ACCOUNT (not watched, not in today's plan)"]
+        for o in summary["old_account_open"]:
+            lines.append(f"  {o['ticker']}: ${o['dollars_in']:.2f} at ${o['entry']:.2f}")
     lines += ["", "RECENT TRADES (newest first)"]
     if not summary["recent"]:
         lines.append("  No closed trades yet.")
@@ -1157,11 +1168,15 @@ def refresh(engine, client, upload: bool = True, account: str | None = None,
     fills = client.order_history(account_number=account)
     if fills is None:
         return None
+    archived: list[dict] = []
     if upload:
         try:
-            fills = keep_confirmed(fills, _read_previous_memory())
+            previous = _read_previous_memory()
         except MemoryUnreadable as exc:
-            log.warning("%s; using Robinhood's list alone", exc)
+            log.warning("%s; built from Robinhood's list alone and NOT published (the record of earlier "
+                        "accounts lives in that file)", exc)
+            previous, upload = None, False
+        fills, archived = carry_over(fills, previous, account)
     if tags_text is None:
         tags_text = _read_drive_tags() if upload else ""
     broker_crypto = None
@@ -1180,7 +1195,7 @@ def refresh(engine, client, upload: bool = True, account: str | None = None,
             grades = []
     summary = summarize(fills, parse_tags(tags_text), spy=_spy_closes(engine), account=account,
                         runs=parse_runs(tags_text), source="robinhood", grades=grades,
-                        deposits=parse_deposits(tags_text), stops=parse_stops(tags_text))
+                        deposits=parse_deposits(tags_text), stops=parse_stops(tags_text), archived=archived)
     _with_ideas(summary, engine, tags_text or "")
     _save_and_publish(summary, upload)
     return summary
@@ -1222,6 +1237,30 @@ def _read_previous_memory(reader=None, tries: int = 2, wait: float = 2.0) -> dic
 
 def _confirmed(fills: list | None) -> list:
     return [f for f in fills or [] if not str(f.get("order_id", "")).startswith("tag-")]
+
+
+def _last4(account: str | None) -> str:
+    digits = re.sub(r"\D", "", str(account or ""))
+    return digits[-4:]
+
+
+def carry_over(fills: list[dict], previous: dict | None, account: str) -> tuple[list[dict], list[dict]]:
+    """(this account's fills, the archive of earlier accounts' fills).
+
+    Same account as the memory in Drive: Robinhood's read merged with every fill it
+    confirmed before (keep_confirmed). A NEW agentic account: the old account's fills
+    move to the archive, where their closed trades stay in the record (the trader's
+    setups, verdicts and confidence history carry over) but nothing in it counts as
+    open in the new account, so the watcher never guards a position that is not there."""
+    previous = previous or {}
+    archived = [dict(f) for f in previous.get("archived_fills") or []]
+    old = _last4(previous.get("account"))
+    if old and _last4(account) and old != _last4(account):
+        seen = {f.get("order_id") for f in archived}
+        archived += [dict(f, account=old) for f in _confirmed(previous.get("fills"))
+                     if f.get("order_id") not in seen and not is_crypto(f.get("ticker", ""))]
+        return list(fills), archived
+    return keep_confirmed(fills, previous), archived
 
 
 def keep_confirmed(fills: list[dict], previous: dict | None) -> list[dict]:
@@ -1270,13 +1309,14 @@ def refresh_without_broker(engine, upload: bool = True, previous: dict | None = 
     if spy is None or len(spy) == 0:
         spy = previous.get("spy_closes") or None       # the last full run's SPY closes, carried in the file
     summary = summarize(fills, tags, spy=spy, account=account, runs=parse_runs(tags_text),
-                        stops=parse_stops(tags_text),
+                        stops=parse_stops(tags_text), archived=previous.get("archived_fills"),
                         deposits=parse_deposits(tags_text),
                         source="robinhood" if not fills or len(fills) == len(confirmed) + len(crypto_confirmed)
                         else "robinhood+notes",
                         grades=previous.get("grades"))
     _with_ideas(summary, engine, tags_text or "", previous)
-    if len(_confirmed(summary.get("fills"))) < len(_confirmed(previous.get("fills"))):
+    if len(summary.get("archived_fills") or []) < len(previous.get("archived_fills") or []) or \
+            len(_confirmed(summary.get("fills"))) < len(_confirmed(previous.get("fills"))):
         raise MemoryUnreadable("the rebuilt report would hold fewer Robinhood-confirmed fills than the one in Drive; "
                                "not published")
     _save_and_publish(summary, upload)

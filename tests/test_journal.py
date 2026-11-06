@@ -369,3 +369,46 @@ def test_a_short_robinhood_read_keeps_every_confirmed_fill():
              fill("rh-msft2", "MSFT", "sell", 0.01, 536.3, "2026-11-05T15:50:00+00:00")]
     got = jr.keep_confirmed(short, previous)
     assert [f["order_id"] for f in got] == ["rh-pld", "rh-msft", "rh-msft2"], "PLD kept, tag fill not promoted"
+
+
+def test_a_new_agentic_account_keeps_the_record_but_not_the_old_positions(tmp_path, monkeypatch):
+    monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path))
+    old_fills = [fill("o1", "AAA", "buy", 1, 10, "2026-10-01T15:00:00+00:00"),
+                 fill("o2", "AAA", "sell", 1, 11, "2026-10-05T15:00:00+00:00"),
+                 fill("o3", "BBB", "buy", 1, 20, "2026-10-06T15:00:00+00:00")]          # still held there
+    previous = {"account": "••••0111", "fills": old_fills}
+    new_fills = [fill("n1", "CCC", "buy", 2, 5, "2026-11-09T15:00:00+00:00")]
+    fills, archived = jr.carry_over(new_fills, previous, "999999999")
+    assert [f["order_id"] for f in fills] == ["n1"] and {f["order_id"] for f in archived} == {"o1", "o2", "o3"}
+    assert all(f["account"] == "0111" for f in archived)
+    s = jr.summarize(fills, [], account="999999999", archived=archived,
+                     now=datetime(2026, 11, 9, 16, tzinfo=timezone.utc))
+    assert s["overall"]["trades"] == 1, "the old account's closed trade stays in the record"
+    assert [o["ticker"] for o in s["open"]] == ["CCC"], "only the new account's holdings are open"
+    assert [o["ticker"] for o in s["old_account_open"]] == ["BBB"]
+    assert "LEFT IN AN EARLIER ACCOUNT" in jr.render_text(s)
+    again, archived2 = jr.carry_over(new_fills, s, "999999999")
+    assert len(archived2) == 3 and [f["order_id"] for f in again] == ["n1"], "the archive travels on"
+    light = jr.refresh_without_broker(None, upload=False, previous=s, tags_text="")
+    assert light["overall"]["trades"] == 1 and len(light["archived_fills"]) == 3
+
+
+def test_the_same_account_still_merges_its_confirmed_fills():
+    previous = {"account": "••••0111", "fills": [fill("o1", "AAA", "buy", 1, 10, "2026-10-01T15:00:00+00:00")]}
+    fills, archived = jr.carry_over([], previous, "555000111")
+    assert [f["order_id"] for f in fills] == ["o1"] and archived == []
+
+
+def test_switch_account_saves_the_new_number_and_says_what_is_left(monkeypatch, capsys):
+    import argparse
+
+    from stocksage import cli, firstrun
+
+    saved = {}
+    monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "555000111")
+    monkeypatch.setattr(firstrun, "set_agentic_account", lambda a: saved.setdefault("n", a) and a)
+    assert cli.cmd_switch_account(argparse.Namespace(number="999999999")) == 0
+    out = capsys.readouterr().out
+    assert saved["n"] == "999999999" and "••••9999" in out and ".\\start.bat journal" in out
+    assert cli.cmd_switch_account(argparse.Namespace(number="999999999")) == 0
+    assert "already set" in capsys.readouterr().out
