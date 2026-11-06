@@ -301,6 +301,30 @@ class RobinhoodClient:
                 log.warning("skipping malformed account entry")
         return [a for a in out if a.number]
 
+    def has_account(self, account_number: str) -> bool | None:
+        """Is this account under this computer's Robinhood login? None when it cannot tell.
+
+        After the owner moved the trading routine to an account under ANOTHER login,
+        asking this login for that account's orders returns an empty list, which looks
+        exactly like an account that has not traded yet. The account list (or, since
+        Robinhood's list can leave an account out, its profile read by number) says
+        which it is."""
+        if not self.login():
+            return None
+        number = "".join(ch for ch in str(account_number) if ch.isdigit())
+        if any(a.number == number for a in self.accounts()):
+            return True
+        import robin_stocks.robinhood as rh
+
+        try:
+            profile = rh.profiles.load_account_profile(account_number=number)
+        except Exception as exc:
+            log.warning("could not look up account %s: %s", number[-4:], exc)
+            return None
+        if isinstance(profile, dict) and str(profile.get("account_number") or "") == number:
+            return True
+        return False
+
     def portfolio_for(self, account_number: str) -> Portfolio | None:
         """Holdings and buying power for ONE named account.
 

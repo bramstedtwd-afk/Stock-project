@@ -705,8 +705,12 @@ def parse_deposits(text: str) -> list[dict]:
         parts = [p.strip() for p in raw.split("|")]
         if len(parts) < 3 or parts[0].upper() != "DEPOSIT":
             continue
-        at, amount = _ts(parts[1]), _num(parts[2].replace("$", "").replace(",", ""), allow_zero=False)
-        if at is not None and amount is not None:
+        at = _ts(parts[1])
+        try:                               # a withdrawal (or less money coming over in an account switch) is negative
+            amount = float(parts[2].replace("$", "").replace(",", "").strip())
+        except ValueError:
+            amount = None
+        if at is not None and amount and math.isfinite(amount):
             out.append({"at": at, "amount": amount})
     return out
 
@@ -767,7 +771,7 @@ def _sales(trips: list) -> list[dict]:
     return sorted(rows.values(), key=lambda r: r["closed"])
 
 
-def discipline(trips: list, runs: list[dict], now: datetime) -> dict:
+def discipline(trips: list, runs: list[dict], now: datetime, deposits: list[dict] | None = None) -> dict:
     """The bad-day habits, as of `now` (they reset each trading day):
     DAILY LIMIT  the account is 4%+ below its last check-in before today: no new buys today.
     NO REVENGE   a name sold at a loss today is not bought back today.
@@ -783,8 +787,12 @@ def discipline(trips: list, runs: list[dict], now: datetime) -> dict:
         streak += 1
     todays = [r for r in sales if _ts(r["closed"]) and _et_date(_ts(r["closed"])) == today]
     eq = [r for r in runs if r.get("equity")]
-    start = next((r["equity"] for r in reversed(eq) if _et_date(r["at"]) < today), None)
-    latest = next((r["equity"] for r in reversed(eq) if _et_date(r["at"]) == today), None)
+    first = next((r for r in reversed(eq) if _et_date(r["at"]) < today), None)
+    last = next((r for r in reversed(eq) if _et_date(r["at"]) == today), None)
+    start = first["equity"] if first else None
+    latest = last["equity"] if last else None
+    if first and last:                 # money added or moved today is not a gain or a loss
+        latest -= sum(d["amount"] for d in deposits or [] if first["at"] < d["at"] <= last["at"])
     change = round(latest / start - 1, 4) if start and latest else None
     out = {"day": today.isoformat(), "losses_in_a_row": streak,
            "stopped_today": sorted({r["ticker"] for r in todays if r["pnl"] < 0}),
@@ -915,7 +923,7 @@ def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | Non
         "vs_market": vs_market(runs or [], spy, deposits),
         "drawdown": drawdown(runs or []),
         "trading_drawdown": trading_drawdown(trips, (trader_state(runs or [], now) or {}).get("equity")),
-        "discipline": discipline(trips, runs or [], now),
+        "discipline": discipline(trips, runs or [], now, deposits),
         "risk": risk_view(tags, runs or [], trips, now),
         "tax": tax_view(trips, fills + archived, now),
         "archived_fills": archived,
@@ -1165,10 +1173,19 @@ def refresh(engine, client, upload: bool = True, account: str | None = None,
     account = (account if account is not None else os.environ.get("STOCKSAGE_AGENTIC_ACCOUNT") or "").strip()
     if not account:
         return None
+    reachable = getattr(client, "has_account", None)
+    if reachable is not None and reachable(account) is False:
+        # The agentic account lives under another Robinhood login than this computer's
+        # (an account switch to a new login). Robinhood cannot be asked, so the record is
+        # built the way the cloud builds it: confirmed fills plus the trader's notes.
+        log.warning("account ••••%s is not under this computer's Robinhood login; the trade memory is "
+                    "built from the trader's notes", account[-4:])
+        return refresh_without_broker(engine, upload=upload, tags_text=tags_text, account=account)
     fills = client.order_history(account_number=account)
     if fills is None:
         return None
     archived: list[dict] = []
+    since = None
     if upload:
         try:
             previous = _read_previous_memory()
@@ -1176,9 +1193,13 @@ def refresh(engine, client, upload: bool = True, account: str | None = None,
             log.warning("%s; built from Robinhood's list alone and NOT published (the record of earlier "
                         "accounts lives in that file)", exc)
             previous, upload = None, False
-        fills, archived = carry_over(fills, previous, account)
+        if tags_text is None:
+            tags_text = _read_drive_tags()
+        since = (datetime.now(timezone.utc).isoformat(timespec="minutes") if switched(previous, account)
+                 else _account_since(previous))
+        fills, archived = carry_over(fills, previous, account, parse_tags(tags_text or ""))
     if tags_text is None:
-        tags_text = _read_drive_tags() if upload else ""
+        tags_text = ""
     broker_crypto = None
     try:
         broker_crypto = client.crypto_order_history()
@@ -1196,6 +1217,8 @@ def refresh(engine, client, upload: bool = True, account: str | None = None,
     summary = summarize(fills, parse_tags(tags_text), spy=_spy_closes(engine), account=account,
                         runs=parse_runs(tags_text), source="robinhood", grades=grades,
                         deposits=parse_deposits(tags_text), stops=parse_stops(tags_text), archived=archived)
+    if since:
+        summary["account_since"] = since
     _with_ideas(summary, engine, tags_text or "")
     _save_and_publish(summary, upload)
     return summary
@@ -1244,23 +1267,64 @@ def _last4(account: str | None) -> str:
     return digits[-4:]
 
 
-def carry_over(fills: list[dict], previous: dict | None, account: str) -> tuple[list[dict], list[dict]]:
+def carry_over(fills: list[dict], previous: dict | None, account: str,
+               tags: list[dict] | None = None) -> tuple[list[dict], list[dict]]:
     """(this account's fills, the archive of earlier accounts' fills).
 
     Same account as the memory in Drive: Robinhood's read merged with every fill it
     confirmed before (keep_confirmed). A NEW agentic account: the old account's fills
     move to the archive, where their closed trades stay in the record (the trader's
     setups, verdicts and confidence history carry over) but nothing in it counts as
-    open in the new account, so the watcher never guards a position that is not there."""
+    open in the new account, so the watcher never guards a position that is not there.
+    The old account is never read again, so its trades the trader noted after
+    Robinhood's last confirmation (`tags`) are archived from the notes."""
     previous = previous or {}
     archived = [dict(f) for f in previous.get("archived_fills") or []]
-    old = _last4(previous.get("account"))
-    if old and _last4(account) and old != _last4(account):
+    if switched(previous, account):
+        old = _last4(previous.get("account"))
+        confirmed = [f for f in _confirmed(previous.get("fills")) if not is_crypto(f.get("ticker", ""))]
+        stock_tags = [t for t in tags or [] if not is_crypto(t["ticker"])]
         seen = {f.get("order_id") for f in archived}
-        archived += [dict(f, account=old) for f in _confirmed(previous.get("fills"))
-                     if f.get("order_id") not in seen and not is_crypto(f.get("ticker", ""))]
+        moved = datetime.now(timezone.utc)           # notes after the move belong to the new account
+        archived += [dict(f, account=old) for f in confirmed + _noted_after(confirmed, stock_tags)
+                     if f.get("order_id") not in seen and (_ts(f["executed_at"]) or moved) <= moved]
         return list(fills), archived
     return keep_confirmed(fills, previous), archived
+
+
+def _account_since(previous: dict | None) -> str | None:
+    """When the memory's account took over. A memory moved to a new account before the move
+    time was recorded (2026-11-06) holds an archive but no confirmed fills of its own: the time
+    it was built is the move, so the old account's notes are never read as the new one's trades."""
+    previous = previous or {}
+    if previous.get("account_since"):
+        return previous["account_since"]
+    if previous.get("archived_fills") and not _confirmed(previous.get("fills")):
+        return previous.get("as_of")
+    return None
+
+
+def switched(previous: dict | None, account: str | None) -> bool:
+    """True when the memory in Drive belongs to another agentic account than `account`."""
+    old = _last4((previous or {}).get("account"))
+    return bool(old and _last4(account) and old != _last4(account))
+
+
+def _noted_after(confirmed: list[dict], stock_tags: list[dict], since=None) -> list[dict]:
+    """Fills from the trader's notes that came after Robinhood's last confirmed fill
+    (and after `since`, when the account changed), minus any it already confirmed."""
+    last = max((_ts(f["executed_at"]) for f in confirmed if _ts(f["executed_at"])), default=None)
+    since = _ts(since) if isinstance(since, str) else since
+    if since is not None and (last is None or since > last):
+        last = since
+
+    def already_confirmed(f):              # the trader's note can be stamped a few minutes after the fill
+        at = _ts(f["executed_at"])
+        return any(c["ticker"] == f["ticker"] and c["side"] == f["side"] and _ts(c["executed_at"])
+                   and abs(_ts(c["executed_at"]) - at) <= MATCH_WINDOW
+                   and abs(float(c["quantity"]) - f["quantity"]) <= 0.02 * max(f["quantity"], 1e-9)
+                   for c in confirmed)
+    return [f for f in fills_from_tags(stock_tags, after=last) if not already_confirmed(f)]
 
 
 def keep_confirmed(fills: list[dict], previous: dict | None) -> list[dict]:
@@ -1276,51 +1340,63 @@ def keep_confirmed(fills: list[dict], previous: dict | None) -> list[dict]:
 
 
 def refresh_without_broker(engine, upload: bool = True, previous: dict | None = None,
-                           tags_text: str | None = None) -> dict:
+                           tags_text: str | None = None, account: str | None = None) -> dict:
     """The cloud runner's run: no broker login. Reuse the fills Robinhood last
     confirmed (kept in the previous memory file) and add only tagged fills that
-    came after them, so the phone report stays current while the computer is off."""
+    came after them, so the phone report stays current while the computer is off.
+
+    `account` (the owner's computer only, from .env) moves the record to a new agentic
+    account when the memory names another one: the old account's fills are archived
+    and only notes made after the move count as the new account's trades."""
     if previous is None and upload:
         previous = _read_previous_memory()
     previous = previous or {}
     if tags_text is None:
         tags_text = _read_drive_tags() if upload else ""
     tags = parse_tags(tags_text)
-    confirmed = [f for f in previous.get("fills") or [] if not str(f.get("order_id", "")).startswith("tag-")]
+    account = (account or "").strip() or (previous.get("account") or "").replace("••••", "")
+    since = _account_since(previous)
+    archived = previous.get("archived_fills")
+    if switched(previous, account):
+        since = datetime.now(timezone.utc).isoformat(timespec="minutes")
+        _, archived = carry_over([], previous, account, tags)
+        previous_view = {}                 # nothing the old account confirmed belongs to the new one
+    else:
+        previous_view = previous
+    confirmed = _confirmed(previous_view.get("fills"))
     crypto_confirmed = [f for f in confirmed if is_crypto(f["ticker"])]
     confirmed = [f for f in confirmed if not is_crypto(f["ticker"])]
-    last = max((_ts(f["executed_at"]) for f in confirmed if _ts(f["executed_at"])), default=None)
-    def already_confirmed(f):              # the trader's note can be stamped a few minutes after the fill
-        at = _ts(f["executed_at"])
-        return any(c["ticker"] == f["ticker"] and c["side"] == f["side"] and _ts(c["executed_at"])
-                   and abs(_ts(c["executed_at"]) - at) <= MATCH_WINDOW
-                   and abs(float(c["quantity"]) - f["quantity"]) <= 0.02 * max(f["quantity"], 1e-9)
-                   for c in confirmed)
-
     stock_tags = [t for t in tags if not is_crypto(t["ticker"])]
     crypto_noted = [f for f in crypto_fills(tags)
                     if not any(c["ticker"] == f["ticker"] and c["side"] == f["side"] and _ts(c["executed_at"])
                                and abs(_ts(c["executed_at"]) - _ts(f["executed_at"])) <= MATCH_WINDOW
                                for c in crypto_confirmed)]
-    fills = (confirmed + [f for f in fills_from_tags(stock_tags, after=last) if not already_confirmed(f)]
-             + crypto_confirmed + crypto_noted)
-    account = (previous.get("account") or "").replace("••••", "")
+    fills = confirmed + _noted_after(confirmed, stock_tags, since) + crypto_confirmed + crypto_noted
     spy = _spy_closes(engine) if engine is not None else None
     if spy is None or len(spy) == 0:
         spy = previous.get("spy_closes") or None       # the last full run's SPY closes, carried in the file
     summary = summarize(fills, tags, spy=spy, account=account, runs=parse_runs(tags_text),
-                        stops=parse_stops(tags_text), archived=previous.get("archived_fills"),
+                        stops=parse_stops(tags_text), archived=archived,
                         deposits=parse_deposits(tags_text),
                         source="robinhood" if not fills or len(fills) == len(confirmed) + len(crypto_confirmed)
                         else "robinhood+notes",
                         grades=previous.get("grades"))
+    if since:
+        summary["account_since"] = since
     _with_ideas(summary, engine, tags_text or "", previous)
-    if len(summary.get("archived_fills") or []) < len(previous.get("archived_fills") or []) or \
-            len(_confirmed(summary.get("fills"))) < len(_confirmed(previous.get("fills"))):
-        raise MemoryUnreadable("the rebuilt report would hold fewer Robinhood-confirmed fills than the one in Drive; "
-                               "not published")
+    _refuse_smaller(summary, previous)
     _save_and_publish(summary, upload)
     return summary
+
+
+def _refuse_smaller(summary: dict, previous: dict) -> None:
+    """A rebuild may never hold fewer Robinhood-confirmed fills (this account's plus the
+    archive of earlier accounts') than the file it replaces."""
+    new_archive, old_archive = len(summary.get("archived_fills") or []), len(previous.get("archived_fills") or [])
+    if new_archive < old_archive or \
+            len(_confirmed(summary.get("fills"))) + new_archive < len(_confirmed(previous.get("fills"))) + old_archive:
+        raise MemoryUnreadable("the rebuilt report would hold fewer Robinhood-confirmed fills than the one in Drive; "
+                               "not published")
 
 
 def main(argv: list[str] | None = None) -> int:

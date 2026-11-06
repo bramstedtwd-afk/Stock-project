@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import pytest
@@ -397,6 +397,65 @@ def test_the_same_account_still_merges_its_confirmed_fills():
     previous = {"account": "••••0111", "fills": [fill("o1", "AAA", "buy", 1, 10, "2026-10-01T15:00:00+00:00")]}
     fills, archived = jr.carry_over([], previous, "555000111")
     assert [f["order_id"] for f in fills] == ["o1"] and archived == []
+
+
+def test_a_new_login_the_computer_cannot_read_switches_on_the_trader_notes(tmp_path, monkeypatch):
+    """The owner moved the trader to an account under ANOTHER Robinhood login: this computer's
+    login sees no orders there. The record must move to the new account from the notes, not
+    publish an empty account or keep guarding the old account's positions."""
+    monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path))
+    now = datetime.now(timezone.utc)
+
+    def t(h):
+        return (now + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%MZ")
+    previous = {"account": "••••0111",
+                "fills": [fill("o1", "AAA", "buy", 1, 10, "2026-10-01T15:00:00+00:00"),
+                          fill("o2", "AAA", "sell", 1, 11, "2026-10-05T15:00:00+00:00"),
+                          fill("o3", "BBB", "buy", 1, 20, "2026-10-06T15:00:00+00:00")]}
+    tags = "\n".join([
+        f"TAG | {t(-3)} | BUY | EEE | SAFE | pullback | 0.01 | 1000 | [MEDIUM] stop 990, noted, never confirmed",
+        f"RUN | {t(-3)} | 103.86 | 0.50 | v35: last run in the old account",
+        f"TAG | {t(1)} | BUY | CCC | SAFE | pullback | 2 | 5 | [LOW] stop 4.80, first trade in the new account",
+    ])
+
+    class Client:
+        def has_account(self, number):
+            return False
+
+        def order_history(self, account_number=None):
+            raise AssertionError("never asked: this login cannot see the account")
+
+    monkeypatch.setattr(jr, "_read_previous_memory", lambda: previous)
+    published = []
+    monkeypatch.setattr(jr, "_save_and_publish", lambda summary, upload: published.append(summary))
+    s = jr.refresh(None, Client(), upload=True, account="999999999", tags_text=tags)
+    assert published and s["account"] == "••••9999" and s["account_since"]
+    assert {f["order_id"] for f in s["archived_fills"]} >= {"o1", "o2", "o3"}
+    assert sorted(o["ticker"] for o in s["old_account_open"]) == ["BBB", "EEE"], "the noted buy is archived too"
+    assert [o["ticker"] for o in s["open"]] == ["CCC"], "only trades after the move are the new account's"
+    assert s["overall"]["trades"] == 1
+    again = jr.refresh_without_broker(None, upload=False, previous=s, tags_text=tags)
+    assert [o["ticker"] for o in again["open"]] == ["CCC"] and again["account_since"] == s["account_since"]
+
+
+def test_a_memory_moved_before_the_move_time_was_kept_never_rereads_the_old_notes(tmp_path, monkeypatch):
+    monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path))
+    moved = {"account": "••••9999", "fills": [], "as_of": "2026-11-06T19:10:00+00:00",
+             "archived_fills": [dict(fill("o1", "AAA", "buy", 1, 10, "2026-10-01T15:00:00+00:00"), account="0111")]}
+    tags = "\n".join(["TAG | 2026-11-06T16:38Z | BUY | EEE | SAFE | pullback | 0.01 | 1000 | [MEDIUM] old account",
+                      "TAG | 2026-11-09T15:00Z | BUY | CCC | SAFE | pullback | 2 | 5 | [LOW] new account"])
+    s = jr.refresh_without_broker(None, upload=False, previous=moved, tags_text=tags)
+    assert [o["ticker"] for o in s["open"]] == ["CCC"] and s["account_since"] == moved["as_of"]
+
+
+def test_money_moved_today_is_not_a_daily_loss():
+    runs = jr.parse_runs("RUN | 2026-11-05T20:00Z | 103.86 | 0.50 | old account\n"
+                         "RUN | 2026-11-06T15:00Z | 50.00 | 50.00 | v35: first run in the new account")
+    deposits = jr.parse_deposits("DEPOSIT | 2026-11-06T14:59Z | -53.86 | account switch")
+    now = datetime(2026, 11, 6, 16, tzinfo=timezone.utc)
+    assert jr.discipline([], runs, now)["limit_hit"], "without the deposit line it reads as a 52% loss"
+    d = jr.discipline([], runs, now, deposits)
+    assert d["day_change"] == 0.0 and not d["limit_hit"]
 
 
 def test_switch_account_saves_the_new_number_and_says_what_is_left(monkeypatch, capsys):
