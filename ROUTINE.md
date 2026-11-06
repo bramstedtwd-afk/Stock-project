@@ -563,9 +563,11 @@ manage exits only, say so plainly, and wait for the owner.**
   transferred between accounts; selling keeps the record complete.
 - **The first run in the new account:** confirm the number in both places,
   then write a DEPOSIT line for the difference between the new account's
-  value and the last RUN line's value (positive if the owner added money,
-  negative if less came over), so the comparison with the market stays
-  honest. Set stops (STOP lines) for anything already held there.
+  value and the old account's last value (the trade memory's
+  `account_move` line says it; never a RUN line of 0), positive if the
+  owner added money, negative if less came over, so the comparison with the
+  market stays honest. While the new account is empty, write its RUN lines
+  with value 0 (StockSage reads 0 as "no reading"). Set stops (STOP lines) for anything already held there.
 - **The record carries over.** The trade memory keeps the old account's
   closed trades, your graded ideas and your confidence history: your setups,
   verdicts and R keep counting. Anything still in the old account is listed

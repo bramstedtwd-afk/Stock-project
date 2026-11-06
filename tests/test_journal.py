@@ -488,3 +488,20 @@ def test_the_brief_never_sizes_from_an_account_this_login_cannot_see(monkeypatch
 
     monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "999999999")
     assert advisor._agentic_portfolio(Client()) is None
+
+
+def test_an_empty_new_account_is_no_reading_and_the_move_is_bridged():
+    """2026-11-06: the trader wrote RUN lines of 0 while the new account was empty."""
+    text = "\n".join(["RUN | 2026-11-02T20:00Z | 100.00 | 1 | v35: old account",
+                      "RUN | 2026-11-06T18:40Z | 103.86 | 0.50 | v35: old account",
+                      "RUN | 2026-11-06T19:41Z | 0 | 0 | v35: ACCOUNT MISMATCH",
+                      "RUN | 2026-11-09T15:00Z | 150.00 | 150.00 | v35: first run with money"])
+    runs, deposits = jr.parse_runs(text), jr.parse_deposits(text)
+    assert runs[2]["equity"] is None and jr.drawdown(runs[:3]) == 0.0
+    move = jr.account_move(runs, deposits, "2026-11-06T19:10+00:00")
+    assert move["value_before"] == 103.86 and move["implied"]["amount"] == 46.14
+    vm = jr.vs_market(runs, None, jr._with_move(deposits, move))
+    assert vm["account"] == 0.0386, "the 46.14 added is moved money, not a gain"
+    written = jr.parse_deposits("DEPOSIT | 2026-11-09T14:59Z | 46.14 | account switch")
+    assert jr.account_move(runs, written, "2026-11-06T19:10+00:00")["implied"] is None
+    assert "minus 103.86" in jr._move_view(move)["line"]

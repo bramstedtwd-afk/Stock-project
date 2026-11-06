@@ -201,7 +201,9 @@ def parse_runs(text: str) -> list[dict]:
         at = _ts(parts[1])
         if at is None:
             continue
-        out.append({"at": at, "equity": _num(parts[2], allow_zero=True),
+        # 0 is "no reading", not a value: during an account move the trader saw an empty
+        # new account and wrote 0 (2026-11-06), which would read as a 100% loss.
+        out.append({"at": at, "equity": _num(parts[2]),
                     "cash": _num(parts[3], allow_zero=True) if len(parts) > 3 else None,
                     "note": " | ".join(parts[4:])[:200]})
     return sorted(out, key=lambda r: r["at"])
@@ -1023,6 +1025,8 @@ def render_text(summary: dict) -> str:
                      + (f", target {o['target']:g}" if o.get("target") else ""))
         if o.get("why"):
             lines.append(f"    why: {o['why']}")
+    if (summary.get("account_move") or {}).get("line"):
+        lines += ["", summary["account_move"]["line"]]
     if summary.get("old_account_open"):
         lines += ["", "LEFT IN AN EARLIER ACCOUNT (not watched, not in today's plan)"]
         for o in summary["old_account_open"]:
@@ -1214,11 +1218,14 @@ def refresh(engine, client, upload: bool = True, account: str | None = None,
             grades = grade_lines(engine.db)
         except Exception:
             grades = []
+    runs, deposits = parse_runs(tags_text), parse_deposits(tags_text)
+    move = account_move(runs, deposits, since)
     summary = summarize(fills, parse_tags(tags_text), spy=_spy_closes(engine), account=account,
-                        runs=parse_runs(tags_text), source="robinhood", grades=grades,
-                        deposits=parse_deposits(tags_text), stops=parse_stops(tags_text), archived=archived)
+                        runs=runs, source="robinhood", grades=grades,
+                        deposits=_with_move(deposits, move), stops=parse_stops(tags_text), archived=archived)
     if since:
         summary["account_since"] = since
+        summary["account_move"] = _move_view(move)
     _with_ideas(summary, engine, tags_text or "")
     _save_and_publish(summary, upload)
     return summary
@@ -1304,6 +1311,46 @@ def _account_since(previous: dict | None) -> str | None:
     return None
 
 
+def account_move(runs: list[dict], deposits: list[dict], since) -> dict | None:
+    """The bridge across an account move, for the account-vs-market comparison.
+
+    `value_before` is the old account's last check-in. When the new account's first
+    check-in with money came without a DEPOSIT line since the move, the difference is
+    entered as an implied deposit (`implied`), as playbook section 14 prescribes, so
+    money that did or did not come over never counts as a gain or a loss."""
+    since = _ts(since) if isinstance(since, str) else since
+    if since is None:
+        return None
+    eq = [r for r in runs if r.get("equity")]
+    before = [r for r in eq if r["at"] <= since]
+    after = [r for r in eq if r["at"] > since]
+    out = {"since": since.isoformat(timespec="minutes"),
+           "value_before": before[-1]["equity"] if before else None, "implied": None}
+    if before and after and not any(d["at"] > since for d in deposits):
+        out["implied"] = {"at": after[0]["at"] - timedelta(seconds=1),
+                          "amount": round(after[0]["equity"] - before[-1]["equity"], 2)}
+    return out
+
+
+def _move_view(move: dict | None) -> dict | None:
+    """What the trader reads in the memory: the value to measure the first DEPOSIT from."""
+    if not move:
+        return None
+    implied = move.get("implied")
+    return {"since": move["since"], "value_before": move["value_before"],
+            "implied_deposit": implied["amount"] if implied else None,
+            "line": (f"Account moved {move['since'][:10]}: the old account's last value was "
+                     f"{move['value_before']:.2f}. First run with money in the new account: DEPOSIT = its value "
+                     f"minus {move['value_before']:.2f}." if move.get("value_before") else
+                     f"Account moved {move['since'][:10]}.")
+                    + (f" Not written yet, so {implied['amount']:+.2f} is counted as moved money."
+                       if implied else "")}
+
+
+def _with_move(deposits: list[dict], move: dict | None) -> list[dict]:
+    return deposits + [move["implied"]] if move and move.get("implied") else deposits
+
+
 def switched(previous: dict | None, account: str | None) -> bool:
     """True when the memory in Drive belongs to another agentic account than `account`."""
     old = _last4((previous or {}).get("account"))
@@ -1375,14 +1422,17 @@ def refresh_without_broker(engine, upload: bool = True, previous: dict | None = 
     spy = _spy_closes(engine) if engine is not None else None
     if spy is None or len(spy) == 0:
         spy = previous.get("spy_closes") or None       # the last full run's SPY closes, carried in the file
-    summary = summarize(fills, tags, spy=spy, account=account, runs=parse_runs(tags_text),
+    runs, deposits = parse_runs(tags_text), parse_deposits(tags_text)
+    move = account_move(runs, deposits, since)
+    summary = summarize(fills, tags, spy=spy, account=account, runs=runs,
                         stops=parse_stops(tags_text), archived=archived,
-                        deposits=parse_deposits(tags_text),
+                        deposits=_with_move(deposits, move),
                         source="robinhood" if not fills or len(fills) == len(confirmed) + len(crypto_confirmed)
                         else "robinhood+notes",
                         grades=previous.get("grades"))
     if since:
         summary["account_since"] = since
+        summary["account_move"] = _move_view(move)
     _with_ideas(summary, engine, tags_text or "", previous)
     _refuse_smaller(summary, previous)
     _save_and_publish(summary, upload)
