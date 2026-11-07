@@ -870,9 +870,11 @@ def plans_for_accounts(engine: Engine, client, suggestions: list | None = None,
             # Robinhood's account list does not always include the routine's account
             # even though it can be read by number. Try that before giving up.
             direct = None
+            owned = None
             try:
                 reachable = getattr(client, "has_account", None)
-                if reachable is None or reachable(agentic) is not False:
+                owned = reachable(agentic) if reachable is not None else None
+                if owned is not False:
                     direct = client.portfolio_for(agentic)
             except Exception as exc:
                 log.warning("could not read routine account directly: %s", exc)
@@ -880,6 +882,13 @@ def plans_for_accounts(engine: Engine, client, suggestions: list | None = None,
                                        or (direct.cash or 0) > 0):
                 entries.append(("agentic", f"Agentic ••••{agentic[-4:]}", direct, "cash"))
                 entries.sort(key=lambda e: (e[0] != "agentic", e[0]))
+            elif direct is not None and owned is True:
+                # The login confirmed the account by number and it reads as empty: it
+                # really is empty (e.g. a new account not yet funded), not unseen.
+                warnings.append(
+                    f"Your routine's account (••••{agentic[-4:]}) is connected but empty "
+                    "(no cash, nothing held), so there is nothing from it on this sheet yet."
+                )
             else:
                 warnings.append(
                     f"StockSage cannot see your routine's account (••••{agentic[-4:]}) with your login, "

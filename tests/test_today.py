@@ -576,6 +576,30 @@ def test_a_routine_account_that_cannot_be_read_at_all_is_explained_not_faked(mon
     assert any("••••0111" in w and "reads that account itself" in w for w in out["warnings"])
 
 
+def test_a_routine_account_the_login_owns_but_is_empty_is_called_empty_not_unseen(monkeypatch):
+    """2026-11-06: the new trader account was readable by number but unfunded, and
+    the sheet told the owner StockSage 'cannot see' it."""
+    from stocksage.advisor import plans_for_accounts
+    from stocksage.robinhood import Portfolio
+
+    monkeypatch.setenv("STOCKSAGE_AGENTIC_ACCOUNT", "555000111")
+
+    class Unfunded(FakeBroker):
+        def has_account(self, number):
+            return number == "555000111"
+
+        def portfolio_for(self, number):
+            if number == "555000111":
+                return Portfolio([], 0.0, number)
+            return super().portfolio_for(number)
+
+    engine = Engine(db=Database(":memory:"), market=FakeMarket({}))
+    out = plans_for_accounts(engine, Unfunded(), suggestions=default_suggestions(STRONG))
+    assert "agentic" not in [e["role"] for e in out["accounts"]], "never size the sheet from $0"
+    assert any("••••0111" in w and "connected but empty" in w for w in out["warnings"])
+    assert not any("cannot see" in w for w in out["warnings"])
+
+
 # ------------------------------------------------------------ readable headings and honest tags
 
 def test_headings_do_not_say_the_account_type_twice():
