@@ -153,6 +153,37 @@ def parse_stops(text: str) -> list[dict]:
     return sorted(out, key=lambda x: x["at"])
 
 
+def parse_closed(text: str) -> list[dict]:
+    """`CLOSED | <UTC time> | TICKER | why (optional)`: the owner closed a position left
+    behind in an EARLIER account (after an account switch nothing can read that account,
+    so its sales never reach the record). It only takes the position off the leftover
+    list; the sale is the owner's, so it is not graded as one of the trader's trades."""
+    out = []
+    for raw in (text or "").splitlines():
+        parts = [p.strip() for p in raw.split("|")]
+        if len(parts) < 3 or parts[0].upper() != "CLOSED":
+            continue
+        at, ticker = _ts(parts[1]), parts[2].upper()
+        if at is None or not re.fullmatch(r"[A-Z.\-]{1,10}", ticker):
+            continue
+        out.append({"at": at, "ticker": ticker, "note": " | ".join(parts[3:])[:200]})
+    return sorted(out, key=lambda x: x["at"])
+
+
+def drop_closed(left_behind: list[dict], closed: list[dict]) -> tuple[list[dict], list[dict]]:
+    """(still left, closed by the owner): a leftover lot is closed by a CLOSED line for its
+    ticker written after it was bought."""
+    still, gone = [], []
+    for lot in left_behind:
+        opened = _ts(lot.get("opened"))
+        hit = next((c for c in closed if c["ticker"] == lot["ticker"] and (opened is None or c["at"] >= opened)), None)
+        if hit:
+            gone.append(dict(lot, closed=hit["at"].isoformat(timespec="minutes"), closed_note=hit["note"]))
+        else:
+            still.append(lot)
+    return still, gone
+
+
 def apply_stops(open_lots: list[dict], stops: list[dict]) -> list[dict]:
     """Each open lot takes the latest STOP line for its ticker written after it was bought."""
     for lot in open_lots:
@@ -885,14 +916,17 @@ def trader_state(runs: list[dict], now: datetime) -> dict:
 def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | None = None,
               account: str = "", runs: list[dict] | None = None, source: str = "robinhood",
               grades: list[str] | None = None, deposits: list[dict] | None = None,
-              stops: list[dict] | None = None, archived: list[dict] | None = None) -> dict:
+              stops: list[dict] | None = None, archived: list[dict] | None = None,
+              closed: list[dict] | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     trips, open_lots = round_trips(attach_tags(fills, tags), spy=spy, now=now)
     archived = list(archived or [])
     left_behind: list[dict] = []
+    closed_by_owner: list[dict] = []
     if archived:                       # earlier accounts: their closed trades stay in the record
         old_trips, left_behind = round_trips(attach_tags(archived, tags), spy=spy, now=now)
         trips = sorted(old_trips + trips, key=lambda t: t.closed)
+        left_behind, closed_by_owner = drop_closed(left_behind, closed or [])
     spy_arrays = _spy_arrays(spy)
     regimes: dict = {}
 
@@ -930,6 +964,7 @@ def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | Non
         "tax": tax_view(trips, fills + archived, now),
         "archived_fills": archived,
         "old_account_open": left_behind,
+        "old_account_closed": closed_by_owner,
         "spy_closes": spy_for_memory(spy_arrays),
         "grades": list(grades or []),
         "fills": [{k: f.get(k) for k in ("order_id", "ticker", "side", "quantity", "price", "executed_at")}
@@ -1031,6 +1066,9 @@ def render_text(summary: dict) -> str:
         lines += ["", "LEFT IN AN EARLIER ACCOUNT (not watched, not in today's plan)"]
         for o in summary["old_account_open"]:
             lines.append(f"  {o['ticker']}: ${o['dollars_in']:.2f} at ${o['entry']:.2f}")
+    if summary.get("old_account_closed"):
+        lines += ["", "CLOSED BY YOU IN AN EARLIER ACCOUNT (not graded as the trader's trades): "
+                  + ", ".join(o["ticker"] for o in summary["old_account_closed"])]
     lines += ["", "RECENT TRADES (newest first)"]
     if not summary["recent"]:
         lines.append("  No closed trades yet.")
@@ -1149,8 +1187,10 @@ def append_note(line: str, upload: bool = True) -> str:
             raise ValueError(f"not a valid {kind} line: {kind} | UTC time | what happened")
     if kind == "STOP" and not parse_stops(line):
         raise ValueError("not a valid STOP line: STOP | UTC time | TICKER | stop price | target price (optional)")
-    if kind not in ("TAG", "RUN", "IDEA", "DEPOSIT", "WAKE", "WATCH", "STOP"):
-        raise ValueError("a note starts with TAG, RUN, IDEA, DEPOSIT, STOP, WAKE or WATCH")
+    if kind == "CLOSED" and not parse_closed(line):
+        raise ValueError("not a valid CLOSED line: CLOSED | UTC time | TICKER | why (optional)")
+    if kind not in ("TAG", "RUN", "IDEA", "DEPOSIT", "WAKE", "WATCH", "STOP", "CLOSED"):
+        raise ValueError("a note starts with TAG, RUN, IDEA, DEPOSIT, STOP, CLOSED, WAKE or WATCH")
     if not upload:
         return line
     from .drive_api import ensure_folder, get_service, upload_or_update
@@ -1222,7 +1262,8 @@ def refresh(engine, client, upload: bool = True, account: str | None = None,
     move = account_move(runs, deposits, since)
     summary = summarize(fills, parse_tags(tags_text), spy=_spy_closes(engine), account=account,
                         runs=runs, source="robinhood", grades=grades,
-                        deposits=_with_move(deposits, move), stops=parse_stops(tags_text), archived=archived)
+                        deposits=_with_move(deposits, move), stops=parse_stops(tags_text), archived=archived,
+                        closed=parse_closed(tags_text))
     if since:
         summary["account_since"] = since
         summary["account_move"] = _move_view(move)
@@ -1425,7 +1466,7 @@ def refresh_without_broker(engine, upload: bool = True, previous: dict | None = 
     runs, deposits = parse_runs(tags_text), parse_deposits(tags_text)
     move = account_move(runs, deposits, since)
     summary = summarize(fills, tags, spy=spy, account=account, runs=runs,
-                        stops=parse_stops(tags_text), archived=archived,
+                        stops=parse_stops(tags_text), archived=archived, closed=parse_closed(tags_text),
                         deposits=_with_move(deposits, move),
                         source="robinhood" if not fills or len(fills) == len(confirmed) + len(crypto_confirmed)
                         else "robinhood+notes",

@@ -372,6 +372,29 @@ def test_a_short_robinhood_read_keeps_every_confirmed_fill():
     assert [f["order_id"] for f in got] == ["rh-pld", "rh-msft", "rh-msft2"], "PLD kept, tag fill not promoted"
 
 
+def test_a_leftover_the_owner_closed_leaves_the_list_without_entering_the_record():
+    """2026-11-06: the owner sold the four positions left in the old account, which
+    nothing can read any more. A CLOSED note takes each off the list, ungraded."""
+    archived = [dict(fill("o1", "AAA", "buy", 1, 10, "2026-10-01T15:00:00+00:00"), account="0111"),
+                dict(fill("o2", "AAA", "sell", 1, 11, "2026-10-05T15:00:00+00:00"), account="0111"),
+                dict(fill("o3", "BBB", "buy", 1, 20, "2026-10-06T15:00:00+00:00"), account="0111"),
+                dict(fill("o4", "DDD", "buy", 1, 30, "2026-10-07T15:00:00+00:00"), account="0111")]
+    notes = ("CLOSED | 2026-11-07T01:00Z | BBB | sold by the owner after the account move\n"
+             "CLOSED | 2026-10-01T00:00Z | DDD | written before DDD was bought: does not count\n"
+             "CLOSED | not a time | DDD\n")
+    closed = jr.parse_closed(notes)
+    assert [c["ticker"] for c in closed] == ["DDD", "BBB"], "malformed lines are skipped"
+    s = jr.summarize([], [], account="999999999", archived=archived, closed=closed,
+                     now=datetime(2026, 11, 9, 16, tzinfo=timezone.utc))
+    assert [o["ticker"] for o in s["old_account_open"]] == ["DDD"]
+    assert [o["ticker"] for o in s["old_account_closed"]] == ["BBB"]
+    assert s["overall"]["trades"] == 1, "the owner's sale is not graded as a trade"
+    assert "CLOSED BY YOU IN AN EARLIER ACCOUNT" in jr.render_text(s)
+    assert jr.append_note("CLOSED | 2026-11-07T01:00Z | BBB | sold", upload=False)
+    with pytest.raises(ValueError):
+        jr.append_note("CLOSED | soon | BBB", upload=False)
+
+
 def test_a_new_agentic_account_keeps_the_record_but_not_the_old_positions(tmp_path, monkeypatch):
     monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path))
     old_fills = [fill("o1", "AAA", "buy", 1, 10, "2026-10-01T15:00:00+00:00"),
