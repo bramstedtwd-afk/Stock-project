@@ -508,7 +508,7 @@ def test_an_empty_new_account_is_no_reading_and_the_move_is_bridged():
     assert "minus 103.86" in jr._move_view(move)["line"]
 
 
-def _login_env(tmp_path, monkeypatch, works):
+def _login_env(tmp_path, monkeypatch, works, listed=True):
     import getpass
 
     from stocksage import envfile, robinhood, security
@@ -535,8 +535,11 @@ def _login_env(tmp_path, monkeypatch, works):
             return works
 
         def accounts(self):
-            return [robinhood.Account(number="999999999", kind="limited_margin", account_type="individual",
-                                      buying_power=0.0, portfolio_cash=0.0)]
+            return [robinhood.Account(number="999999999" if listed else "123456789", kind="limited_margin",
+                                      account_type="individual", buying_power=0.0, portfolio_cash=0.0)]
+
+        def has_account(self, number):
+            return number == "999999999"
 
     monkeypatch.setattr(robinhood, "RobinhoodClient", Client)
     return token, saved, seen
@@ -566,3 +569,16 @@ def test_a_failed_new_login_puts_the_old_one_back(tmp_path, monkeypatch, capsys)
     assert cli.cmd_switch_login(argparse.Namespace()) == 1
     assert token.read_text() == "old login's token" and saved["ROBINHOOD_USERNAME"] == "old@example.com"
     assert os.environ["ROBINHOOD_MFA_SECRET"] == "OLDSECRET" and "nothing changed" in capsys.readouterr().out
+
+
+def test_switch_login_reads_the_traders_account_even_when_robinhood_leaves_it_out_of_the_list(
+        tmp_path, monkeypatch, capsys):
+    """2026-11-06: the new login listed only its default account; the agentic one reads by number."""
+    import argparse
+
+    from stocksage import cli
+
+    _login_env(tmp_path, monkeypatch, works=True, listed=False)
+    assert cli.cmd_switch_login(argparse.Namespace()) == 0
+    out = capsys.readouterr().out
+    assert "reads fine" in out and "not under this login" not in out

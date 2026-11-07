@@ -992,11 +992,19 @@ def cmd_switch_login(args) -> int:
     for a in accounts:
         mark = "   <- the trader's account" if a.number == agentic else ""
         print(f"  ••••{a.number[-4:]}  {a.account_type or a.kind}{mark}")
-    if not accounts:
+    if agentic and not any(a.number == agentic for a in accounts):
+        # Robinhood's list often leaves out the agentic account; reading it by number is the real test.
+        reachable = client.has_account(agentic)
+        if reachable:
+            print(f"  ••••{agentic[-4:]}  (not in Robinhood's list, but it reads fine)   <- the trader's account")
+        elif reachable is None:
+            print(f"\nCould not check the trader's account (••••{agentic[-4:]}) just now; "
+                  ".\\start.bat journal  will say whether it can read it.")
+        else:
+            print(f"\nThe trader's account (••••{agentic[-4:]}) is not under this login. If it moved too, run "
+                  ".\\start.bat switch-account")
+    elif not accounts:
         print("  (Robinhood listed no accounts; the next steps will still try.)")
-    if agentic and accounts and not any(a.number == agentic for a in accounts):
-        print(f"\nThe trader's account (••••{agentic[-4:]}) is not under this login. If it moved too, run "
-              ".\\start.bat switch-account")
     print("\nAccounts under your previous login (a personal account or Roth there) are no longer on the daily "
           "sheet.")
     print("Next, one at a time:")
