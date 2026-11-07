@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -505,3 +506,63 @@ def test_an_empty_new_account_is_no_reading_and_the_move_is_bridged():
     written = jr.parse_deposits("DEPOSIT | 2026-11-09T14:59Z | 46.14 | account switch")
     assert jr.account_move(runs, written, "2026-11-06T19:10+00:00")["implied"] is None
     assert "minus 103.86" in jr._move_view(move)["line"]
+
+
+def _login_env(tmp_path, monkeypatch, works):
+    import getpass
+
+    from stocksage import envfile, robinhood, security
+
+    token = tmp_path / "robinhood.pickle"
+    token.write_text("old login's token")
+    monkeypatch.setattr(security, "token_pickle_path", lambda: token)
+    saved = {}
+    monkeypatch.setattr(envfile, "save_env", lambda values: saved.update(values))
+    for k, v in {"ROBINHOOD_USERNAME": "old@example.com", "ROBINHOOD_PASSWORD": "old",
+                 "ROBINHOOD_MFA_SECRET": "OLDSECRET", "STOCKSAGE_AGENTIC_ACCOUNT": "999999999"}.items():
+        monkeypatch.setenv(k, v)
+    answers = iter(["new@example.com"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    secrets = iter(["new-password", ""])
+    monkeypatch.setattr(getpass, "getpass", lambda prompt="": next(secrets))
+    seen = {}
+
+    class Client:
+        def login(self, trigger=None):
+            seen["token_present"] = token.exists()
+            seen["user"] = os.environ.get("ROBINHOOD_USERNAME")
+            seen["mfa"] = os.environ.get("ROBINHOOD_MFA_SECRET")
+            return works
+
+        def accounts(self):
+            return [robinhood.Account(number="999999999", kind="limited_margin", account_type="individual",
+                                      buying_power=0.0, portfolio_cash=0.0)]
+
+    monkeypatch.setattr(robinhood, "RobinhoodClient", Client)
+    return token, saved, seen
+
+
+def test_switch_login_signs_in_fresh_with_the_new_login(tmp_path, monkeypatch, capsys):
+    """The saved token would otherwise keep the PC on the OLD login whatever .env says."""
+    import argparse
+
+    from stocksage import cli
+
+    token, saved, seen = _login_env(tmp_path, monkeypatch, works=True)
+    assert cli.cmd_switch_login(argparse.Namespace()) == 0
+    assert seen == {"token_present": False, "user": "new@example.com", "mfa": None}, "fresh, no old TOTP"
+    assert not token.exists() and not list(tmp_path.glob("*.previous-login"))
+    assert saved["ROBINHOOD_USERNAME"] == "new@example.com" and saved["ROBINHOOD_MFA_SECRET"] == ""
+    out = capsys.readouterr().out
+    assert "••••9999" in out and "the trader's account" in out and ".\\start.bat journal" in out
+
+
+def test_a_failed_new_login_puts_the_old_one_back(tmp_path, monkeypatch, capsys):
+    import argparse
+
+    from stocksage import cli
+
+    token, saved, seen = _login_env(tmp_path, monkeypatch, works=False)
+    assert cli.cmd_switch_login(argparse.Namespace()) == 1
+    assert token.read_text() == "old login's token" and saved["ROBINHOOD_USERNAME"] == "old@example.com"
+    assert os.environ["ROBINHOOD_MFA_SECRET"] == "OLDSECRET" and "nothing changed" in capsys.readouterr().out

@@ -929,7 +929,79 @@ def cmd_switch_account(args) -> int:
     print("  .\\start.bat watch-trader install   (after closing the old watcher window)")
     print("And outside this computer: the routine's stored instructions name the account number too; they must "
           "be changed to the new one (Claude can do it for you). If the new account uses a different Robinhood "
-          "login, reconnect the Robinhood connector in claude.ai settings.")
+          "login, reconnect the Robinhood connector in claude.ai settings, and run  .\\start.bat switch-login  "
+          "to move this computer to it as well.")
+    return 0
+
+
+def cmd_switch_login(args) -> int:
+    """Point this computer at another Robinhood login (read-only, as always).
+
+    The PC keeps a saved sign-in token, and robin_stocks reuses it whatever the
+    username in .env says, so changing the email and password alone would quietly
+    keep reading the OLD login. This saves the new login, sets the old token aside,
+    signs in fresh, and lists what the new login holds. If the sign-in fails, the
+    old login and its token are put back and nothing has changed."""
+    import getpass
+    import shutil
+
+    from . import envfile, security
+    from .robinhood import RobinhoodClient
+
+    print("Switching the Robinhood login this computer reads (read-only: StockSage never places orders).")
+    print("What you type is saved only in this computer's .env file. Press Enter on an empty line to cancel.\n")
+    try:
+        email = input("New Robinhood email: ").strip()
+        password = getpass.getpass("New Robinhood password (hidden): ").strip() if email else ""
+        totp = getpass.getpass("Authenticator setup key, only if you use one (hidden; Enter to skip): ").strip() \
+            if password else ""
+    except (EOFError, KeyboardInterrupt):
+        email = password = ""
+    if not email or not password:
+        print("\nCancelled; nothing changed.")
+        return 1
+    keys = ("ROBINHOOD_USERNAME", "ROBINHOOD_PASSWORD", "ROBINHOOD_MFA_SECRET")
+    old = {k: os.environ.get(k, "") for k in keys}
+    token = security.token_pickle_path()
+    parked = token.with_name(token.name + ".previous-login")
+    if token.exists():
+        shutil.move(str(token), str(parked))
+
+    def put(values: dict) -> None:
+        envfile.save_env(values)
+        for k, v in values.items():
+            if v:
+                os.environ[k] = v
+            else:
+                os.environ.pop(k, None)
+
+    put({"ROBINHOOD_USERNAME": email, "ROBINHOOD_PASSWORD": password, "ROBINHOOD_MFA_SECRET": totp})
+    print("\nSigning in to the new login (Robinhood may ask you to approve it in the app or send a code)...")
+    client = RobinhoodClient()
+    if not client.login("switch-login"):
+        put(old)
+        if parked.exists():
+            shutil.move(str(parked), str(token))
+        print("Could not sign in with that login, so the previous one is back and nothing changed.")
+        print("Check the email and password and try again:  .\\start.bat switch-login")
+        return 1
+    parked.unlink(missing_ok=True)
+    accounts = client.accounts()
+    agentic = (os.environ.get("STOCKSAGE_AGENTIC_ACCOUNT") or "").strip()
+    print("Signed in. This login holds:")
+    for a in accounts:
+        mark = "   <- the trader's account" if a.number == agentic else ""
+        print(f"  ••••{a.number[-4:]}  {a.account_type or a.kind}{mark}")
+    if not accounts:
+        print("  (Robinhood listed no accounts; the next steps will still try.)")
+    if agentic and accounts and not any(a.number == agentic for a in accounts):
+        print(f"\nThe trader's account (••••{agentic[-4:]}) is not under this login. If it moved too, run "
+              ".\\start.bat switch-account")
+    print("\nAccounts under your previous login (a personal account or Roth there) are no longer on the daily "
+          "sheet.")
+    print("Next, one at a time:")
+    print("  .\\start.bat journal          (the trade record, now confirmed by Robinhood again)")
+    print("  .\\start.bat publish-drive")
     return 0
 
 
@@ -1949,6 +2021,9 @@ def build_parser() -> argparse.ArgumentParser:
                        "(install, off, status, once, test, serve)")
     p.add_argument("action", nargs="?", default="status", choices=["install", "off", "status", "once", "serve", "test"])
     p.set_defaults(func=cmd_watch_trader)
+
+    p = sub.add_parser("switch-login", help="point this computer at another Robinhood login (read-only)")
+    p.set_defaults(func=cmd_switch_login)
 
     p = sub.add_parser("keys", help="type in the Tiingo/Finnhub keys and the trader's API trigger once; tested and saved")
     p.set_defaults(func=cmd_keys)
