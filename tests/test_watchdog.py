@@ -155,3 +155,40 @@ def test_the_computer_sends_a_quiet_trader_alert_once_a_day(monkeypatch, tmp_pat
     watchdog.check_trader(post=lambda u, d, h: sent.append(d), now=datetime(2026, 10, 30, 18, 0, tzinfo=UTC),
                           tags_text=tags, once_a_day=tmp_path / "day.txt")
     assert len(sent) == 2, "a new day can alert again"
+
+
+# --- the watcher: the only stop a fractional position has between the hourly runs ---
+
+WATCHING = "WATCH | 2026-10-29T13:00Z | watching PLD | 0 wake-up(s) today"      # 9:00 AM ET, a Thursday
+
+
+def test_a_quiet_watcher_is_flagged_only_in_the_session():
+    noon = datetime(2026, 10, 29, 16, 0, tzinfo=UTC)               # 12:00 ET, 180 minutes later
+    msg = watchdog.watcher_verdict(WATCHING, noon)
+    assert msg and "watcher has not checked in since Thu 09:00 AM ET" in msg
+    assert ".\\start.bat watch-trader install" in msg
+    assert watchdog.watcher_verdict(WATCHING, datetime(2026, 10, 29, 15, 0, tzinfo=UTC)) is None, "two hours is its pace"
+    woke = WATCHING + "\nWAKE | 2026-10-29T15:20Z | MOVE: PLD -3.4% today"
+    assert watchdog.watcher_verdict(woke, noon) is None, "a wake-up is a sign of life too"
+    assert watchdog.watcher_verdict(WATCHING, datetime(2026, 10, 29, 23, 0, tzinfo=UTC)) is None      # evening
+    assert watchdog.watcher_verdict(WATCHING, datetime(2026, 10, 31, 16, 0, tzinfo=UTC)) is None      # Saturday
+    assert watchdog.watcher_verdict("RUN | 2026-10-29T14:35Z | 100 | 10 | ok", noon) is None, "never set up"
+    assert watchdog.watcher_verdict("", noon) is None
+
+
+def test_a_quiet_watcher_is_one_plain_push_a_day_of_its_own(monkeypatch, tmp_path):
+    monkeypatch.setenv("STOCKSAGE_NTFY_TOPIC", "t")
+    sent = []
+    post = lambda u, d, h: sent.append((h["Title"], d.decode()))    # noqa: E731
+    tags = WATCHING + "\nRUN | 2026-10-29T15:35Z | 100 | 10 | ok"   # the trader is fine, the watcher is not
+    for hour in (16, 17):
+        tags_now = tags + f"\nRUN | 2026-10-29T{hour - 1}:35Z | 100 | 10 | ok"
+        watchdog.check_trader(post=post, now=datetime(2026, 10, 29, hour, 0, tzinfo=UTC), tags_text=tags_now,
+                              once_a_day=tmp_path / "day.txt")
+    assert [t for t, _ in sent] == ["StockSage watcher has gone quiet"]
+    assert not re.search(r"\$|\d{4,}", sent[0][1]), "no amounts in a push"
+    assert (tmp_path / "watcher_alert_day.txt").exists() and not (tmp_path / "day.txt").exists()
+    both = []
+    watchdog.check_trader(post=lambda u, d, h: both.append(h["Title"]), now=datetime(2026, 10, 30, 18, 0, tzinfo=UTC),
+                          tags_text=tags, once_a_day=tmp_path / "day.txt")
+    assert both == ["StockSage trader has gone quiet", "StockSage watcher has gone quiet"], "each has its own day"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -274,3 +275,177 @@ def test_yesterdays_quote_before_the_open_wakes_nobody():
     live = lambda t: {"symbol": t, "price": 530.0, "day_change": -0.035, "at": seven_am.isoformat()}  # noqa: E731
     assert any(e.startswith("MOVE: MSFT") for e in watcher.check({}, seven_am, watcher.holdings(memory), live,
                                                                   lambda t: None, None))
+
+
+# --- 2026-11-09 audit: headlines, after-hours per position, and the watcher's own failures ---
+
+def test_only_an_event_headline_is_worth_a_run_of_its_own():
+    for title in ("Zacks Analyst Blog Highlights Microsoft, Alphabet and Nvidia",
+                  "Oracle vs. Alphabet: Which Is the Better AI Cloud Stock to Buy Now?",
+                  "Alphabet (GOOGL) Sees $35.0 Million in Net ETF Selling",
+                  "TeraWulf Rises 4% After Q3 Beat and Google-Backed Anthropic Lease",
+                  "3 Stocks to Buy Before Microsoft Reports Earnings",
+                  "Is Microsoft Stock a Buy After Earnings?",
+                  "Vanguard Group Inc. Buys Shares of 1,200 Prologis",
+                  "Wellington Management raises stake in Microsoft",
+                  "Microsoft: A Deep Dive Into the Cloud Business"):
+        assert not watcher.material(title), title
+    for title in ("Prologis raises guidance", "Microsoft beats on revenue, shares jump",
+                  "Alphabet hit with $2 billion antitrust fine in EU", "FDA approves Lilly's new obesity pill",
+                  "Microsoft CEO Nadella steps down", "Prologis downgraded to neutral at Goldman",
+                  "Google to acquire Wiz for $32 billion", "Microsoft shares plunge after Azure outage"):
+        assert watcher.material(title), title
+
+
+def _headline(title):
+    def news(t):
+        return [{"id": title, "ticker": t, "title": title, "source": "X", "at": NOW.isoformat()}]
+    return news
+
+
+def test_headlines_alone_get_three_wake_ups_a_day_and_never_block_a_price_wake_up():
+    memory = {"open": [{"ticker": "PLD", "dollars_in": 25.0, "entry": 125.0, "opened": "2026-11-02T14:37+00:00"}]}
+    flat, sent = quotes({"PLD": (125.0, 0.0), "SPY": (750.0, 0.0)}), []
+    args = dict(crypto_quote=lambda t: None, memory=memory, post=lambda u, t, b: sent.append(b), push=lambda *a: None)
+    state = {"news_seen": [], "news_fires_day": "2026-11-03", "news_fires": watcher.NEWS_CAP - 1}
+    assert "NEWS: PLD: Prologis raises guidance" in watcher.tick(state, NOW, quote=flat,
+                                                                 news=_headline("Prologis raises guidance"), **args)
+    assert state["news_fires"] == watcher.NEWS_CAP and state["fires_today"] == 1
+    later = NOW + timedelta(hours=1)                                # 12:05 ET: past the cooldown, clear of the run
+    assert watcher.tick(state, later, quote=flat, news=_headline("Prologis cuts its dividend"), **args) is None
+    assert state["pending"] == [] and len(sent) == 1, "the fourth headline waits for the hourly run"
+    down = quotes({"PLD": (120.0, -0.04), "SPY": (750.0, 0.0)})
+    text = watcher.tick(state, later + timedelta(minutes=1), quote=down, news=no_news, **args)
+    assert text and "MOVE: PLD" in text and state["fires_today"] == 2
+    assert state["news_fires"] == watcher.NEWS_CAP, "a price wake-up is not counted as a headline"
+
+
+def test_a_noise_headline_wakes_nobody():
+    memory = {"open": [{"ticker": "PLD", "dollars_in": 25.0, "entry": 125.0, "opened": "2026-11-02T14:37+00:00"}]}
+    events = watcher.check({"news_seen": []}, NOW, watcher.holdings(memory), quotes({"PLD": (125.0, 0.0),
+                           "SPY": (750.0, 0.0)}), lambda t: None, _headline("Is Prologis a Buy After Earnings?"))
+    assert events == []
+
+
+def test_after_hours_each_position_is_judged_on_whether_it_can_be_sold():
+    evening = datetime(2026, 11, 3, 23, 58, tzinfo=timezone.utc)      # 6:58 PM ET, clear of the runs
+    mixed = {"open": [{"ticker": "MSFT", "dollars_in": 7.0, "entry": 549.4, "opened": "2026-11-02T14:37+00:00"},
+                      {"ticker": "NVDA", "dollars_in": 1100.0, "entry": 200.0, "opened": "2026-11-02T14:37+00:00"}]}
+    sent = []
+    text = watcher.tick({}, evening, memory=mixed, crypto_quote=lambda t: None, news=None,
+                        quote=quotes({"MSFT": (530.0, -0.035), "NVDA": (193.0, -0.035), "SPY": (750.0, 0.0)}),
+                        post=lambda u, t, b: sent.append(b), push=lambda *a: None)
+    assert text and "MOVE: NVDA" in text, "five whole shares can be sold after hours"
+    assert "MSFT" not in text, "a fraction of a share cannot: one whole-share holding used to let it through"
+    assert watcher._tradable_now(watcher.holdings(MEMORY)) == {"BTC-USD"}
+
+
+def _pushes(monkeypatch):
+    monkeypatch.setenv("STOCKSAGE_NTFY_TOPIC", "t")
+    got = []
+    return got, lambda u, d, h: got.append((h["Title"], d.decode()))
+
+
+def test_ten_minutes_without_a_price_reaches_the_phone_once_a_day(monkeypatch):
+    got, push = _pushes(monkeypatch)
+    memory = {"open": [{"ticker": "PLD", "dollars_in": 25.0, "entry": 125.0, "opened": "2026-11-02T14:37+00:00"}]}
+    state: dict = {}
+
+    def dead(t):
+        raise OSError("401")
+
+    args = dict(crypto_quote=lambda t: None, news=None, memory=memory, post=lambda u, t, b: None, push=push)
+    for minute in range(watcher.QUOTE_FAIL_TICKS - 1):
+        watcher.tick(state, NOW + timedelta(minutes=minute), quote=dead, **args)
+    assert got == [], "a few bad minutes are not an alarm"
+    for minute in range(watcher.QUOTE_FAIL_TICKS - 1, watcher.QUOTE_FAIL_TICKS + 15):
+        watcher.tick(state, NOW + timedelta(minutes=minute), quote=dead, **args)
+    assert [title for title, _ in got] == ["StockSage: the watcher cannot get prices"]
+    assert not re.search(r"\$|\d{4,}", got[0][1]), "no amounts in a push"
+    watcher.tick(state, NOW + timedelta(minutes=40), quote=quotes({"PLD": (125.0, 0.0), "SPY": (750.0, 0.0)}), **args)
+    assert state["quote_fail"] == 0, "one answered price clears the count"
+    none = lambda t: None                                             # noqa: E731
+    evening = datetime(2026, 11, 3, 23, 58, tzinfo=timezone.utc)
+    quiet: dict = {}
+    for minute in range(30):
+        watcher.tick(quiet, evening + timedelta(minutes=minute), quote=none, **args)
+    assert not quiet.get("quote_fail"), "thin after-hours quotes are not an outage"
+
+
+STOPPED = {"open": [{"ticker": "MSFT", "dollars_in": 7.0, "entry": 549.4, "opened": "2026-11-02T14:37+00:00",
+                     "stop": 540.0}], "trader": {"equity": 100.0, "last_run": "2026-11-03T15:35+00:00"}}
+AT_STOP = {"MSFT": (538.9, -0.019), "SPY": (750.0, -0.004)}
+
+
+def test_a_stop_the_trader_never_answered_reaches_the_phone(monkeypatch):
+    got, push = _pushes(monkeypatch)
+    state: dict = {}
+    args = dict(quote=quotes(AT_STOP), crypto_quote=lambda t: None, news=None, memory=STOPPED,
+                post=lambda u, t, b: None, push=push)
+    assert "STOP: MSFT" in watcher.tick(state, NOW, **args)
+    assert state["urgent"]["at"] == NOW.isoformat()
+    watcher.tick(state, NOW + timedelta(minutes=10), **args)
+    assert [t for t, _ in got] == ["StockSage: a stop was touched"], "ten minutes is still time to answer"
+    watcher.tick(state, NOW + watcher.ANSWER_WITHIN + timedelta(minutes=1), **args)
+    assert [t for t, _ in got][-1] == "StockSage: the trader did not answer"
+    assert "look at that account yourself" in got[-1][1] and not re.search(r"\$|\d{4,}", got[-1][1])
+    watcher.tick(state, NOW + timedelta(minutes=40), **args)
+    assert len(got) == 2 and "urgent" not in state, "said once"
+
+
+def test_a_stop_the_trader_answered_says_nothing_more(monkeypatch):
+    got, push = _pushes(monkeypatch)
+    state: dict = {}
+    args = dict(quote=quotes(AT_STOP), crypto_quote=lambda t: None, news=None, post=lambda u, t, b: None, push=push)
+    assert watcher.tick(state, NOW, memory=STOPPED, **args)
+    ran = dict(STOPPED, trader={"equity": 100.0, "last_run": (NOW + timedelta(minutes=4)).isoformat()})
+    watcher.tick(state, NOW + timedelta(minutes=6), memory=ran, **args)
+    assert "urgent" not in state
+    watcher.tick(state, NOW + timedelta(minutes=45), memory=ran, **args)
+    assert [t for t, _ in got] == ["StockSage: a stop was touched"]
+
+
+def test_a_stop_whose_wake_up_could_not_be_sent_still_reaches_the_phone(monkeypatch):
+    got, push = _pushes(monkeypatch)
+    state: dict = {}
+
+    def refused(url, token, body):
+        raise OSError("429")
+
+    args = dict(quote=quotes(AT_STOP), crypto_quote=lambda t: None, news=None, memory=STOPPED, post=refused,
+                push=push)
+    assert watcher.tick(state, NOW, **args) is None
+    watcher.tick(state, NOW + watcher.ANSWER_WITHIN + timedelta(minutes=1), **args)
+    assert "StockSage: the trader did not answer" in [t for t, _ in got]
+
+
+def test_a_heartbeat_that_did_not_reach_drive_is_tried_again_in_ten_minutes(monkeypatch):
+    from stocksage import journal as jr
+
+    lines, drive = [], {"up": False}
+
+    def append(line, upload=True):
+        if not drive["up"]:
+            raise OSError("drive is down")
+        lines.append(line)
+        return line
+
+    monkeypatch.setattr(jr, "append_note", append)
+    state: dict = {}
+    watcher.heartbeat(state, NOW, MEMORY, force=True)
+    watcher.heartbeat(state, NOW + timedelta(minutes=5), MEMORY)
+    assert lines == []
+    drive["up"] = True
+    watcher.heartbeat(state, NOW + timedelta(minutes=11), MEMORY)
+    assert len(lines) == 1, "the watchdog reads these lines to know the watcher is alive"
+    watcher.heartbeat(state, NOW + timedelta(minutes=30), MEMORY)
+    assert len(lines) == 1
+
+
+def test_status_does_not_show_yesterdays_wake_ups_as_todays(capsys):
+    watcher.save_state({"fires_day": "2020-01-01", "fires_today": 7, "news_fires_day": "2020-01-01",
+                        "news_fires": 3, "quote_fail": watcher.QUOTE_FAIL_TICKS})
+    watcher.status()
+    out = capsys.readouterr().out
+    assert f"wake-ups today: 0 of {watcher.DAILY_CAP} (0 of {watcher.NEWS_CAP} for headlines alone)" in out
+    assert "PRICES: none for" in out and ".\\start.bat keys" in out

@@ -74,6 +74,44 @@ def trader_verdict(runs: list[dict], now: datetime | None = None) -> str | None:
             "at claude.ai/code/routines and look at its last run. (Ignore this on a market holiday.)")
 
 
+WATCHER_QUIET_MINUTES = 150
+
+
+def watcher_verdict(tags_text: str, now: datetime | None = None) -> str | None:
+    """A plain message if the minute-by-minute watcher has stopped checking in.
+
+    The watcher (always-on computer) writes a WATCH line when it starts and every two
+    hours from 7 AM to 8 PM New York time, and a WAKE line for each wake-up. It is the
+    only stop a fractional position has between the hourly runs, and nothing else
+    notices when its window is closed. Judged on weekdays from 9:45 to 4:30; silent
+    when it has never written a line (not set up is not an alarm)."""
+    from zoneinfo import ZoneInfo
+
+    from .journal import _ts
+
+    now = now or datetime.now(timezone.utc)
+    local = now.astimezone(ZoneInfo("America/New_York"))
+    minutes = local.hour * 60 + local.minute
+    if local.weekday() >= 5 or not (9 * 60 + 45 <= minutes <= 16 * 60 + 30):
+        return None
+    seen = []
+    for line in (tags_text or "").splitlines():
+        parts = [x.strip() for x in line.split("|")]
+        if len(parts) >= 2 and parts[0] in ("WATCH", "WAKE"):
+            at = _ts(parts[1])
+            if at:
+                seen.append(at)
+    if not seen:
+        return None
+    last = max(seen)
+    if (now - last).total_seconds() / 60 <= WATCHER_QUIET_MINUTES:
+        return None
+    when = last.astimezone(ZoneInfo("America/New_York")).strftime("%a %I:%M %p ET")
+    return (f"The watcher has not checked in since {when}. Between the hourly runs nothing is watching stops. "
+            "On the always-on computer, open the StockSage folder in PowerShell and run "
+            ".\\start.bat watch-trader install")
+
+
 def _send(post, title: str, message: str) -> None:
     topic = notify.topic_from_env()
     if not topic:
@@ -86,12 +124,36 @@ def _send(post, title: str, message: str) -> None:
         print(f"(Could not send the alert: {exc})")
 
 
+def _alert(post, title: str, message: str, now: datetime | None, once_a_day) -> None:
+    """One push, at most one a day when `once_a_day` (a file path) is given."""
+    from pathlib import Path
+
+    print(message)
+    today = (now or datetime.now(timezone.utc)).date().isoformat()
+    if once_a_day is not None:
+        try:
+            if Path(once_a_day).read_text(encoding="utf-8").strip() == today:
+                return
+        except OSError:
+            pass
+    _send(post, title, message)
+    if once_a_day is not None:
+        try:
+            Path(once_a_day).parent.mkdir(parents=True, exist_ok=True)
+            Path(once_a_day).write_text(today, encoding="utf-8")
+        except OSError:
+            pass
+
+
 def check_trader(post=notify._post, now: datetime | None = None, tags_text: str | None = None,
                  once_a_day=None) -> None:
-    """Warn the phone if the trader has gone quiet. Never raises.
+    """Warn the phone if the trader, or the watcher that wakes it, has gone quiet. Never raises.
 
-    `once_a_day` (a file path) limits it to one push per day: the always-on
-    computer checks at every publish, and one alert is enough."""
+    `once_a_day` (a file path) limits each alert to one push per day: the always-on
+    computer checks at every publish, and one alert is enough. The watcher's alert
+    keeps its own day file beside it."""
+    from pathlib import Path
+
     from . import journal
 
     try:
@@ -105,26 +167,16 @@ def check_trader(post=notify._post, now: datetime | None = None, tags_text: str 
     message = trader_verdict(journal.parse_runs(tags_text), now)
     if message is None:
         print("The trader is checking in.")
+    else:
+        _alert(post, "StockSage trader has gone quiet", message, now, once_a_day)
+    try:
+        message = watcher_verdict(tags_text, now)
+    except Exception as exc:
+        print(f"Could not check the watcher: {exc}")
         return
-    print(message)
-    today = (now or datetime.now(timezone.utc)).date().isoformat()
-    if once_a_day is not None:
-        try:
-            from pathlib import Path
-
-            if Path(once_a_day).read_text(encoding="utf-8").strip() == today:
-                return
-        except OSError:
-            pass
-    _send(post, "StockSage trader has gone quiet", message)
-    if once_a_day is not None:
-        try:
-            from pathlib import Path
-
-            Path(once_a_day).parent.mkdir(parents=True, exist_ok=True)
-            Path(once_a_day).write_text(today, encoding="utf-8")
-        except OSError:
-            pass
+    if message is not None:
+        beside = Path(once_a_day).with_name("watcher_alert_day.txt") if once_a_day is not None else None
+        _alert(post, "StockSage watcher has gone quiet", message, now, beside)
 
 
 def run(post=notify._post, now: datetime | None = None, modified=None, sheet: bool = True,

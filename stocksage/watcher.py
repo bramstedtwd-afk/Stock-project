@@ -10,7 +10,12 @@ when one of these happens to something the trader holds:
   * DROP    a position sits 5%+ below what it was bought at (once a day each)
   * MARKET  SPY moves 1.5%+ today (once per direction per day)
   * NEWS    a new company headline on a holding (Finnhub, every 5 minutes;
-            not for index or sector funds, which get market news all day)
+            not for index or sector funds, which get market news all day).
+            The headline must name the company AND an event that can move a
+            price (results, guidance, a deal, a lawsuit, a rating change...);
+            round-ups, comparisons and fund-flow items never wake the trader.
+            News-only wake-ups are held to 3 a day: on 2026-11-05 headlines
+            used the whole day's allowance and price wake-ups had to wait
   * STOP    a holding touches the stop the trader named (its buy's why, or a later
             STOP line). Fractional shares cannot carry a resting stop order, so
             this is the stop: urgent, once per stop level a day, past the
@@ -27,6 +32,11 @@ Firing costs a full routine run, so it is rationed: never within the 10 minutes
 before or the 15 after a scheduled run (minute :35 of each hour), at least 20
 minutes apart, at most 10 a day. The message is plain facts; the routine reads
 it as information (the routine-fire-payload block), never as an instruction.
+
+The watcher is the only stop a fractional position has, so its own failures
+reach the owner's phone: no stock prices for 10 minutes in the session (once a
+day), and a STOP or LIMIT the trader has not answered with a run (once each).
+The watchdog checks the WATCH lines this writes every two hours.
 
 Positions come from the trade memory (Drive's copy, re-read every 15 minutes);
 prices from Finnhub (stocks) and OKX (crypto). No broker sign-in, ever.
@@ -51,6 +61,10 @@ STOCK_MOVE, CRYPTO_MOVE, DROP, MARKET_MOVE = 0.03, 0.05, -0.05, 0.015
 SCHEDULED_MINUTE, QUIET_BEFORE, QUIET_AFTER = 35, 10, 15
 COOLDOWN = timedelta(minutes=20)
 DAILY_CAP = 10
+NEWS_CAP = 3                                    # wake-ups a day that carry nothing but headlines
+QUOTE_FAIL_TICKS = 10                           # minutes without one stock price before the phone is told
+ANSWER_WITHIN = timedelta(minutes=20)           # a STOP/LIMIT wake-up should show a run by then
+ANSWER_WITHIN_QUIET = timedelta(minutes=30)     # ...when it had to wait out a scheduled run first
 NEWS_EVERY = timedelta(minutes=5)
 MEMORY_EVERY = timedelta(minutes=5)             # new positions and moved stops reach the watcher fast
 BETA = "experimental-cc-routine-2026-04-01"
@@ -66,6 +80,21 @@ NAME_SKIP = {"the", "first", "american", "united", "general", "international", "
 FUNDS = {"SPY", "VOO", "IVV", "VTI", "QQQ", "DIA", "IWM", "SGOV", "BIL", "SHV", "TLT", "IEF", "GLD", "SLV",
          "SH", "PSQ", "RWM", "SDS", "QID", "SPXU", "SQQQ", "TQQQ", "SSO", "QLD", "UPRO",
          "XLK", "XLF", "XLV", "XLE", "XLI", "XLY", "XLP", "XLU", "XLRE", "XLC", "XLB"}
+# A headline is worth a run only if it reports something that can move the price...
+MATERIAL = re.compile(
+    r"\b(earnings|results|revenue|profit|guidance|forecast|outlook|beats?|miss(?:es|ed)?|rais(?:es|ed)|cuts?|"
+    r"lowers?|slash(?:es|ed)|warn(?:s|ed|ing)?|fda|approv\w+|recall\w*|merger|merg(?:es|ing)|acqui\w+|buys?|"
+    r"takeover|buyout|spin-?off|lawsuit|sues?|sued|settle\w*|fine[ds]?|probe|investigat\w+|antitrust|subpoena|"
+    r"sec|doj|ftc|downgrad\w+|upgrad\w+|price target|ceo|cfo|resign\w*|steps down|ousted|fired|offering|buyback|"
+    r"repurchase|dividend|split|layoffs?|job cuts|bankrupt\w*|halt\w*|delist\w*|breach|hack\w*|outage|contract|"
+    r"deal|partnership|strike|plung\w+|soar\w*|surg\w+|tumbl\w+|jumps?|sinks?|slump\w*|crash\w*)\b", re.I)
+# ...and is not a round-up, a comparison, an opinion piece or a fund-flow item. Every pattern
+# here is a real headline that woke the trader for nothing in its first week.
+NOISE = re.compile(
+    r"\bvs\.?(?!\w)|\bversus\b|zacks|motley|analyst blog|prediction|\bform 8|\betfs?\b|\?|\bwhich\b|"
+    r"\bshould you\b|\bbetter\b|\b\d+ (?:stocks|reasons|things)\b|\btop \d+\b|stocks to (?:buy|watch|sell)|"
+    r"here'?s (?:why|what)|what to know|-(?:backed|owned|linked|powered)\b|\bformer\b|\bshares of\b|"
+    r"(?:sells|buys|acquires|trims|boosts|raises|cuts|lowers) (?:its )?(?:stake|position|holdings)", re.I)
 
 
 def state_path() -> Path:
@@ -253,11 +282,13 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
     events: list[str] = []
     in_hours = stock_hours(now)
     day_pnl = 0.0
+    asked = answered = 0                        # stock quotes this minute: asked for, and came back
     for h in held:
         t, crypto = h["ticker"], is_crypto(h["ticker"])
         if not crypto and not in_hours:
             continue
         change = None
+        asked += not crypto
         try:
             if crypto:
                 price = crypto_quote(t)
@@ -268,7 +299,9 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
                         events.append(f"MOVE: {t} {price / base - 1:+.1%} since the last check-point, now {_p(price)}"
                                       + (f" (bought at {_p(h['entry'])})" if h.get("entry") else ""))
             else:
-                q = _fresh(quote(t), now)
+                raw = quote(t)
+                answered += raw is not None     # yesterday's price (a holiday) is still an answer
+                q = _fresh(raw, now)
                 price = q["price"] if q else None
                 change = q["day_change"] if q else None
                 bought_today = bool(h.get("lots")) and all(_opened_today(lot, now) for lot in h["lots"])
@@ -310,6 +343,11 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
             state["dropped"].append(t)
             events.append(f"DROP: {t} is {price / h['entry'] - 1:+.1%} below its entry {_p(h['entry'])} "
                           f"(now {_p(price)}): check its stop")
+    if regular_session(now) and asked:
+        # No price at all for the stocks held: nothing is watching their stops this minute.
+        state["quote_fail"] = 0 if answered else state.get("quote_fail", 0) + 1
+    elif not asked:
+        state["quote_fail"] = 0
     if in_hours:
         try:
             spy = _fresh(quote("SPY"), now)
@@ -345,8 +383,9 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
                 fresh = now - datetime.fromisoformat(item["at"]) <= timedelta(hours=2)
                 if item["id"] not in seen:
                     seen.add(item["id"])
-                    known = len(words) > 1             # no name known: do not filter (better a spare wake-up)
-                    if fresh and not first_look and (not known or about_company(item["title"], words)):
+                    known = len(words) > 1             # no name known: do not filter on it (better a spare wake-up)
+                    if fresh and not first_look and material(item["title"]) and \
+                            (not known or about_company(item["title"], words)):
                         events.append(f"NEWS: {h['ticker']}: {item['title']} ({item['source']})")
         state["news_seen"] = list(seen)[-500:]
     return events
@@ -389,6 +428,14 @@ def about_company(title: str, words: list[str]) -> bool:
     return False
 
 
+def material(title: str) -> bool:
+    """Does the headline report something that can move the price? Of the first 28
+    wake-ups about 20 were headlines, most of them comparisons ("Oracle vs. Alphabet:
+    which is the better stock"), blog round-ups and fund-flow notes. The hourly run
+    reads the news anyway; only an event is worth a run of its own."""
+    return bool(MATERIAL.search(title or "")) and not NOISE.search(title or "")
+
+
 def message(events: list[str], now: datetime) -> str:
     head = f"StockSage watcher, {now.astimezone(ET).strftime('%a %I:%M %p ET')}. Wake-up reason(s):"
     return "\n".join([head, *("- " + e for e in events),
@@ -399,18 +446,20 @@ def _utc(now: datetime) -> str:
     return now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
 
 
-def note(line: str, post=None) -> None:
+def note(line: str, post=None) -> bool:
     """Put the watcher's activity in the trade notes file, where the owner's
     dashboard and phone report read it. Skipped in tests (post injected) and
     never fatal: the watcher keeps watching if Drive is unreachable."""
     if post is not None:
-        return
+        return True
     try:
         from .journal import append_note
 
         append_note(line[:600])
+        return True
     except Exception as exc:
         log(f"could not record the note in Drive ({type(exc).__name__})")
+        return False
 
 
 def heartbeat(state: dict, now: datetime, memory: dict, force: bool = False) -> None:
@@ -423,8 +472,10 @@ def heartbeat(state: dict, now: datetime, memory: dict, force: bool = False) -> 
     held = ", ".join(h["ticker"] for h in holdings(memory)) or "nothing held"
     day = now.astimezone(ET).date().isoformat()
     fires = state.get("fires_today", 0) if state.get("fires_day") == day else 0
-    state["last_heartbeat"] = now.isoformat()
-    note(f"WATCH | {_utc(now)} | {'started, ' if force else ''}watching {held} | {fires} wake-up(s) today")
+    ok = note(f"WATCH | {_utc(now)} | {'started, ' if force else ''}watching {held} | {fires} wake-up(s) today")
+    # The watchdog reads these lines to know the watcher is alive: one that did not reach
+    # Drive is tried again in ten minutes, not in two hours.
+    state["last_heartbeat"] = (now if ok else now - HEARTBEAT + timedelta(minutes=10)).isoformat()
 
 
 def _post(url: str, token: str, body: dict) -> dict:
@@ -446,13 +497,56 @@ def fire(text: str, post=None) -> dict:
     return (post or _post)(url, token, {"text": text[:4000]})
 
 
-def _can_trade_now(held: list[dict]) -> bool:
-    """Outside 9:30-4:00 only whole shares (extended hours) and crypto can be sold. When
-    every holding is a fractional stock position, an after-hours wake-up can only look:
-    it is left to the next scheduled run instead of costing a run of its own."""
+def _tradable_now(held: list[dict]) -> set[str]:
+    """What can be sold outside 9:30-4:00: crypto, and stock positions of a whole share or
+    more (extended hours take whole shares only)."""
     from .journal import is_crypto
 
-    return any(is_crypto(h["ticker"]) or (h.get("shares") or 0) >= 1 for h in held)
+    return {h["ticker"] for h in held if is_crypto(h["ticker"]) or (h.get("shares") or 0) >= 1}
+
+
+def _can_trade_now(held: list[dict]) -> bool:
+    return bool(_tradable_now(held))
+
+
+def _event_ticker(event: str) -> str | None:
+    m = re.match(r"(?:MOVE|DROP|TARGET|NEWS|STOP): ([A-Z0-9.\-]+)", event)
+    return m.group(1) if m else None
+
+
+def _when(value) -> datetime | None:
+    try:
+        at = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+
+
+def _self_checks(state: dict, now: datetime, memory: dict, push=None) -> None:
+    """The watcher's own failures go to the owner's phone, because a fractional position
+    has no other stop: (1) no stock price for ten minutes in the session, once a day;
+    (2) a STOP or LIMIT that no trader run has followed (the wake-up did not go out, the
+    routine is out of usage, its connector is signed out...), once per event."""
+    day = now.astimezone(ET).date().isoformat()
+    if state.get("quote_fail", 0) >= QUOTE_FAIL_TICKS and state.get("quote_alert_day") != day:
+        state["quote_alert_day"] = day
+        log(f"no stock price for {state['quote_fail']} minutes: stops are not being watched")
+        phone("StockSage: the watcher cannot get prices", "The watcher has had no stock prices for "
+              f"{state['quote_fail']} minutes, so it cannot see a stop being touched. The hourly trader still "
+              "checks stops on each run. If this repeats, the price key may have expired.", push)
+    waiting = state.get("urgent")
+    if waiting:
+        seen, due = _when(waiting.get("at")), _when(waiting.get("due"))
+        ran = _when((memory.get("trader") or {}).get("last_run"))
+        if not seen or not due or (ran and ran > seen):
+            state.pop("urgent", None)
+        elif now >= due:
+            state.pop("urgent", None)
+            minutes = int((now - seen).total_seconds() // 60)
+            log(f"a stop or the daily limit was hit {minutes} minutes ago and no trader run has followed")
+            phone("StockSage: the trader did not answer", "A stop or the daily loss limit was hit in the agentic "
+                  f"account {minutes} minutes ago and the trader has not run since. Open Robinhood and look at "
+                  "that account yourself.", push)
 
 
 def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict, post=None,
@@ -460,12 +554,18 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
     """One check. Returns the message that was sent, or None."""
     held = holdings(memory)
     events = check(state, now, held, quote, crypto_quote, news, account=account_view(memory, now), names=names)
-    if events and not regular_session(now) and not _can_trade_now(held):
-        later = [e for e in events if not e.startswith(URGENT)]
+    _self_checks(state, now, memory, push)
+    if events and not regular_session(now):
+        # Outside 9:30-4:00 a fractional stock position cannot be sold: a wake-up about it
+        # can only look, so it is left to the next scheduled run. Decided per position
+        # (one whole-share holding used to let every other position's headlines through).
+        can = _tradable_now(held)
+        later = [e for e in events if not e.startswith(URGENT)
+                 and (_event_ticker(e) not in can if _event_ticker(e) else not can)]
         if later:
-            log("after hours and nothing held can trade now (fractional shares): left to the next scheduled run: "
-                + "; ".join(later))
-        events = [e for e in events if e.startswith(URGENT)]
+            log("outside 9:30-4:00 and these cannot be traded now (fractional shares): left to the next "
+                "scheduled run: " + "; ".join(later))
+            events = [e for e in events if e not in later]
     if any(e.startswith("STOP") for e in events):
         phone("StockSage: a stop was touched", "A position in the agentic account touched the stop the trader "
               "set. The trader is being woken to act on it.", push)
@@ -473,10 +573,24 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
         log(events[0])
         phone("StockSage: daily loss limit", "The agentic account hit its daily loss limit. The trader is being "
               "told: no new buys today, exits and stops only. Your switch: Robinhood trade approvals ON.", push)
+    if any(e.startswith(URGENT) for e in events) and not state.get("urgent"):
+        wait = ANSWER_WITHIN_QUIET if near_scheduled_run(now) else ANSWER_WITHIN
+        state["urgent"] = {"at": now.isoformat(), "due": (now + wait).isoformat()}
+    day = now.astimezone(ET).date().isoformat()
     pending = state.get("pending", []) + events
     if not pending:
         return None
-    ok, why = may_fire(state, now, urgent=any(e.startswith(URGENT) for e in pending))
+    news_only = all(e.startswith("NEWS") for e in pending)
+    news_fires = state.get("news_fires", 0) if state.get("news_fires_day") == day else 0
+    if news_only and news_fires >= NEWS_CAP:
+        # Headlines may not use up the day's wake-ups: the hourly run reads the news anyway.
+        if events:
+            log(f"headline allowance of {NEWS_CAP} wake-ups used today: left to the next scheduled run: "
+                + "; ".join(events))
+        state["pending"] = []
+        return None
+    urgent = any(e.startswith(URGENT) for e in pending)
+    ok, why = may_fire(state, now, urgent=urgent)
     if not ok:
         if near_scheduled_run(now):
             if events:
@@ -494,9 +608,12 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
         state["pending"] = pending[-10:]
         log(f"could not wake the trader: {exc}")
         return None
-    day = now.astimezone(ET).date().isoformat()
     state["fires_today"] = state.get("fires_today", 0) + 1 if state.get("fires_day") == day else 1
     state.update(fires_day=day, last_fire=now.isoformat(), pending=[])
+    if news_only:
+        state.update(news_fires_day=day, news_fires=news_fires + 1)
+    if urgent:                                  # the clock for an answer runs from the wake-up that went out
+        state["urgent"] = {"at": now.isoformat(), "due": (now + ANSWER_WITHIN).isoformat()}
     log(f"woke the trader: {'; '.join(pending)}")
     note(f"WAKE | {_utc(now)} | " + "; ".join(pending), post=post)
     return text
@@ -538,6 +655,8 @@ def run_once(memory_reader=None) -> str | None:
     state = load_state()
     now = datetime.now(timezone.utc)
     quote, cq, news = _sources()
+    if state.get("urgent"):
+        state.pop("memory_read", None)          # waiting for the trader's answer: look for its run every minute
     memory = read_memory(state, now, reader=memory_reader)
     sent = tick(state, now, quote=quote, crypto_quote=cq, news=news, memory=memory, names=_names(state))
     heartbeat(state, now, memory, force=state.pop("starting", False))
@@ -575,7 +694,14 @@ def status() -> int:
     print("Trader watcher")
     for var in (URL_VAR, TOKEN_VAR, finnhub.KEY_VAR):
         print(f"  {var}: {'set' if os.environ.get(var, '').strip() else 'MISSING'}")
-    print(f"  wake-ups today: {s.get('fires_today', 0) if s.get('fires_day') else 0}; last: {s.get('last_fire') or 'never'}")
+    today = datetime.now(timezone.utc).astimezone(ET).date().isoformat()
+    fires = s.get("fires_today", 0) if s.get("fires_day") == today else 0
+    headlines = s.get("news_fires", 0) if s.get("news_fires_day") == today else 0
+    print(f"  wake-ups today: {fires} of {DAILY_CAP} ({headlines} of {NEWS_CAP} for headlines alone); "
+          f"last: {s.get('last_fire') or 'never'}")
+    if s.get("quote_fail", 0) >= QUOTE_FAIL_TICKS:
+        print(f"  PRICES: none for {s['quote_fail']} minutes. Stops are not being watched. Run .\\start.bat keys "
+              "to check the price key.")
     print(f"  starts at sign-in: {'yes' if (startup_dir() / STARTUP_FILE).exists() else 'no'}"
           if sys.platform.startswith("win") else "")
     try:
