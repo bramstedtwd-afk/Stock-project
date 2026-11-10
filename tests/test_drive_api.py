@@ -490,3 +490,85 @@ def test_a_dead_sign_in_says_so_plainly():
     drive = drive_api.RestDrive({"refresh_token": "r"}, http=lambda *a: (400, b'{"error": "invalid_grant"}'))
     with pytest.raises(drive_api.DriveAuthExpired):
         drive.files().list(q="name = 'x'").execute()
+
+
+# --- Several notes in one command (2026-11-09) ------------------------------------------
+
+RUN_NOTE = "RUN | 2026-10-30T13:37Z | 104.68 | 38.04 | v36: held all three"
+BUY_NOTE = "TAG | 2026-10-30T13:40Z | BUY | XYZ | SAFE | pullback | 1 | 20.00 | dip in uptrend, stop 19.00"
+IDEA_NOTE = "IDEA | 2026-10-30T13:41Z | BUY | ABC | breakout | 31.50 | [LOW] waiting for volume"
+
+
+def _note_drive(monkeypatch, tmp_path):
+    fake = _FakeDriveHttp()
+    drive = drive_api.RestDrive({"refresh_token": "r", "client_id": "c", "client_secret": "s"}, http=fake)
+    monkeypatch.setattr(drive_api, "get_service", lambda: drive)
+    monkeypatch.setattr(drive_api, "_media", lambda data, mime: drive_api._Media(data, mime))
+    monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path))
+    return fake
+
+
+def test_one_command_records_a_whole_run_with_one_write_and_one_rebuild(monkeypatch, tmp_path):
+    from stocksage import journal
+
+    _note_drive(monkeypatch, tmp_path)
+    journal.append_note(RUN_NOTE.replace("13:37", "12:37"))            # the file exists already
+    writes: list = []
+    real = drive_api.upload_or_update
+    monkeypatch.setattr(drive_api, "upload_or_update", lambda *a, **k: (writes.append(a[1]), real(*a, **k))[1])
+    said: list = []
+    rebuilt: list = []
+    code = journal.note_command([BUY_NOTE, IDEA_NOTE, RUN_NOTE], refresh=rebuilt.append, out=said.append)
+    assert code == 0 and writes == [journal.TAGS_NAME], "one write for three lines"
+    assert len(rebuilt) == 1 and rebuilt[0].rstrip().endswith(RUN_NOTE), "one rebuild, from the text just written"
+    assert [s for s in said if s.startswith("Recorded: ")] == [f"Recorded: {x}" for x in (BUY_NOTE, IDEA_NOTE, RUN_NOTE)]
+    text = drive_api.read_drive_text(journal.TAGS_NAME)
+    assert text.index(BUY_NOTE) < text.index(IDEA_NOTE) < text.index(RUN_NOTE)
+
+    writes.clear()
+    assert journal.note_command([BUY_NOTE, IDEA_NOTE, RUN_NOTE], refresh=rebuilt.append, out=said.append) == 0
+    assert not writes and drive_api.read_drive_text(journal.TAGS_NAME) == text, "a retried command adds nothing"
+
+
+def test_a_bad_line_is_refused_without_holding_the_good_ones_back(monkeypatch, tmp_path):
+    from stocksage import journal
+
+    _note_drive(monkeypatch, tmp_path)
+    said: list = []
+    code = journal.note_command([BUY_NOTE, "HELLO | not a note", RUN_NOTE], refresh=lambda t: None, out=said.append)
+    assert code == 2
+    text = drive_api.read_drive_text(journal.TAGS_NAME)
+    assert BUY_NOTE in text and RUN_NOTE in text and "HELLO" not in text
+    assert any(s.startswith("Not recorded: ") for s in said) and any("HELLO" in s for s in said)
+
+
+def test_the_old_one_line_forms_still_work():
+    from stocksage import journal
+
+    assert journal.split_notes([RUN_NOTE]) == [RUN_NOTE]
+    assert journal.split_notes(RUN_NOTE.split()) == [RUN_NOTE], "an unquoted line arrives word by word"
+    assert journal.split_notes([BUY_NOTE + "\n" + IDEA_NOTE + "\n\n" + RUN_NOTE]) == [BUY_NOTE, IDEA_NOTE, RUN_NOTE]
+    assert journal.split_notes(["stop | 2026-10-30T13:41Z | XYZ | 19.00 | 22.00", "tag | x"])[1] == "tag | x"
+
+
+def test_a_failed_read_records_nothing_and_never_replaces_the_notes(monkeypatch, tmp_path):
+    """The read used to swallow its error and pass for an empty file; the write that
+    followed would have replaced every note with the header and the one new line."""
+    from stocksage import journal
+
+    _note_drive(monkeypatch, tmp_path)
+    journal.append_note(BUY_NOTE)
+    before = drive_api.read_drive_text(journal.TAGS_NAME)
+
+    def down(*a, **k):
+        raise OSError("drive is down")
+
+    wrote: list = []
+    monkeypatch.setattr(drive_api, "download_file", down)
+    monkeypatch.setattr(drive_api, "upload_or_update", lambda *a, **k: wrote.append(a))
+    said: list = []
+    rebuilt: list = []
+    assert journal.note_command([RUN_NOTE], refresh=rebuilt.append, out=said.append) == 1
+    assert said[0].startswith("Not recorded (Drive): ") and not wrote and not rebuilt
+    monkeypatch.undo()
+    _ = before

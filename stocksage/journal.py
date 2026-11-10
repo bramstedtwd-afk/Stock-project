@@ -1193,15 +1193,80 @@ def append_note(line: str, upload: bool = True) -> str:
         raise ValueError("a note starts with TAG, RUN, IDEA, DEPOSIT, STOP, CLOSED, WAKE or WATCH")
     if not upload:
         return line
-    from .drive_api import ensure_folder, get_service, upload_or_update
+    _write_notes([line])
+    return line
 
-    current = _read_drive_tags()
-    if line in current.splitlines():
-        return line                             # already there: a retried command adds nothing
-    text = (current.rstrip("\n") + "\n" if current else TAGS_HEADER) + line + "\n"
+
+NOTE_KINDS = ("TAG", "RUN", "IDEA", "DEPOSIT", "STOP", "CLOSED", "WAKE", "WATCH")
+
+
+def split_notes(args) -> list[str]:
+    """The lines given to one note command. When any quoted argument (or line of one)
+    starts with a note word and a bar, every argument is a line of its own, so a
+    malformed one is refused by itself and never glued onto its neighbour. Otherwise
+    it is the old unquoted form: one line that arrived word by word."""
+    starts = re.compile(r"(?:%s)\s*\|" % "|".join(NOTE_KINDS), re.I)
+    pieces = [p.strip() for arg in args for p in str(arg).splitlines() if p.strip()]
+    if any(starts.match(p) for p in pieces):
+        return pieces
+    return [" ".join(pieces)] if pieces else []
+
+
+def _write_notes(lines: list[str]) -> str:
+    """Add checked lines to the notes file in ONE read and ONE write; returns the file's
+    text afterwards. The read is strict: a failed read used to pass for an empty file,
+    and the write that followed would have replaced every note with the new line."""
+    from .drive_api import ensure_folder, get_service, read_or_create_text, upload_or_update
+
+    current = read_or_create_text(TAGS_NAME, TAGS_HEADER)
+    have = set(current.splitlines())
+    fresh = [x for x in dict.fromkeys(lines) if x not in have]   # a retried command adds nothing
+    if not fresh:
+        return current
+    text = (current.rstrip("\n") + "\n" if current else TAGS_HEADER) + "\n".join(fresh) + "\n"
     service = get_service()
     upload_or_update(service, TAGS_NAME, text, "text/plain", ensure_folder(service))
-    return line
+    return text
+
+
+def append_notes(lines: list[str], upload: bool = True) -> tuple[list[str], list[tuple[str, str]], str | None]:
+    """Several note lines at once (the trader's whole run in one command): every line is
+    checked, the good ones are stored together, a bad one is refused with its reason and
+    does not hold the others back. Returns (recorded, refused, the file's text)."""
+    good: list[str] = []
+    bad: list[tuple[str, str]] = []
+    for raw in lines:
+        try:
+            good.append(append_note(raw, upload=False))
+        except ValueError as exc:
+            bad.append((" ".join(str(raw).split()), str(exc)))
+    text = _write_notes(good) if upload and good else None
+    return good, bad, text
+
+
+def note_command(args, refresh=None, out=print) -> int:
+    """What `journal note` and `trader-note` do: record the lines, then rebuild the
+    report ONCE. Exit 0 = all recorded, 2 = a line was refused (the others are in),
+    1 = Drive could not be reached (nothing recorded)."""
+    lines = split_notes(args)
+    try:
+        good, bad, text = append_notes(lines)
+    except Exception as exc:
+        out(f"Not recorded (Drive): {type(exc).__name__}: {exc}")
+        return 1
+    for line in good:
+        out(f"Recorded: {line}")
+    for line, why in bad:
+        out(f"Not recorded: {why}")
+        if len(lines) > 1:
+            out(f"    the refused line: {line[:160]}")
+    if good and refresh is not None:
+        try:
+            refresh(text)
+            out("Trade report refreshed.")
+        except Exception as exc:
+            out(f"(Report not refreshed: {exc})")
+    return 2 if bad else 0
 
 
 def refresh(engine, client, upload: bool = True, account: str | None = None,
@@ -1491,30 +1556,18 @@ def _refuse_smaller(summary: dict, previous: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """`python -m stocksage.journal note "<TAG or RUN line>"`: the trading routine's
-    light path. Needs only the two Google packages and STOCKSAGE_DRIVE_TOKEN, not
-    the rest of StockSage. Records the line, then rebuilds the phone report."""
+    """`python -m stocksage.journal note '<line>' ['<line>' ...]`: the trading routine's
+    light path. Needs only STOCKSAGE_DRIVE_TOKEN, not the rest of StockSage. Records
+    the lines in one write, then rebuilds the phone report once."""
     import sys
 
     argv = list(sys.argv[1:] if argv is None else argv)
     if len(argv) < 2 or argv[0] != "note":
-        print('usage: python -m stocksage.journal note "RUN | 2026-10-29T15:35Z | 104.22 | 11.56 | what happened"')
+        print("usage: python -m stocksage.journal note 'RUN | 2026-10-29T15:35Z | 104.22 | 11.56 | what happened'"
+              " ['IDEA | ...' 'STOP | ...']   (each line in its own single quotes)")
         return 2
-    try:
-        line = append_note(" ".join(argv[1:]))
-    except ValueError as exc:
-        print(f"Not recorded: {exc}")
-        return 2
-    except Exception as exc:
-        print(f"Not recorded (Drive): {type(exc).__name__}: {exc}")
-        return 1
-    print(f"Recorded: {line}")
-    try:
-        refresh_without_broker(None, upload=True)
-        print("Trade report refreshed.")
-    except Exception as exc:
-        print(f"(Report not refreshed: {exc})")
-    return 0
+    # One rebuild for the whole command: each rebuild is about half a minute of a run.
+    return note_command(argv[1:], refresh=lambda text: refresh_without_broker(None, upload=True, tags_text=text))
 
 
 if __name__ == "__main__":

@@ -449,3 +449,53 @@ def test_status_does_not_show_yesterdays_wake_ups_as_todays(capsys):
     out = capsys.readouterr().out
     assert f"wake-ups today: 0 of {watcher.DAILY_CAP} (0 of {watcher.NEWS_CAP} for headlines alone)" in out
     assert "PRICES: none for" in out and ".\\start.bat keys" in out
+
+
+# --- A stop in the minutes after a scheduled run (2026-11-09) ---------------------------
+
+AFTER_RUN = datetime(2026, 11, 3, 16, 40, tzinfo=timezone.utc)      # five minutes after the :35 run
+
+
+def _stop_args(push):
+    return dict(quote=quotes(AT_STOP), crypto_quote=lambda t: None, news=None, push=push)
+
+
+def test_a_stop_right_after_a_scheduled_run_waits_only_until_that_run_has_finished(monkeypatch):
+    got, push = _pushes(monkeypatch)
+    sent: list = []
+    state: dict = {}
+    args = dict(_stop_args(push), post=lambda u, t, b: sent.append(b))
+    watcher.tick(state, AFTER_RUN, memory=STOPPED, **args)           # last RUN line is 15:35: still running
+    assert not sent and any("STOP: MSFT" in e for e in state["pending"]), "held while the run may be going"
+    done = dict(STOPPED, trader={"equity": 100.0, "last_run": "2026-11-03T16:37+00:00"})
+    assert "STOP: MSFT" in watcher.tick(state, AFTER_RUN + timedelta(minutes=1), memory=done, **args)
+    assert len(sent) == 1 and not state.get("pending"), "fired at :41, not at :50"
+
+
+def test_a_finished_run_does_not_open_the_quiet_window_for_ordinary_events():
+    done = {"trader": {"last_run": "2026-11-03T16:36+00:00"}}
+    assert watcher.scheduled_run_done(AFTER_RUN, done)
+    assert not watcher.scheduled_run_done(AFTER_RUN, {"trader": {"last_run": "2026-11-03T15:36+00:00"}})
+    assert not watcher.scheduled_run_done(AFTER_RUN, {}), "no RUN line known: wait as before"
+    before = datetime(2026, 11, 3, 16, 30, tzinfo=timezone.utc)
+    assert not watcher.scheduled_run_done(before, done), "the minutes BEFORE a run stay quiet"
+    assert not watcher.scheduled_run_done(datetime(2026, 11, 3, 16, 55, tzinfo=timezone.utc), done)
+    saturday = datetime(2026, 11, 7, 16, 40, tzinfo=timezone.utc)
+    assert not watcher.scheduled_run_done(saturday, {"trader": {"last_run": "2026-11-07T16:36+00:00"}})
+    state: dict = {}
+    ok, why = watcher.may_fire(state, AFTER_RUN, urgent=False)
+    assert not ok, "a plain move still waits out the quiet window"
+
+
+def test_a_held_stop_is_dropped_once_the_run_sold_the_position(monkeypatch):
+    got, push = _pushes(monkeypatch)
+    sent: list = []
+    state: dict = {}
+    args = dict(_stop_args(push), post=lambda u, t, b: sent.append(b))
+    watcher.tick(state, AFTER_RUN, memory=STOPPED, **args)
+    assert state["pending"] and state.get("urgent")
+    sold = {"open": [], "trader": {"equity": 100.0, "last_run": "2026-11-03T16:37+00:00"}}
+    watcher.tick(state, AFTER_RUN + timedelta(minutes=1), memory=sold, **args)
+    assert not sent and not state.get("pending") and "urgent" not in state
+    watcher.tick(state, AFTER_RUN + timedelta(minutes=45), memory=sold, **args)
+    assert "StockSage: the trader did not answer" not in [t for t, _ in got]

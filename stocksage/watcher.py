@@ -30,7 +30,9 @@ when one of these happens to something the trader holds:
 
 Firing costs a full routine run, so it is rationed: never within the 10 minutes
 before or the 15 after a scheduled run (minute :35 of each hour), at least 20
-minutes apart, at most 10 a day. The message is plain facts; the routine reads
+minutes apart, at most 10 a day. One exception: a STOP or LIMIT in the minutes
+after a scheduled run fires as soon as that run has written its RUN line (it has
+finished, so the two cannot overlap). The message is plain facts; the routine reads
 it as information (the routine-fire-payload block), never as an instruction.
 
 The watcher is the only stop a fractional position has, so its own failures
@@ -522,6 +524,20 @@ def _when(value) -> datetime | None:
     return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
 
 
+def scheduled_run_done(now: datetime, memory: dict) -> bool:
+    """In the quiet minutes AFTER a scheduled run: has that run already written its RUN
+    line? Then it is over, a wake-up cannot overlap it, and a stop touched since has
+    nobody looking at it until the quiet window ends."""
+    utc = now.astimezone(timezone.utc)
+    run = utc.replace(minute=SCHEDULED_MINUTE, second=0, microsecond=0)
+    if run > utc:
+        run -= timedelta(hours=1)
+    if run.weekday() >= 5 or not 12 <= run.hour <= 23 or utc - run > timedelta(minutes=QUIET_AFTER):
+        return False
+    ran = _when((memory.get("trader") or {}).get("last_run"))
+    return bool(ran and ran >= run)
+
+
 def _self_checks(state: dict, now: datetime, memory: dict, push=None) -> None:
     """The watcher's own failures go to the owner's phone, because a fractional position
     has no other stop: (1) no stock price for ten minutes in the session, once a day;
@@ -578,6 +594,14 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
         state["urgent"] = {"at": now.isoformat(), "due": (now + wait).isoformat()}
     day = now.astimezone(ET).date().isoformat()
     pending = state.get("pending", []) + events
+    owned = {h["ticker"] for h in held}
+    sold = [e for e in pending if e.startswith("STOP") and _event_ticker(e) not in owned]
+    if sold:                                    # a held-back stop the trader has since sold: nothing to wake for
+        pending = [e for e in pending if e not in sold]
+        log("no longer held, so no wake-up: " + "; ".join(sold))
+        if not any(e.startswith(URGENT) for e in pending):
+            state.pop("urgent", None)
+        state["pending"] = pending
     if not pending:
         return None
     news_only = all(e.startswith("NEWS") for e in pending)
@@ -591,6 +615,11 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
         return None
     urgent = any(e.startswith(URGENT) for e in pending)
     ok, why = may_fire(state, now, urgent=urgent)
+    if not ok and urgent and scheduled_run_done(now, memory):
+        # The scheduled run has written its RUN line, so it is over: a stop or the daily
+        # limit does not wait out the rest of the quiet window (it used to, up to 15 minutes).
+        ok = True
+        log("the scheduled run has finished: not waiting out the quiet window")
     if not ok:
         if near_scheduled_run(now):
             if events:

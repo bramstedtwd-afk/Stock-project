@@ -403,6 +403,47 @@ def check_autopilot() -> dict:
     )
 
 
+WATCHER_QUIET_SECONDS = 300      # the watcher saves its state every minute
+
+
+def check_watcher(now: float | None = None) -> dict:
+    """The trader watcher on the always-on computer: are its keys there, is it running
+    right now, can it see prices, will it come back after a restart. It is the only
+    stop a fractional position has, and a closed window used to go unnoticed."""
+    import time
+
+    from . import finnhub, watcher
+
+    name = "Trader watcher"
+    state_file = watcher.state_path()
+    have_url = bool(os.environ.get(watcher.URL_VAR, "").strip())
+    if not have_url and not state_file.exists():
+        return _check(name, PASS, "not set up on this computer (only the always-on one needs it)")
+    missing = [what for var, what in ((watcher.URL_VAR, "the trader's wake-up address"),
+                                      (watcher.TOKEN_VAR, "the trader's wake-up token"),
+                                      (finnhub.KEY_VAR, "the price key"))
+               if not os.environ.get(var, "").strip()]
+    if missing:
+        return _check(name, WARN, "cannot work: missing " + ", ".join(missing),
+                      "Run '.\\start.bat keys' and paste them in (nothing is shown as you type).")
+    restart = "Run '.\\start.bat watch-trader install' to start it and keep it starting at sign-in."
+    if not state_file.exists():
+        return _check(name, WARN, "the keys are saved but it has never run here", restart)
+    quiet = (time.time() if now is None else now) - state_file.stat().st_mtime
+    if quiet > WATCHER_QUIET_SECONDS:
+        ago = f"{quiet / 3600:.0f} hours" if quiet >= 7200 else f"{max(1, quiet // 60):.0f} minutes"
+        return _check(name, WARN, f"NOT running: its last sign of life was {ago} ago, so no stop "
+                      "or sharp move wakes the trader between the hourly runs", restart)
+    state = watcher.load_state()
+    if state.get("quote_fail", 0) >= watcher.QUOTE_FAIL_TICKS:
+        return _check(name, WARN, f"running, but no stock price for {state['quote_fail']} minutes: "
+                      "stops are not being watched",
+                      "Run '.\\start.bat keys' and enter the price key again (it is tested as you save it).")
+    if sys.platform == "win32" and not (watcher.startup_dir() / watcher.STARTUP_FILE).exists():
+        return _check(name, WARN, "running now, but it will not come back after a restart", restart)
+    return _check(name, PASS, "running, prices arriving, starts by itself at sign-in")
+
+
 ALL_CHECKS = (
     check_python,
     check_dependencies,
@@ -417,6 +458,7 @@ ALL_CHECKS = (
     check_sheet_freshness,
     check_update_channel,
     check_autopilot,
+    check_watcher,
 )
 
 _ICON = {PASS: "✓", WARN: "!", FAIL: "✗"}
@@ -455,6 +497,10 @@ def main() -> int:
     from .envfile import load_env
 
     load_env()
+    try:                                   # a redirected Windows console cannot print the tick marks
+        sys.stdout.reconfigure(errors="replace")
+    except Exception:
+        pass
     return run_doctor()
 
 

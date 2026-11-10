@@ -291,3 +291,60 @@ def test_a_scheduled_publish_records_whether_the_sheet_was_built(monkeypatch, tm
     db = Database(tmp_path / "b.db")
     assert "login failed" in db.get_meta("last_sheet_error") and not db.get_meta("last_sheet_ok")
     assert cli is cli_mod
+
+
+# --- The trader watcher (2026-11-09) -----------------------------------------------------
+
+def _watcher_setup(tmp_path, monkeypatch, keys=True, state=None, startup=True):
+    import json
+
+    from stocksage import finnhub, watcher
+
+    monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path))
+    for var in (watcher.URL_VAR, watcher.TOKEN_VAR, finnhub.KEY_VAR):
+        if keys:
+            monkeypatch.setenv(var, "set")
+        else:
+            monkeypatch.delenv(var, raising=False)
+    if state is not None:
+        watcher.state_path().write_text(json.dumps(state), encoding="utf-8")
+    start = tmp_path / "startup"
+    start.mkdir()
+    if startup:
+        (start / watcher.STARTUP_FILE).write_text("x", encoding="utf-8")
+    monkeypatch.setattr(watcher, "startup_dir", lambda: start)
+    return watcher
+
+
+def test_a_computer_without_the_watcher_is_not_nagged(tmp_path, monkeypatch):
+    _watcher_setup(tmp_path, monkeypatch, keys=False)
+    result = doctor.check_watcher()
+    assert result["status"] == doctor.PASS and "always-on" in result["detail"]
+    assert doctor.check_watcher in doctor.ALL_CHECKS
+
+
+def test_a_running_watcher_passes_and_a_stopped_one_is_named_with_its_fix(tmp_path, monkeypatch):
+    import time
+
+    w = _watcher_setup(tmp_path, monkeypatch, state={"quote_fail": 0})
+    assert doctor.check_watcher()["status"] == doctor.PASS
+    late = doctor.check_watcher(now=time.time() + 3 * 3600)
+    assert late["status"] == doctor.WARN and "NOT running" in late["detail"] and "3 hours" in late["detail"]
+    assert ".\\start.bat watch-trader install" in late["fix"]
+    w.state_path().unlink()
+    assert "never run" in doctor.check_watcher()["detail"]
+
+
+def test_a_watcher_with_a_missing_key_or_no_prices_or_no_autostart_warns(tmp_path, monkeypatch):
+    from stocksage import finnhub
+
+    w = _watcher_setup(tmp_path, monkeypatch, state={"quote_fail": 0}, startup=False)
+    if doctor.sys.platform == "win32":
+        assert "after a restart" in doctor.check_watcher()["detail"]
+    w.state_path().write_text('{"quote_fail": %d}' % w.QUOTE_FAIL_TICKS, encoding="utf-8")
+    blind = doctor.check_watcher()
+    assert blind["status"] == doctor.WARN and "no stock price" in blind["detail"]
+    monkeypatch.delenv(finnhub.KEY_VAR)
+    keyless = doctor.check_watcher()
+    assert keyless["status"] == doctor.WARN and "the price key" in keyless["detail"]
+    assert ".\\start.bat keys" in keyless["fix"] and "set" not in keyless["detail"].split("missing")[1]

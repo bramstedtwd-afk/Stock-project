@@ -707,25 +707,12 @@ def cmd_journal(args) -> int:
 
 
 def cmd_trader_note(args) -> int:
-    """For the trading routine: record one TAG or RUN line, then refresh the phone report."""
+    """For the trading routine: record its note lines, then refresh the phone report once."""
     from . import journal
 
-    try:
-        line = journal.append_note(" ".join(args.line))
-    except ValueError as exc:
-        print(f"Not recorded: {exc}")
-        return 2
-    except Exception as exc:
-        print(f"Not recorded (Drive): {type(exc).__name__}: {exc}")
-        return 1
-    print(f"Recorded: {line}")
-    if not args.no_report:
-        try:
-            journal.refresh_without_broker(Engine(), upload=True)
-            print("Trade report refreshed.")
-        except Exception as exc:
-            print(f"(Report not refreshed: {exc})")
-    return 0
+    refresh = None if args.no_report else (
+        lambda text: journal.refresh_without_broker(Engine(), upload=True, tags_text=text))
+    return journal.note_command(args.line, refresh=refresh)
 
 
 def cmd_invest(args) -> int:

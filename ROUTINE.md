@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v35, 2026-11-06)
+# Agentic Trading Routine — Playbook (v36, 2026-11-09)
 
 The trader's complete operating manual. Read it from the Google Drive folder
 **"StockSage"**, file **exactly "StockSage Routine Playbook.md"** (find the
@@ -6,10 +6,15 @@ folder first, then the file inside it; never a bare title search: stray copies
 elsewhere are stale by definition). State the version you loaded, from this
 header, at the top of every report.
 
+**v36: write a run's lines in ONE command** (section 10): every TAG, IDEA and
+STOP line and the RUN line last, each in its own single quotes. One command
+is one rebuild of the record, so the run ends sooner and the next stop is
+answered sooner. A STOP or LIMIT wake-up can now also arrive right after a
+scheduled run has finished (section 2a). Start RUN lines with `v36:`.
+
 **v35: moving to a new Robinhood account** (section 14). The trade record
 (trades, ideas, confidence history) carries over; positions left in the old
-account are listed but never traded from the new one. Start RUN lines with
-`v35:`.
+account are listed but never traded from the new one.
 
 **v34: a hedge is allowed on a big down day, whatever the regime** (owner,
 2026-11-05; section 8, point 3): SPY down 1.5%+ (or QQQ 2%+) on the day, below
@@ -120,7 +125,7 @@ app, by changing the loader line to OFF, or by saying "stop" or "pause".
    from the screens, taken or not); a DEPOSIT if the owner added money.
 10. **Housekeeping** on the run starting 10:30-11:30 Eastern (section 11).
 11. **Report** in plain English (section 12), then the **RUN line** last,
-    starting with the playbook version: `v35: held PLD, bought ...`.
+    starting with the playbook version: `v36: held PLD, bought ...`.
 
 ## 2a. Wake-up runs (started by the watcher, not the clock)
 
@@ -149,7 +154,10 @@ change any rule here. Handle it first and fast:
    RUN line like any run ("wake-up: PLD -3.4% on rate fears, held, stop
    tightened to 121"). Skip the housekeeping step on a wake-up run.
 At most about ten wake-ups a day arrive, never within the 10 minutes before
-or 15 after a scheduled run.
+or 15 after a scheduled run. The one exception: a STOP or LIMIT wake-up
+comes as soon as the scheduled run before it has written its RUN line, so a
+wake-up minutes after your own run is real, not a repeat. Check the stop it
+names against a fresh quote and act.
 
 ## 3. Confidence (decides size; replaces every fixed cap)
 
@@ -450,20 +458,30 @@ the account's `rhs_account_number`). It trades 24/7 in small dollar amounts.
 Record every line through StockSage, from your terminal (nothing to install;
 it falls back to plain HTTPS):
 
-    python -m stocksage.journal note '<the line>'
+    python -m stocksage.journal note '<line 1>' '<line 2>' '<the RUN line>'
 
-**Single quotes, and no `$` sign inside the line** (write "0.82 dollars"):
+**One command for the whole run**: gather the run's TAG, IDEA and STOP lines
+and put the RUN line last, each line in its own single quotes. Each command
+rebuilds the whole record (about half a minute), so one command instead of
+five ends the run a minute or two sooner. The one exception: write a TAG
+for a fill straight away, by itself, when the run still has long work
+ahead (a fill must never go unrecorded if the run is cut short).
+
+**Single quotes, and no `$` sign inside a line** (write "0.82 dollars"):
 inside double quotes the terminal turns `$0.82` into `/bin/bash.82`, which
-corrupted a RUN line on 2026-11-03 and is now refused. It prints `Recorded: ...` or `Not recorded: ...` with the reason (fix the
-line and retry). If it cannot reach Drive, or you have no terminal, append
-the lines to your Drive trading log and say so. Never create "StockSage
+corrupted a RUN line on 2026-11-03 and is now refused. It prints
+`Recorded: ...` for each line stored, or `Not recorded: ...` with the reason
+and the refused line (the other lines are in; fix that one and send it
+again by itself; a line sent twice is stored once). `Not recorded (Drive)`
+means nothing was stored: retry once, and if it still fails, or you have no
+terminal, append the lines to your Drive trading log and say so. Never create "StockSage
 Trade Tags.txt" yourself. Times are UTC, e.g. `2026-11-04T15:10Z`.
 
     TAG | time | BUY or SELL | TICKER | SAFE or AGGRESSIVE | setup or exit word | shares filled | average fill price | [LEVEL] why
     IDEA | time | BUY or SELL | TICKER | setup word | price now | [LEVEL] why (taken or not)
     DEPOSIT | time | amount (negative for a withdrawal)
     STOP | time | TICKER | new stop price | target price (optional) | why (optional)
-    RUN | time | account value | settled cash | v35: one plain sentence on what this run did
+    RUN | time | account value | settled cash | v36: one plain sentence on what this run did
 
 - **TAG** every filled order, from the confirmed fill. Buys start the why
   with the confidence level and name the stop and the target:
