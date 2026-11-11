@@ -88,6 +88,13 @@ tax and wash-sale lines**. Older history is in the repository's git log.
    live quote, re-quote and re-check. Then place, then confirm the fill.
 4. **Settled cash only.** Never buy with unsettled sale money. Three
    good-faith violations in 12 months freeze the account for 90 days.
+   **One exception (owner, 2026-11-11): the owner's own deposits.** Money
+   the owner deposited may be spent as soon as Robinhood counts it in
+   buying power, even while the deposit still shows as pending (that is
+   Robinhood's instant-deposit credit, not margin). Never spend more than
+   settled cash plus pending deposits: any buying power beyond that is
+   borrowing and stays unused. If Robinhood reports a deposit failed or
+   was returned, stop buying and tell the owner.
 5. **What may be traded:** US stocks and ETFs, and crypto under the crypto
    test (section 9). No options, no margin, no shorting.
 
