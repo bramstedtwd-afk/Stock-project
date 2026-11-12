@@ -95,15 +95,18 @@ The brain in Drive is refreshed on every publish, so you lose at most a few hour
 learning. The live scorecard travels in it too. Re-run Part 2 only if the alert topic
 changed (update the `STOCKSAGE_NTFY_TOPIC` secret).
 
-## Part 6: if this computer is off while the market is open (options, none built yet)
+## Part 6: if this computer is off while the market is open
 
-Written 2026-11-12 for you to choose from. Nothing here has been built or switched on.
+Written 2026-11-12. **You chose E and A the same day; both are in force** (playbook v39).
+B, C and D are not built.
 
 **What already covers you today.** The trader still runs every hour from the cloud
 (12:35-23:35 UTC) and checks every stop on each run, whether or not this computer is on.
 What is lost while the computer is off is the minute-by-minute watch: a stop touched just
-after a run waits up to an hour, in market hours. Your phone hears "the watcher has gone
-quiet" after 150 quiet minutes and "the computer has gone quiet" after 30 business hours.
+after a run waits up to an hour, in market hours. Since E, the watcher writes a small "still alive" note to Drive every five minutes, and the
+trader's next hourly run notices when it is 20 minutes old: it tells your phone ("the watcher
+has gone quiet", once a day) and treats itself as the only stop until the computer is back.
+Before E that took 150 quiet minutes. Your phone also hears "the computer has gone quiet" after 30 business hours.
 The phone page is also off, because this computer serves it.
 
 | | Option | What you get | What it costs or risks |
@@ -114,7 +117,7 @@ The phone page is also off, because this computer serves it.
 | **D** | **A second watcher on a spare device at home** (an old laptop or a small always-on box), same standby rule. | No monthly cost; the keys stay in your home. | A power cut or internet outage at home takes out both. Same building work as C. |
 | **E** | **Tighten what exists:** every hourly run checks when the watcher last wrote, and if it has been silent for 20 minutes in market hours your phone is told on that run (today that takes 150 minutes). | No new machine, no keys anywhere new, about an hour to build. | Stops are still only checked hourly while the computer is off; you just learn about it sooner. |
 
-**Recommendation:** E and A first (cheap, no new machine, no new keys), B if you want your
+**Recommendation as written:** E and A first (cheap, no new machine, no new keys), B if you want your
 phone to hear a stop level being crossed. C or D only if this computer actually turns out to
 go dark during market hours more than rarely; the scheduled cloud runs already check every
 stop each hour. Not suitable: running the watcher on GitHub's free timers (they start hours

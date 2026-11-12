@@ -47,6 +47,11 @@ log = logging.getLogger(__name__)
 
 TAGS_NAME = "StockSage Trade Tags.txt"
 MEMORY_NAME = "StockSage Trade Memory.json"
+# The watcher's pulse: one small file it overwrites every few minutes while it watches, so
+# an hourly run can tell within 20 minutes that the always-on computer has gone dark.
+PULSE_NAME = "StockSage Watcher Pulse.txt"
+PULSE_TOLD_NAME = "StockSage Watcher Silent.txt"     # the day the phone was last told
+PULSE_SILENT = timedelta(minutes=20)
 TAGS_HEADER = (
     "# One line per order the trading routine places in the agentic account. Append, never edit.\n"
     "# TAG | <UTC time, e.g. 2026-10-29T14:35Z> | BUY or SELL | TICKER | SAFE or AGGRESSIVE | setup or exit "
@@ -1563,10 +1568,80 @@ def append_notes(lines: list[str], upload: bool = True) -> tuple[list[str], list
     return good, bad, text
 
 
-def note_command(args, refresh=None, out=print) -> int:
+def watcher_silent(pulse_at, now: datetime | None = None) -> datetime | None:
+    """When the owner's watcher last said it was alive, if that is too long ago to trust.
+
+    The watcher overwrites a small pulse file in Drive every few minutes while it watches.
+    Judged on weekdays from 9:50 AM to 4:00 PM New York time (the session, once the watcher
+    has had time to write). None = alive, not judged now, or never set up (no pulse yet)."""
+    from zoneinfo import ZoneInfo
+
+    last = _ts(pulse_at) if pulse_at else None
+    if last is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    local = now.astimezone(ZoneInfo(ET))
+    minutes = local.hour * 60 + local.minute
+    if local.weekday() >= 5 or not (9 * 60 + 50 <= minutes <= 16 * 60):
+        return None
+    return last if now - last > PULSE_SILENT else None
+
+
+def _drive_text(name: str) -> str | None:
+    from .drive_api import read_drive_text
+
+    return read_drive_text(name)
+
+
+def _drive_put(name: str, text: str) -> None:
+    from .drive_api import publish_text
+
+    publish_text(name, text)
+
+
+def watcher_notice(out=print, now: datetime | None = None, read=None, write=None) -> bool:
+    """Tell the trader, in its own run, that the owner's watcher has gone silent: until it
+    is back the hourly run is the only stop. The first notice of a day also asks the trader
+    to start the watchdog, which tells the owner's phone (the trader's environment holds no
+    phone topic; the watchdog job does). Never raises; True when the watcher is silent."""
+    from zoneinfo import ZoneInfo
+
+    read, write = read or _drive_text, write or _drive_put
+    now = now or datetime.now(timezone.utc)
+    try:
+        last = watcher_silent((read(PULSE_NAME) or "").strip(), now)
+    except Exception as exc:
+        out(f"(Watcher not checked: {type(exc).__name__})")
+        return False
+    if last is None:
+        return False
+    eastern = ZoneInfo(ET)
+    quiet = int((now - last).total_seconds() // 60)
+    out(f"WATCHER SILENT: the owner's watcher last checked in at "
+        f"{last.astimezone(eastern).strftime('%a %I:%M %p ET')} ({quiet} minutes ago). Until it is back, "
+        "this hourly run is the only stop (playbook section 2b).")
+    today = now.astimezone(eastern).date().isoformat()
+    try:
+        told = (read(PULSE_TOLD_NAME) or "").strip() == today
+    except Exception:
+        told = False
+    if told:
+        out("The owner's phone was already told today.")
+        return True
+    out("TELL THE OWNER'S PHONE now (once a day): gh api --method POST "
+        "repos/bramstedtwd-afk/Stock-project/actions/workflows/watchdog.yml/dispatches -f ref=main")
+    try:
+        write(PULSE_TOLD_NAME, today)
+    except Exception:
+        pass                      # not marked: the next run asks again, which is the safe side
+    return True
+
+
+def note_command(args, refresh=None, out=print, notice=None) -> int:
     """What `journal note` and `trader-note` do: record the lines, then rebuild the
     report ONCE. Exit 0 = all recorded, 2 = a line was refused (the others are in),
-    1 = Drive could not be reached (nothing recorded)."""
+    1 = Drive could not be reached (nothing recorded). `notice` (the light path passes
+    `watcher_notice`) adds a line when the owner's watcher has gone silent."""
     lines = split_notes(args)
     try:
         good, bad, text = append_notes(lines)
@@ -1585,6 +1660,8 @@ def note_command(args, refresh=None, out=print) -> int:
             out("Trade report refreshed.")
         except Exception as exc:
             out(f"(Report not refreshed: {exc})")
+    if notice is not None:
+        notice(out)
     return 2 if bad else 0
 
 
@@ -1881,12 +1958,19 @@ def main(argv: list[str] | None = None) -> int:
     import sys
 
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["watcher"]:
+        # The start of a run: is the owner's watcher alive? Exit 0 either way (a silent
+        # watcher is something to act on, not a failed command).
+        if not watcher_notice():
+            print("Watcher: checking in (or not judged outside 9:50 AM-4:00 PM ET on weekdays).")
+        return 0
     if len(argv) < 2 or argv[0] != "note":
         print("usage: python -m stocksage.journal note 'RUN | 2026-10-29T15:35Z | 104.22 | 11.56 | what happened'"
               " ['IDEA | ...' 'STOP | ...']   (each line in its own single quotes)")
         return 2
     # One rebuild for the whole command: each rebuild is about half a minute of a run.
-    return note_command(argv[1:], refresh=lambda text: refresh_without_broker(None, upload=True, tags_text=text))
+    return note_command(argv[1:], refresh=lambda text: refresh_without_broker(None, upload=True, tags_text=text),
+                        notice=watcher_notice)
 
 
 if __name__ == "__main__":

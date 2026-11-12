@@ -1,10 +1,19 @@
-# Agentic Trading Routine — Playbook (v38, 2026-11-12)
+# Agentic Trading Routine — Playbook (v39, 2026-11-12)
 
 The trader's complete operating manual. Read it from the Google Drive folder
 **"StockSage"**, file **exactly "StockSage Routine Playbook.md"** (find the
 folder first, then the file inside it; never a bare title search: stray copies
 elsewhere are stale by definition). State the version you loaded, from this
 header, at the top of every report.
+
+**v39: a backstop for when the owner's computer is off** (owner, 2026-11-12;
+sections 2b and 7). Two changes. **Whole shares where the size allows, each
+with a resting stop order** placed in the same run as the buy: that stop
+works at Robinhood with the owner's computer off, the internet down, or you
+out of usage. And **the first command of every run asks whether the watcher
+is alive** (`python -m stocksage.journal watcher`): if it answers WATCHER
+SILENT, you are the only stop until it is back (section 2b). Start RUN lines
+with `v39:`.
 
 **v38: the watcher looks wider** (sections 2a and 10). Two more wake-ups:
 **ENTRY** (an idea you rated HIGH or MEDIUM and did not buy has reached the
@@ -16,7 +25,7 @@ you would take at a better price names that price in its why: `entry
 141.50`** (section 10). An idea without one is graded as always and simply
 not watched. Also new: the four market screens now come with their exact
 recipes (section 6a), because the saved ones did not move to the new
-Robinhood login. Start RUN lines with `v38:`.
+Robinhood login.
 
 **v37: the watcher learns, and warns earlier** (section 2a). Two new
 wake-ups: **NEAR** (a holding is close to its stop but has not touched it:
@@ -125,7 +134,8 @@ app, by changing the loader line to OFF, or by saying "stop" or "pause".
 
 ## 2. Each run, in order
 
-1. **Load and pull.** Playbook version; the brief ("StockSage Brief.json",
+1. **Load and pull.** `python -m stocksage.journal watcher` first (is the
+   owner's watcher alive? WATCHER SILENT: section 2b). Playbook version; the brief ("StockSage Brief.json",
    same folder rule); the trade memory ("StockSage Trade Memory.json"). Pull
    the account: positions, open orders, settled and unsettled cash, today's
    P&L, and crypto positions. Retry a failed pull once before calling it real.
@@ -151,13 +161,40 @@ app, by changing the loader line to OFF, or by saying "stop" or "pause".
    history, analyst targets.
 7. **Score each one you might take** (section 3):
    `python -m stocksage.confidence TICKER --setup S --play P --confirm N`.
-8. **Act**: size by the level, check, place, confirm the fill, set the stop.
+8. **Act**: size by the level, check, place, confirm the fill, set the stop
+   (whole shares: the resting stop order now, in this run; section 7).
 9. **Write it down** (section 10): a TAG for every fill; **at least 3 IDEA
    lines every run**, even with no cash to spend (score the best candidates
    from the screens, taken or not); a DEPOSIT if the owner added money.
 10. **Housekeeping** on the run starting 10:30-11:30 Eastern (section 11).
 11. **Report** in plain English (section 12), then the **RUN line** last,
-    starting with the playbook version: `v38: held PLD, bought ...`.
+    starting with the playbook version: `v39: held PLD, bought ...`.
+
+## 2b. When the watcher is silent
+
+`python -m stocksage.journal watcher` (step 1; the `journal note` command
+repeats it) prints **WATCHER SILENT** when the owner's always-on computer has
+not checked in for 20 minutes during the session. Nothing is watching the
+stops between your runs, and no wake-up will come. On that run:
+
+1. **Tell the owner's phone** when the output asks you to (once a day; it
+   prints the exact `gh api ... watchdog.yml/dispatches` command). If it
+   fails, retry once and say so in the RUN line.
+2. **You are the stop for the next hour.** For every fractional position,
+   look at how far the price is from its stop against how much the stock
+   normally moves in an hour: when the stop could be reached before your
+   next run, decide now (sell, or hold and say why holding is worth an
+   unwatched hour). A position already through its stop is sold, as always.
+3. **Whole-share positions:** confirm each has its resting stop order at the
+   level of its latest STOP line (`get_equity_orders`); place it if missing.
+4. **New buys:** whole shares with a resting stop where the size allows
+   (section 7). A fractional buy is allowed, but its stop is only checked
+   hourly until the watcher is back: size it for that, and say so in the why.
+5. Put `watcher silent` in the RUN line.
+
+Never try to fix, restart or reach the owner's computer, and do not change
+how often you run. When the command stops saying WATCHER SILENT, carry on
+as usual.
 
 ## 2a. Wake-up runs (started by the watcher, not the clock)
 
@@ -451,9 +488,21 @@ parked in SPY or SGOV), `inverse`, `defensive`, `bounce`, `social`; crypto:
 ## 7. Day-trading mechanics
 
 - **Cadence and stops.** You run about hourly; between runs the owner's
-  watcher checks every minute. Whole-share positions carry a resting stop
-  order (`stop_market`; `gfd` for a same-day trade, `gtc` for longer; cancel
-  it before selling another way). Fractional shares cannot carry one: their
+  watcher checks every minute. **Prefer whole shares:** when the planned
+  dollars buy at least one whole share and rounding to whole shares keeps the
+  position within about a fifth of the planned size, buy whole shares only
+  (no fractional top-up: a resting stop covers whole shares only). Otherwise
+  buy fractional as before. **Every whole-share position carries a resting
+  stop order** (`stop_market`; `gfd` for a same-day trade, `gtc` for longer),
+  placed in the same run right after the fill is confirmed, at the stop named
+  in the buy's why. It sells at Robinhood within seconds, with the owner's
+  computer off or you out of usage. Know what it is: it sells on a brief dip
+  with no judgement, after a gap down it sells at the open wherever that is,
+  and it works in the regular session only. When you move the stop, cancel
+  and replace the order and write the STOP line; cancel it before selling
+  another way; on each run check it is still there (step 5). The usual
+  review and quote check apply to it like any order. Fractional shares
+  cannot carry one: their
   stop is the one named in the buy's why (`stop 276.50`), and the watcher
   wakes you the minute it is touched during the regular session. When you
   move a stop (or set one on a position that has none), write a STOP line
@@ -591,7 +640,7 @@ Trade Tags.txt" yourself. Times are UTC, e.g. `2026-11-04T15:10Z`.
     IDEA | time | BUY or SELL | TICKER | setup word | price now | [LEVEL] entry <price> stop <price>, why (taken or not)
     DEPOSIT | time | amount (negative for a withdrawal)
     STOP | time | TICKER | new stop price | target price (optional) | why (optional)
-    RUN | time | account value | settled cash | v38: one plain sentence on what this run did
+    RUN | time | account value | settled cash | v39: one plain sentence on what this run did
 
 - **TAG** every filled order, from the confirmed fill. Buys start the why
   with the confidence level and name the stop and the target:

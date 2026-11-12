@@ -118,6 +118,7 @@ FOLLOW_AFTER = timedelta(minutes=60)            # the price check that grades a 
 FOLLOW_GIVE_UP = timedelta(hours=3)
 BETA = "experimental-cc-routine-2026-04-01"
 HEARTBEAT = timedelta(hours=2)
+PULSE = timedelta(minutes=5)           # the "still alive" file in Drive; silent for 20 minutes is told
 STARTUP_FILE = "StockSage Watcher.cmd"
 # Brands people write instead of the listed name.
 ALIASES = {"GOOGL": ["Google", "Alphabet", "YouTube"], "GOOG": ["Google", "Alphabet", "YouTube"],
@@ -858,6 +859,27 @@ def heartbeat(state: dict, now: datetime, memory: dict, force: bool = False) -> 
     state["last_heartbeat"] = (now if ok else now - HEARTBEAT + timedelta(minutes=10)).isoformat()
 
 
+def pulse(state: dict, now: datetime, publish=None) -> bool:
+    """Overwrite the small pulse file in Drive every `PULSE` while stocks can trade, so the
+    trader's hourly run (and the watchdog) can tell within 20 minutes that this computer
+    has gone dark. Never fatal; a failed write is tried again in two minutes."""
+    last = state.get("last_pulse")
+    if not stock_hours(now) or (last and now - datetime.fromisoformat(last) < PULSE):
+        return False
+    try:
+        if publish is None:
+            from .drive_api import publish_text as publish
+        from .journal import PULSE_NAME
+
+        publish(PULSE_NAME, _utc(now))
+        state["last_pulse"] = now.isoformat()
+        return True
+    except Exception as exc:
+        log(f"could not write the pulse to Drive ({type(exc).__name__})")
+        state["last_pulse"] = (now - PULSE + timedelta(minutes=2)).isoformat()
+        return False
+
+
 def _post(url: str, token: str, body: dict) -> dict:
     import urllib.request
 
@@ -1160,6 +1182,7 @@ def run_once(memory_reader=None) -> str | None:
     sent = tick(state, now, quote=quote, crypto_quote=cq, news=news, memory=memory, names=_names(state),
                 ranges=read_ranges(state, now), events=scheduled)
     heartbeat(state, now, memory, force=state.pop("starting", False))
+    pulse(state, now)
     save_state(state)
     return sent
 

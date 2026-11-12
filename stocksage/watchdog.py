@@ -77,8 +77,11 @@ def trader_verdict(runs: list[dict], now: datetime | None = None) -> str | None:
 WATCHER_QUIET_MINUTES = 150
 
 
-def watcher_verdict(tags_text: str, now: datetime | None = None) -> str | None:
+def watcher_verdict(tags_text: str, now: datetime | None = None, pulse=None) -> str | None:
     """A plain message if the minute-by-minute watcher has stopped checking in.
+
+    `pulse` (the time in the watcher's pulse file, written every five minutes) is the fast
+    check: 20 silent minutes in the session. Without one the two-hour WATCH lines decide.
 
     The watcher (always-on computer) writes a WATCH line when it starts and every two
     hours from 7 AM to 8 PM New York time, and a WAKE line for each wake-up. It is the
@@ -87,9 +90,15 @@ def watcher_verdict(tags_text: str, now: datetime | None = None) -> str | None:
     when it has never written a line (not set up is not an alarm)."""
     from zoneinfo import ZoneInfo
 
-    from .journal import _ts
+    from .journal import _ts, watcher_silent
 
     now = now or datetime.now(timezone.utc)
+    dark = watcher_silent(pulse, now)
+    if dark is not None:
+        when = dark.astimezone(ZoneInfo("America/New_York")).strftime("%a %I:%M %p ET")
+        return (f"The watcher has not checked in since {when}: the always-on computer may be off, asleep or "
+                "offline. Until it is back, stops are checked only on the hourly runs. On that computer, open "
+                "the StockSage folder in PowerShell and run .\\start.bat watch-trader install")
     local = now.astimezone(ZoneInfo("America/New_York"))
     minutes = local.hour * 60 + local.minute
     if local.weekday() >= 5 or not (9 * 60 + 45 <= minutes <= 16 * 60 + 30):
@@ -146,7 +155,7 @@ def _alert(post, title: str, message: str, now: datetime | None, once_a_day) -> 
 
 
 def check_trader(post=notify._post, now: datetime | None = None, tags_text: str | None = None,
-                 once_a_day=None) -> None:
+                 once_a_day=None, pulse=None) -> None:
     """Warn the phone if the trader, or the watcher that wakes it, has gone quiet. Never raises.
 
     `once_a_day` (a file path) limits each alert to one push per day: the always-on
@@ -161,6 +170,11 @@ def check_trader(post=notify._post, now: datetime | None = None, tags_text: str 
             from . import drive_api
 
             tags_text = drive_api.read_drive_text(journal.TAGS_NAME) or ""
+            if pulse is None:
+                try:
+                    pulse = (drive_api.read_drive_text(journal.PULSE_NAME) or "").strip() or None
+                except Exception:
+                    pulse = None           # the two-hour WATCH lines still decide
     except Exception as exc:
         print(f"Could not read the trader's check-ins: {exc}")
         return
@@ -170,7 +184,7 @@ def check_trader(post=notify._post, now: datetime | None = None, tags_text: str 
     else:
         _alert(post, "StockSage trader has gone quiet", message, now, once_a_day)
     try:
-        message = watcher_verdict(tags_text, now)
+        message = watcher_verdict(tags_text, now, pulse)
     except Exception as exc:
         print(f"Could not check the watcher: {exc}")
         return
