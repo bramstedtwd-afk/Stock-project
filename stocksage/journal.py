@@ -1057,14 +1057,44 @@ def wake_tuning(by_kind: dict) -> dict:
     return {k: min(hi, max(lo, out[k])) for k, (lo, hi, _d) in WAKE_TUNE_BOUNDS.items() if k not in NEVER_TUNED}
 
 
-def wake_scorecard(text: str, now: datetime | None = None) -> dict:
+WAKE_WEEK = timedelta(days=7)
+_TUNE_WORDS = {"MOVE": ("the MOVE trigger", "x{:.2f}"), "NEAR": ("the NEAR band", "x{:.2f}"),
+               "NEWS_CAP": ("headline wake-ups a day", "{:.0f}")}
+
+
+def wake_week(rows: list[dict], wakes: list[dict], now: datetime, tuning_then: dict, tuning_now: dict) -> dict:
+    """The last seven days of the scorecard, for the weekly digest: counts only (no
+    tickers, no prices, no amounts), and what the watcher changed about itself."""
+    start = now - WAKE_WEEK
+    mine = [r for r in rows if r["when"] > start]
+    by_kind: dict = {}
+    for r in mine:
+        k = by_kind.setdefault(r["kind"], {"wakes": 0, "acted": 0, "priced": 0, "continued": 0})
+        k["wakes"] += 1
+        k["acted"] += r["traded"] or r["adjusted"]
+        k["priced"] += r["went"] is not None
+        k["continued"] += r["went"] in ("continued", "moved")
+    changes = []
+    for key, (name, fmt) in _TUNE_WORDS.items():
+        was, is_ = tuning_then.get(key), tuning_now.get(key)
+        if was is not None and is_ is not None and abs(was - is_) > 1e-9:
+            changes.append(f"{name}: {fmt.format(was)} to {fmt.format(is_)}")
+    this_week = [w for w in wakes if w["at"] > start]
+    return {"from": start.isoformat(timespec="minutes"), "to": now.isoformat(timespec="minutes"),
+            "wakes": len(this_week), "prev_wakes": sum(start - WAKE_WEEK < w["at"] <= start for w in wakes),
+            "answered": len({r["at"] for r in mine if r["answered"]}),
+            "acted": len({r["at"] for r in mine if r["traded"] or r["adjusted"]}),
+            "by_kind": {k: by_kind[k] for k in WAKE_KINDS if k in by_kind}, "changes": changes}
+
+
+def wake_scorecard(text: str, now: datetime | None = None, week: bool = True) -> dict:
     """Grade every wake-up of the last 60 days per trigger kind, from the notes file alone
     (so the trader's light path can rebuild it): was it answered by a run, did the trader
     trade or move a stop on it in that run, and did the price keep going the wake-up's
     way in the hour after (the watcher's AFTER line). A wake-up was `useful` when the
     trader acted on it or the price kept going (a headline: the price moved 1%+)."""
     now = now or datetime.now(timezone.utc)
-    wakes = [w for w in parse_wakes(text) if now - w["at"] <= WAKE_WINDOW]
+    wakes = [w for w in parse_wakes(text) if timedelta(0) <= now - w["at"] <= WAKE_WINDOW]
     runs, tags, stops, afters = parse_runs(text), parse_tags(text), parse_stops(text), parse_afters(text)
     by_kind: dict[str, dict] = {}
     recent = []
@@ -1097,15 +1127,21 @@ def wake_scorecard(text: str, now: datetime | None = None) -> dict:
                 row["continued"] += went in ("continued", "moved")
                 row["reversed"] += went == "reversed"
                 row["useful"] += traded or adjusted or went in ("continued", "moved")
-            recent.append({"at": w["at"].isoformat(timespec="minutes"), "kind": ev["kind"], "ticker": ev["ticker"],
+            recent.append({"when": w["at"], "at": w["at"].isoformat(timespec="minutes"), "kind": ev["kind"], "ticker": ev["ticker"],
                            "answered": answer is not None, "traded": traded, "adjusted": adjusted,
                            "after": round(ret, 4) if ret is not None else None, "went": went})
     for row in by_kind.values():
         row["useful_rate"] = round(row["useful"] / row["priced"], 3) if row["priced"] else None
         row["verdict"] = _wake_verdict(row)
     ordered = {k: by_kind[k] for k in WAKE_KINDS if k in by_kind}
-    return {"days": WAKE_WINDOW.days, "wakes": len(wakes), "by_kind": ordered, "tuning": wake_tuning(ordered),
-            "bounds": {k: [lo, hi] for k, (lo, hi, _d) in WAKE_TUNE_BOUNDS.items()}, "recent": recent[-12:][::-1],
+    tuning = wake_tuning(ordered)
+    seven = {}
+    if week:                                 # what changed since the settings of a week ago
+        then = wake_scorecard(text, now - WAKE_WEEK, week=False)["tuning"]
+        seven = wake_week(recent, wakes, now, then, tuning)
+    shown = [{k: v for k, v in r.items() if k != "when"} for r in recent[-12:][::-1]]
+    return {"days": WAKE_WINDOW.days, "wakes": len(wakes), "by_kind": ordered, "tuning": tuning, "week": seven,
+            "bounds": {k: [lo, hi] for k, (lo, hi, _d) in WAKE_TUNE_BOUNDS.items()}, "recent": shown,
             "note": "graded from the notes: acted = a TAG or STOP line in the run that followed; price = the "
                     "watcher's check about an hour later. STOP and LIMIT wake-ups are graded but never tuned."}
 
@@ -1118,6 +1154,36 @@ def _wakes(text: str | None) -> dict:
     except Exception as exc:
         log.warning("wake-ups not graded: %s", exc)
         return {}
+
+
+def wake_digest(wk: dict) -> list[str]:
+    """The watcher's week in plain lines, for the phone report and the weekly push:
+    how often it woke the trader, what for, what came of it, what it tuned. Counts
+    only: no tickers, no prices, no amounts, no account."""
+    w = (wk or {}).get("week") or {}
+    if not w or not (w.get("wakes") or w.get("prev_wakes")):
+        return []
+    lines = [f"Wake-ups in the last 7 days: {w['wakes']} (the 7 days before: {w['prev_wakes']}). A trader run "
+             f"followed {w['answered']}; the trader traded or moved a stop on {w['acted']}."]
+    parts = []
+    for kind, r in (w.get("by_kind") or {}).items():
+        bit = f"{kind} {r['wakes']}"
+        notes = [f"acted on {r['acted']}"] if r["acted"] else []
+        if r["priced"]:
+            notes.append(f"price kept going {r['continued']} of {r['priced']}")
+        parts.append(bit + (f" ({', '.join(notes)})" if notes else ""))
+    if parts:
+        lines.append("By reason: " + "; ".join(parts) + ".")
+    judged = [f"{k} {r['verdict']}" for k, r in (wk.get("by_kind") or {}).items()
+              if not r["verdict"].startswith("too few")]
+    lines.append("Grades so far (60 days): " + ("; ".join(judged) if judged else
+                                                 "none yet (a reason needs 10 price-checked wake-ups to be judged)") + ".")
+    t = wk.get("tuning") or {}
+    now_at = (f"MOVE trigger x{t.get('MOVE', 1.0):.2f}, NEAR band x{t.get('NEAR', 1.0):.2f}, headline wake-ups "
+              f"{int(t.get('NEWS_CAP', 3))} a day")
+    lines.append(("Tuned this week: " + "; ".join(w["changes"]) + f". Now: {now_at}." if w.get("changes") else
+                  f"Nothing was tuned this week ({now_at}).") + " STOP and LIMIT are never tuned.")
+    return lines
 
 
 def _wake_lines(wk: dict) -> list[str]:
@@ -1133,6 +1199,10 @@ def _wake_lines(wk: dict) -> list[str]:
     lines.append(f"  Learned settings (inside fixed limits): MOVE trigger x{t.get('MOVE', 1.0):.2f}, "
                  f"NEAR band x{t.get('NEAR', 1.0):.2f}, headline wake-ups {int(t.get('NEWS_CAP', 3))} a day. "
                  "STOP and LIMIT are never tuned.")
+    week = wake_digest(wk)
+    if week:
+        changed = bool((wk.get("week") or {}).get("changes"))      # the settings line above already says "now"
+        lines += ["", "THE WATCHER'S WEEK"] + ["  " + x for x in (week if changed else week[:-1])]
     return lines
 
 

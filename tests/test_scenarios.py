@@ -101,3 +101,42 @@ def test_the_brake_follows_the_trades_not_the_market_and_calibration_is_reported
     assert cf.score(memory={"drawdown": -0.12}, **strong)["level"] == "LOW", "an older memory still brakes"
     uncalibrated = {"by_confidence": {"HIGH": {"trades": 12, "avg_adj": -0.002}, "LOW": {"trades": 15, "avg_adj": 0.001}}}
     assert cf.score(memory=uncalibrated, **strong)["level"] == "HIGH"
+
+
+def test_the_trigger_rehearsal_compares_the_sets_on_the_same_prices_and_keeps_the_fixed_limits(monkeypatch):
+    from datetime import timedelta
+
+    from stocksage import watcher
+
+    monkeypatch.delenv("STOCKSAGE_TRADER_FIRE_URL", raising=False)
+    out = sc.trigger_rehearsal(days=10, seed=3)
+    before, one, two = (out["sets"][k] for k in ("before", "session 1", "session 2"))
+    assert before["stops"] == one["stops"] == two["stops"], "the same prices: the same stops are touched"
+    assert before["stop_delay"] == one["stop_delay"] == two["stop_delay"], "new kinds never slow a STOP down"
+    assert "NEAR" not in before["kinds"] and "ENTRY" not in one["kinds"] and "STOP" in before["kinds"]
+    assert two["kinds"].get("ENTRY") and two["entries_told"] <= two["entries_reached"]
+    for row in (before, one, two):
+        assert row["max_day"] <= watcher.DAILY_CAP == 10
+        assert row["min_gap"] is None or row["min_gap"] >= watcher.COOLDOWN / timedelta(minutes=1) == 20
+    assert "STOCKSAGE_TRADER_FIRE_URL" not in os.environ and sc.trigger_report(out)[1].startswith("before:")
+
+
+def test_the_lab_cannot_switch_a_stop_off():
+    from datetime import datetime, timezone
+
+    from stocksage import watcher
+
+    memory = {"open": [{"ticker": "PLD", "dollars_in": 25.0, "entry": 125.0, "stop": 124.0}]}
+
+    def quote(t):
+        return {"symbol": t, "price": 123.0 if t == "PLD" else 700.0, "day_change": -0.02 if t == "PLD" else 0.0}
+
+    os.environ["STOCKSAGE_TRADER_FIRE_URL"] = "https://api.anthropic.com/v1/claude_code/routines/x/fire"
+    os.environ["STOCKSAGE_TRADER_TOKEN"] = "t"
+    try:
+        text = watcher.tick({}, datetime(2026, 11, 3, 16, 5, tzinfo=timezone.utc), quote=quote, crypto_quote=None,
+                            news=None, memory=memory, post=lambda u, t, b: None, push=lambda *a: None, kinds=set())
+    finally:
+        os.environ.pop("STOCKSAGE_TRADER_FIRE_URL", None)
+        os.environ.pop("STOCKSAGE_TRADER_TOKEN", None)
+    assert text and "STOP: PLD" in text

@@ -1393,6 +1393,18 @@ def cmd_publish_drive(args) -> int:
         watchdog.check_trader(once_a_day=state_dir() / "trader_alert_day.txt")
     except Exception as exc:
         print(f"(Trader check skipped: {exc})")
+    if not args.no_broker:   # once a week, from the always-on computer only: what the watcher learned
+        try:
+            import json as _json
+
+            from .journal import state_dir
+            from .notify import weekly_watcher
+
+            memory = _json.loads((state_dir() / "trade_memory.json").read_text(encoding="utf-8"))
+            if weekly_watcher(engine.db, memory.get("wakes") or {}):
+                print("(Sent the watcher's weekly digest to your phone.)")
+        except Exception as exc:
+            print(f"(Watcher digest skipped: {exc})")
     print(f"Published directly to Google Drive ({result['candidates']} candidates):")
     for name in result["files"]:
         print(f"  · {name}  (in your Drive's StockSage folder)")

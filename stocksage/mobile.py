@@ -133,7 +133,8 @@ def live_text(now=None, folder: Path | None = None) -> str:
         t, row = h["ticker"], (live.get("rows") or {}).get(h["ticker"])
         at = watcher._when((row or {}).get("at"))
         if not row or not row.get("price") or at is None:
-            lines.append(f"  {t}: no price yet")
+            lines.append(f"  {t}: no price yet" + ("" if t.endswith("-USD") else
+                                                     " (stock prices are read 7 AM to 8 PM Eastern on weekdays)"))
             continue
         price, change = float(row["price"]), row.get("change")
         line = f"  {t}  {watcher._p(price)}"

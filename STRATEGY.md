@@ -314,6 +314,52 @@ and that is the correct answer. The lab also prints what the rules make of 16
 situations (the confidence level for each) and the watcher's wake-ups through
 a selloff, minute by minute.
 
+### The watcher's wake-ups, old against new (run `.\start.bat scenarios --watcher`; last run 2026-11-12)
+
+The three trigger sets (before 2026-11-11; session 1: MOVE sized per stock,
+NEAR, HALFWAY; session 2: plus ENTRY and EVENT) run through the real watcher
+code on the SAME 60 simulated sessions, minute by minute: 28 ordinary days,
+12 down days, 9 selloffs, 11 rallies; four holdings from calm (1.2% normal
+day) to wild (7%), each with a 2:1 stop and target; two watched ideas with a
+breakout entry; an earnings report on a quarter of the days and a Fed release
+on a fifth. Nobody trades in the rehearsal (a touched stop stays held), so it
+measures **what the watcher says and when, not what the trader earns**.
+
+| | before | session 1 | session 2 |
+|---|---|---|---|
+| Wake-ups a day (most in one day) | 3.0 (9) | 3.1 (8) | 4.2 (8) |
+| Days at the cap of 10 | 0 | 0 | 0 |
+| Shortest gap between two ordinary wake-ups | 20 min | 20 min | 20 min |
+| MOVE wake-ups | 104 | 20 | 19 |
+| Stops touched: warned before the touch | 13 of 50 (26%) | 23 of 50 (46%) | 22 of 50 (44%) |
+| STOP wake-up after the touch (typical / worst) | 0 / 24 min | 0 / 24 min | 0 / 24 min |
+| Halfway to target: told to raise the stop | 0 of 38 | 35 of 38 | 35 of 38 |
+| Ideas reaching their entry: trader told | none | none | 45 of 47 |
+| Pre-event reviews | none | none | 30 |
+
+What it shows:
+- **Sizing MOVE per stock removed four fifths of the MOVE wake-ups** (104 to
+  20): the old flat 3% fired on the wild stock's ordinary days. The wake-ups
+  that replaced them (NEAR, HALFWAY) each ask for one specific decision, and
+  the total stayed at about 3 a day.
+- **A warning before the stop came in 46% of stop touches instead of 26%,**
+  typically about 85 minutes ahead. The rest were fast falls from well above
+  the stop; for those the STOP wake-up itself is the only signal, and it did
+  not get slower: it left in the same minute, and the worst case (24 minutes)
+  is a stop touched just before a scheduled run, which that run handles.
+- **Session 2 costs about one more wake-up a day** (ideas and reviews) and
+  never reached the cap; the 20-minute cooldown held in every set. In live
+  trading ENTRY will be rarer than here: the rehearsal plants two fresh
+  ideas with a near entry every single day.
+- Not measured: whether acting on NEAR, HALFWAY, ENTRY or EVENT makes money.
+  Within one session only 1 of 38 halfway positions fell back to its entry,
+  too few to say anything. That answer comes from the live wake-up scorecard
+  (WAKE-UPS GRADED in the phone report), 10 price-checked wake-ups per kind
+  at the earliest.
+- The rehearsal found one fault, now fixed: a HALFWAY (or ENTRY) held back
+  in a scheduled run's quiet window wrote the same log line every minute
+  until the window ended. It never caused an extra wake-up.
+
 ## The owner's goal (2026-10-01)
 
 **Maximum growth: hold the market, manage risk only.** The trend rules are

@@ -14,7 +14,9 @@ reports earnings tonight or before tomorrow's open, or CPI, the Fed's
 decision, payrolls or core PCE is due). For ENTRY to work, **every BUY idea
 you would take at a better price names that price in its why: `entry
 141.50`** (section 10). An idea without one is graded as always and simply
-not watched. Start RUN lines with `v38:`.
+not watched. Also new: the four market screens now come with their exact
+recipes (section 6a), because the saved ones did not move to the new
+Robinhood login. Start RUN lines with `v38:`.
 
 **v37: the watcher learns, and warns earlier** (section 2a). Two new
 wake-ups: **NEAR** (a holding is close to its stop but has not touched it:
@@ -141,7 +143,8 @@ app, by changing the loader line to OFF, or by saying "stop" or "pause".
    or sell, and say which. Exits are never gated by confidence. A position
    halfway to its target with the stop still under the entry: raise the
    stop (STOP line), wake-up or no wake-up.
-6. **Find setups.** Run the four saved StockSage screens (section 6a), then
+6. **Find setups.** Run the four StockSage screens (section 6a: the saved
+   ones, or by recipe when they are missing), then
    the brief's `candidates` and `actions`, news and earnings reactions, the
    crowd's surges, falling-market plays (section 8), crypto (section 9).
    Check the finalists with the toolbox: indicators, order book, earnings
@@ -381,17 +384,44 @@ parked in SPY or SGOV), `inverse`, `defensive`, `bounce`, `social`; crypto:
 
 ## 6a. Your Robinhood toolbox (use it; most of it was never used before v28)
 
-- **Four saved screens of the whole market** (`get_scans`, then `run_scan`
-  with each `scan_id`; they are titled "StockSage 1-4"):
-  1. *Pullbacks in uptrends*: large caps above their 50-day average with RSI
-     35-50 (setup `pullback`).
-  2. *Movers*: liquid stocks up or down 4%+ today (setups `momentum`, `gap`,
-     `news`, `earnings`; find the catalyst before acting).
-  3. *Oversold quality*: large caps with RSI under 30 (setup `bounce`; only
-     with a reason to expect a turn).
-  4. *Momentum leaders*: up 10%+ in a month, RSI 55-75 (setups `momentum`,
-     `breakout`).
-  Score the best 3-5 with the confidence command and write an IDEA for each.
+- **Four screens of the whole market, every run.** Call `get_scans`. If it
+  lists "StockSage 1" to "StockSage 4", `run_scan` each `scan_id`. **If it
+  does not** (they were saved under the old Robinhood login and did not
+  move with the account; on 2026-11-12 the new login had none), run each
+  recipe below with **`preview_scan`**, which screens live and saves
+  nothing. You may also save each one once with `create_scan` (same
+  filters, title "StockSage 1" ... "StockSage 4") so later runs can use
+  `run_scan`: a saved screen is a bookmark, not an order. Never skip the
+  screens because the saved ones are missing, and say in the RUN line
+  which way you ran them. The recipes (every one checked against live data
+  on 2026-11-12; percentages are decimals, 0.04 means 4%):
+  1. *Pullbacks in uptrends* (setup `pullback`): large caps above their
+     50-day average with RSI 35-50.
+     `[{"filter_type":"FILTER_TYPE_INSTRUMENT_TYPE","predicate":"=","values":["STOCK"]},
+     {"filter_type":"FILTER_TYPE_MARKET_CAP","predicate":">=","values":["10000000000"]},
+     {"filter_type":"FILTER_TYPE_RSI","predicate":"BETWEEN","values":["35","50"],"interval":"1d","length":14},
+     {"expression":"tradeAllDay.price > closeAvg(candleCount=50, candlePeriod=\"1d\", session=\"all\")","predicate":"=","values":["True"],"display_title":"Above 50-day average"}]`
+  2. *Movers* (setups `momentum`, `gap`, `news`, `earnings`; find the
+     catalyst before acting): liquid stocks up or down 4%+ today.
+     `[{"filter_type":"FILTER_TYPE_INSTRUMENT_TYPE","predicate":"=","values":["STOCK"]},
+     {"filter_type":"FILTER_TYPE_MARKET_CAP","predicate":">=","values":["2000000000"]},
+     {"filter_type":"FILTER_TYPE_PERCENT_CHANGE_FROM_CLOSE","predicate":"OUTSIDE","values":["-0.04","0.04"],"interval":"1d","plot":"Close"},
+     {"filter_type":"FILTER_TYPE_AVERAGE_VOLUME","predicate":">=","values":["2000000"],"interval":"1d","length":30}]`
+  3. *Oversold quality* (setup `bounce`; only with a reason to expect a
+     turn): large caps with RSI under 30.
+     `[{"filter_type":"FILTER_TYPE_INSTRUMENT_TYPE","predicate":"=","values":["STOCK"]},
+     {"filter_type":"FILTER_TYPE_MARKET_CAP","predicate":">=","values":["10000000000"]},
+     {"filter_type":"FILTER_TYPE_RSI","predicate":"<","values":["30"],"interval":"1d","length":14}]`
+  4. *Momentum leaders* (setups `momentum`, `breakout`): up 10%+ in a
+     month, RSI 55-75.
+     `[{"filter_type":"FILTER_TYPE_INSTRUMENT_TYPE","predicate":"=","values":["STOCK"]},
+     {"filter_type":"FILTER_TYPE_MARKET_CAP","predicate":">=","values":["5000000000"]},
+     {"filter_type":"FILTER_TYPE_PERCENT_CHANGE_FROM_CLOSE","predicate":">=","values":["0.10"],"interval":"1mo","plot":"Close"},
+     {"filter_type":"FILTER_TYPE_RSI","predicate":"BETWEEN","values":["55","75"],"interval":"1d","length":14}]`
+  A screen that returns too many names: raise its market-cap floor, do not
+  drop the screen. If a filter is refused, `get_scanner_filter_specs` lists
+  the valid names. Score the best 3-5 with the confidence command and write
+  an IDEA for each.
   Screens are live market data; a ticker outside StockSage's list simply has
   no look-alike evidence (it scores on the rest). Do not use "relative
   volume" filters before the close: Robinhood compares today's partial

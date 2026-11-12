@@ -654,6 +654,187 @@ def watcher_rehearsal(seed: int = 1) -> list[str]:
     return sent
 
 
+# --- the watcher's trigger sets, old against new ------------------------------------------
+
+TRIGGER_SETS = {
+    # what could wake the trader before 2026-11-11 (MOVE was a flat 3%)
+    "before": {"kinds": {"MOVE", "DROP", "MARKET", "TARGET"}, "ranges": False, "wider": False},
+    # session 1: MOVE sized per stock, NEAR a stop, HALFWAY to a target
+    "session 1": {"kinds": {"MOVE", "DROP", "MARKET", "TARGET", "NEAR", "HALFWAY"}, "ranges": True, "wider": False},
+    # session 2: an idea's ENTRY and the pre-EVENT review as well
+    "session 2": {"kinds": {"MOVE", "DROP", "MARKET", "TARGET", "NEAR", "HALFWAY", "ENTRY", "EVENT"},
+                  "ranges": True, "wider": True},
+}
+REHEARSAL_STOCKS = (("CALM", 0.012, 0.8), ("MID", 0.025, 1.1), ("JUMPY", 0.045, 1.4), ("WILD", 0.07, 1.7))
+REHEARSAL_IDEAS = (("IDEAA", 0.02), ("IDEAB", 0.035))
+
+
+def _trigger_day(rng, day: int) -> dict:
+    """One session, minute by minute: SPY, four holdings of very different temperament
+    (each with the stop and target a 2:1 trade would carry), two watched ideas with a
+    breakout entry, and sometimes an earnings report tonight or a release at 2 PM."""
+    minutes = 390
+    kind = rng.choice(["normal", "normal", "normal", "down", "selloff", "rally"])
+    drift = {"normal": 0.0, "down": -0.012, "selloff": -0.03, "rally": 0.015}[kind]
+    spy_r = rng.normal(drift / minutes, 0.008 / math.sqrt(minutes), minutes)
+    spy_path = np.cumsum(spy_r)
+    date = datetime(2026, 11, 2, tzinfo=timezone.utc) + timedelta(days=7 * (day // 5) + day % 5)
+    open_ = date.replace(hour=14, minute=30)
+    series, held, ranges = {"SPY": 700 * np.exp(spy_path)}, [], {"SPY": 0.009}
+    for name, atr, beta in REHEARSAL_STOCKS:
+        entry = 100.0
+        stop, target = entry * (1 - 1.5 * atr), entry * (1 + 3 * atr)
+        start = max(stop * 1.012, entry * math.exp(rng.normal(0.3 * atr, 1.1 * atr)))
+        start = min(start, target * 0.985)
+        path = beta * spy_path + np.cumsum(rng.normal(0, 0.8 * atr / math.sqrt(minutes), minutes))
+        series[name] = start * np.exp(path)
+        ranges[name] = atr
+        held.append({"ticker": name, "dollars_in": 25.0, "entry": entry, "stop": round(stop, 2),
+                     "target": round(target, 2), "opened": (date - timedelta(days=3)).isoformat()})
+    ideas = []
+    for name, atr in REHEARSAL_IDEAS:
+        path = 1.2 * spy_path + np.cumsum(rng.normal(0, 0.8 * atr / math.sqrt(minutes), minutes))
+        series[name] = 50 * np.exp(path)
+        ranges[name] = atr
+        ideas.append({"ticker": name, "entry": round(50 * (1 + float(rng.uniform(0.3, 1.0)) * atr), 2),
+                      "direction": "above", "price": 50.0, "level": "HIGH" if name.endswith("A") else "MEDIUM",
+                      "setup": "breakout", "stop": round(50 * (1 - 1.5 * atr), 2),
+                      "at": (open_ - timedelta(hours=18)).isoformat(), "expires": date.date().isoformat()})
+    events: dict = {"earnings": {}, "releases": []}
+    if rng.random() < 0.25:
+        events["earnings"][date.date().isoformat()] = {"MID": {"when": "after the close", "eps": None}}
+    if rng.random() < 0.2:
+        events["releases"].append({"at": date.replace(hour=19).isoformat(), "title": "Federal Funds Rate",
+                                   "forecast": None, "previous": None})
+    return {"kind": kind, "open": open_, "series": series, "ranges": ranges, "events": events,
+            "memory": {"open": held, "trader": {"equity": 100.0, "cash": 40.0}, "idea_watch": ideas}}
+
+
+def trigger_rehearsal(days: int = 60, seed: int = 7) -> dict:
+    """The watcher's old and new trigger sets on the SAME minute-by-minute prices: how
+    often each wakes the trader, whether the cap and the cooldown hold, how much warning
+    comes before a stop is touched, and whether a stop's own wake-up got slower. Nobody
+    trades in here (a touched stop stays held), so it measures what the watcher says,
+    not what the trader earns. CPU only; nothing is sent."""
+    import os
+
+    from . import watcher
+
+    rng = np.random.default_rng(seed)
+    worlds = [_trigger_day(rng, d) for d in range(days)]
+    quiet = watcher.log
+    saved = {v: os.environ.get(v) for v in (watcher.URL_VAR, watcher.TOKEN_VAR)}
+    os.environ[watcher.URL_VAR] = "https://api.anthropic.com/v1/claude_code/routines/rehearsal/fire"
+    os.environ[watcher.TOKEN_VAR] = "rehearsal"            # nothing is sent: `post` below swallows it
+    out = {"days": days, "day_kinds": {k: sum(w["kind"] == k for w in worlds) for k in ("normal", "down", "selloff", "rally")},
+           "sets": {}}
+    left = [0]
+
+    def heard(msg: str) -> None:
+        if msg.startswith("held back"):
+            left[0] += msg.count("; ") + 1
+
+    watcher.log = heard
+    try:
+        for label, cfg in TRIGGER_SETS.items():
+            row = {"wakes": 0, "max_day": 0, "cap_days": 0, "kinds": {}, "left": 0, "min_gap": None,
+                   "stops": 0, "stop_delay": [], "warned": 0, "lead": [], "halfway_reached": 0, "halfway_told": 0,
+                   "gave_back": 0, "gave_back_told": 0, "entries_reached": 0, "entries_told": 0, "events": 0}
+            for w in worlds:
+                state, sent = {}, []
+                series, memory = w["series"], w["memory"]
+                left[0] = 0
+                for i in range(390):
+                    now = w["open"] + timedelta(minutes=i)
+
+                    def quote(t, i=i, series=series):
+                        return {"symbol": t, "price": float(series[t][i]), "day_change": float(series[t][i] / series[t][0] - 1)}
+
+                    text = watcher.tick(state, now, quote=quote, crypto_quote=lambda t: None, news=None,
+                                        memory=memory, post=lambda u, t, b: None, push=lambda *a: None,
+                                        ranges=w["ranges"] if cfg["ranges"] else None,
+                                        events=w["events"] if cfg["wider"] else None, kinds=cfg["kinds"])
+                    if text:
+                        sent.append((i, [x[2:] for x in text.splitlines()[1:-1]]))
+                row["wakes"] += len(sent)
+                row["max_day"] = max(row["max_day"], len(sent))
+                row["cap_days"] += len(sent) >= watcher.DAILY_CAP
+                row["left"] += left[0]
+                gaps = [b[0] - a[0] for a, b in zip(sent, sent[1:])
+                        if not any(e.startswith(watcher.URGENT) for e in b[1])]
+                if gaps:
+                    row["min_gap"] = min(gaps) if row["min_gap"] is None else min(row["min_gap"], min(gaps))
+                for _i, evs in sent:
+                    for e in evs:
+                        row["kinds"][e.split(":")[0]] = row["kinds"].get(e.split(":")[0], 0) + 1
+                row["events"] += sum(e.startswith("EVENT") for _i, evs in sent for e in evs)
+
+                def first(i_from, ticker, prefixes, sent=sent):
+                    return next((i for i, evs in sent if i >= i_from
+                                 and any(e.startswith(prefixes) and f": {ticker} " in e for e in evs)), None)
+
+                for lot in memory["open"]:
+                    t, px = lot["ticker"], series[lot["ticker"]]
+                    touch = next((i for i in range(390) if px[i] <= lot["stop"]), None)
+                    if touch is not None:
+                        row["stops"] += 1
+                        told = first(touch, t, ("STOP",))
+                        if told is not None:
+                            row["stop_delay"].append(told - touch)
+                        early = next((i for i, evs in sent if i < touch
+                                      and any(e.startswith(("NEAR", "MOVE", "DROP")) and f": {t} " in e for e in evs)), None)
+                        if early is not None:
+                            row["warned"] += 1
+                            row["lead"].append(touch - early)
+                    half = lot["entry"] + 0.5 * (lot["target"] - lot["entry"])
+                    reached = next((i for i in range(390) if half <= px[i] < lot["target"]), None)
+                    if reached is not None and px[0] < half:
+                        row["halfway_reached"] += 1
+                        told = first(reached, t, ("HALFWAY",))
+                        row["halfway_told"] += told is not None
+                        back = next((i for i in range(reached, 390) if px[i] <= lot["entry"]), None)
+                        if back is not None:
+                            row["gave_back"] += 1
+                            row["gave_back_told"] += told is not None and told < back
+                for idea in memory["idea_watch"]:
+                    px = series[idea["ticker"]]
+                    hit = next((i for i in range(390) if idea["entry"] <= px[i] <= idea["entry"] * (1 + watcher.ENTRY_CHASE)), None)
+                    row["entries_reached"] += hit is not None
+                    row["entries_told"] += hit is not None and first(hit, idea["ticker"], ("ENTRY",)) is not None
+            out["sets"][label] = row
+    finally:
+        watcher.log = quiet
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    return out
+
+
+def trigger_report(out: dict) -> list[str]:
+    days = out["days"]
+    lines = [f"{days} simulated sessions ({', '.join(f'{v} {k}' for k, v in out['day_kinds'].items())}), four holdings "
+             "from calm to wild, two watched ideas; every set sees the same prices. Nobody trades here."]
+    for label, r in out["sets"].items():
+        kinds = ", ".join(f"{k} {v}" for k, v in sorted(r["kinds"].items(), key=lambda kv: -kv[1]))
+        delay = f"{np.median(r['stop_delay']):.0f} min (worst {max(r['stop_delay'])})" if r["stop_delay"] else "n/a"
+        lead = f"{np.median(r['lead']):.0f} min" if r["lead"] else "n/a"
+        lines += [f"{label}: {r['wakes'] / days:.1f} wake-ups a day (most in a day {r['max_day']}, days at the cap "
+                  f"{r['cap_days']}); shortest gap between two ordinary wake-ups "
+                  f"{r['min_gap'] if r['min_gap'] is not None else 'n/a'} min; {r['left'] / days:.1f} events a day left "
+                  "to a scheduled run",
+                  f"    reasons given: {kinds}",
+                  f"    stops touched {r['stops']}: STOP wake-up after {delay}; warned beforehand {r['warned']} "
+                  f"({r['warned'] / r['stops']:.0%}), typically {lead} ahead" if r["stops"] else "    no stop touched",
+                  f"    halfway to target reached {r['halfway_reached']}, said {r['halfway_told']}; of {r['gave_back']} "
+                  f"that then fell back to the entry, {r['gave_back_told']} had been told to raise the stop first"]
+        if r["entries_reached"] and "ENTRY" in TRIGGER_SETS[label]["kinds"]:
+            lines.append(f"    ideas that reached their entry {r['entries_reached']}, trader told {r['entries_told']}; "
+                         f"pre-event reviews {r['events']}")
+    return lines
+
+
 # --- the report ----------------------------------------------------------------------
 
 def _pct(x) -> str:
@@ -753,6 +934,8 @@ def report(out: dict) -> str:
         lines.append(f"  {label:<62} {level:<11} {why}")
     lines += ["", "THE WATCHER ON A SELLOFF (two holdings, minute by minute)"]
     lines += ["  " + x for x in watcher_rehearsal()] or ["  (no wake-ups)"]
+    lines += ["", "THE WATCHER'S TRIGGER SETS, OLD AGAINST NEW"]
+    lines += ["  " + x for x in trigger_report(trigger_rehearsal())]
     return "\n".join(lines)
 
 
@@ -764,8 +947,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seeds", type=int, default=5)
     p.add_argument("--world", action="append")
     p.add_argument("--agent", action="append", help="default: all; " + ", ".join(AGENTS))
+    p.add_argument("--watcher", action="store_true", help="only the watcher's trigger sets, old against new (seconds)")
+    p.add_argument("--days", type=int, default=60, help="sessions for --watcher")
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
     import os
+
+    if a.watcher:
+        print("THE WATCHER'S TRIGGER SETS, OLD AGAINST NEW")
+        print("\n".join("  " + x for x in trigger_report(trigger_rehearsal(days=a.days))))
+        return 0
 
     print(f"Running {a.seeds} markets per world; this takes a few minutes...", flush=True)
     print(report(run(a.seeds, a.world, a.agent, workers=max(1, (os.cpu_count() or 2) - 1))))

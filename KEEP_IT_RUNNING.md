@@ -95,6 +95,31 @@ The brain in Drive is refreshed on every publish, so you lose at most a few hour
 learning. The live scorecard travels in it too. Re-run Part 2 only if the alert topic
 changed (update the `STOCKSAGE_NTFY_TOPIC` secret).
 
+## Part 6: if this computer is off while the market is open (options, none built yet)
+
+Written 2026-11-12 for you to choose from. Nothing here has been built or switched on.
+
+**What already covers you today.** The trader still runs every hour from the cloud
+(12:35-23:35 UTC) and checks every stop on each run, whether or not this computer is on.
+What is lost while the computer is off is the minute-by-minute watch: a stop touched just
+after a run waits up to an hour, in market hours. Your phone hears "the watcher has gone
+quiet" after 150 quiet minutes and "the computer has gone quiet" after 30 business hours.
+The phone page is also off, because this computer serves it.
+
+| | Option | What you get | What it costs or risks |
+|---|---|---|---|
+| **A** | **Stop orders held at Robinhood for whole-share positions.** The trader places a resting stop order right after buying (the playbook already allows it), and prefers a whole share when the position size allows one. | Sells within seconds at the stop, with this computer off, the internet down, or Claude out of usage. No new machine, no cost. | Whole shares only: Robinhood does not hold stop orders for fractional shares, and in a small account most positions are fractional. Works in regular hours only. A stop order sells on a brief dip with no judgement, and after a gap down it sells at the open, wherever that is. The trader must cancel it before selling another way. |
+| **B** | **Robinhood price alerts to your phone at each stop level,** kept up to date by the trader whenever it writes a STOP line. | Covers fractional shares too. Free. Reaches you with this computer off. | It tells you; it does not sell. You would open Robinhood and act. Needs your approval because the trader would create and delete alerts in your account. |
+| **C** | **A second watcher on a small rented cloud computer** (about $5 a month), as a standby that only speaks when this computer's watcher has been silent for 10 minutes. | The full minute-by-minute watch survives a power cut or internet outage at home. | A monthly cost. The wake-up key and the Drive key would live on a rented machine (no broker login, ever). Needs building: the standby rule, so two watchers never wake the trader twice, plus a setup you would have to keep paid and updated. |
+| **D** | **A second watcher on a spare device at home** (an old laptop or a small always-on box), same standby rule. | No monthly cost; the keys stay in your home. | A power cut or internet outage at home takes out both. Same building work as C. |
+| **E** | **Tighten what exists:** every hourly run checks when the watcher last wrote, and if it has been silent for 20 minutes in market hours your phone is told on that run (today that takes 150 minutes). | No new machine, no keys anywhere new, about an hour to build. | Stops are still only checked hourly while the computer is off; you just learn about it sooner. |
+
+**Recommendation:** E and A first (cheap, no new machine, no new keys), B if you want your
+phone to hear a stop level being crossed. C or D only if this computer actually turns out to
+go dark during market hours more than rarely; the scheduled cloud runs already check every
+stop each hour. Not suitable: running the watcher on GitHub's free timers (they start hours
+late, and the repository is public).
+
 ## Never change these
 
 - StockSage never places or confirms an order. The agentic account's orders need your

@@ -30,7 +30,7 @@ import hashlib
 import json
 import os
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from .actions import ROBINHOOD_STOCK_URL, URGENT, Plan
 
@@ -163,6 +163,50 @@ def monthly_scorecard(db, topic: str | None = None, post=None, now: datetime | N
         post(NTFY_URL.format(topic=topic), body.encode("utf-8"),
              {"Title": title, "Priority": "default", "Tags": "bar_chart"})
         db.set_meta(MONTHLY_KEY, month)
+        return True
+    except Exception:
+        return False
+
+
+WATCHER_WEEK_KEY = "last_watcher_digest"
+
+
+def _watcher_week(now: datetime) -> str:
+    """The digest's week rolls over at Friday 4:15 PM Eastern (after the close)."""
+    from zoneinfo import ZoneInfo
+
+    et = now.astimezone(ZoneInfo("America/New_York"))
+    year, week, _ = (et - timedelta(days=4, hours=16, minutes=15)).isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+def weekly_watcher(db, wakes: dict, topic: str | None = None, post=None, now: datetime | None = None) -> bool:
+    """What the watcher learned this week, once a week after Friday's close (or on the
+    next run if the computer was off then). Counts and settings only: no tickers, no
+    prices, no amounts, no account (ntfy topics are not private). Never raises; a week
+    with nothing to say sends nothing and is not marked sent."""
+    topic = topic or topic_from_env()
+    if not topic:
+        return False
+    try:
+        from zoneinfo import ZoneInfo
+
+        from .journal import wake_digest
+
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.astimezone()
+        key, last = _watcher_week(now), db.get_meta(WATCHER_WEEK_KEY) or ""
+        et = now.astimezone(ZoneInfo("America/New_York"))
+        weekend = et.weekday() >= 5 or (et.weekday() == 4 and (et.hour, et.minute) >= (16, 15))
+        if last == key or (not last and not weekend):     # the very first one waits for a Friday close
+            return False
+        lines = wake_digest(wakes)
+        if not lines:
+            return False
+        (post or _post)(NTFY_URL.format(topic=topic), "\n".join(lines)[:MAX_BODY].encode("utf-8"),
+                        {"Title": "StockSage: the watcher's week", "Priority": "low", "Tags": "eyes"})
+        db.set_meta(WATCHER_WEEK_KEY, key)
         return True
     except Exception:
         return False

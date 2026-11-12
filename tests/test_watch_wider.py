@@ -364,3 +364,15 @@ def test_who_reports_comes_from_the_keyed_calendar_and_falls_back_to_the_live_wi
     monkeypatch.setattr(finnhub, "earnings_calendar", refused)
     monkeypatch.setattr(live, "earnings", lambda day, limit=15: [{"ticker": "WIRE", "when": "after the close"}])
     assert watcher._reporting(date(2026, 11, 3))[0]["ticker"] == "WIRE"
+
+
+def test_an_event_held_back_by_a_scheduled_run_is_logged_once_not_every_minute(monkeypatch):
+    lines = []
+    monkeypatch.setattr(watcher, "log", lines.append)
+    state, mem = {}, memory([idea()])
+    table = dict(CALM, NVDA=(141.3, 0.004))
+    quiet = datetime(2026, 11, 3, 16, 26, tzinfo=timezone.utc)
+    for minute in range(6):
+        assert run(state, quiet + timedelta(minutes=minute), table, mem) is None
+    assert sum("held back" in x for x in lines) == 1
+    assert "ENTRY: NVDA" in run(state, quiet + timedelta(minutes=30), table, mem) and "held_said" not in state

@@ -984,9 +984,12 @@ def follow_up(state: dict, now: datetime, quote, crypto_quote, post=None) -> lis
 
 
 def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict, post=None,
-         push=None, names=None, ranges: dict | None = None, events: dict | None = None) -> str | None:
+         push=None, names=None, ranges: dict | None = None, events: dict | None = None,
+         kinds=None) -> str | None:
     """One check. Returns the message that was sent, or None. `events` is the calendar
-    packet from read_events (None: no pre-event reviews)."""
+    packet from read_events (None: no pre-event reviews). `kinds` is only for the
+    scenario lab, which replays older trigger sets on the same prices: the wake-up kinds
+    allowed to speak. STOP and LIMIT cannot be switched off this way or any other."""
     from .journal import is_crypto
 
     held = holdings(memory)
@@ -1000,6 +1003,10 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
         events += pre_events(state, now, held, scheduled or {})
     except Exception as exc:
         log(f"idea and calendar checks failed ({type(exc).__name__}: {exc})")
+    if kinds is not None:
+        events = [e for e in events if e.startswith(URGENT) or e.split(":", 1)[0] in kinds]
+    if not near_scheduled_run(now):
+        state.pop("held_said", None)
     _self_checks(state, now, memory, push)
     try:
         follow_up(state, now, quote, crypto_quote, post=post)
@@ -1057,8 +1064,13 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
         log("the scheduled run has finished: not waiting out the quiet window")
     if not ok:
         if near_scheduled_run(now):
-            if events:
-                log(f"held back (scheduled run covers it): {'; '.join(events)}")
+            # Said once per quiet window: a HALFWAY or ENTRY that is asked again after the run
+            # comes back every minute until then (the lab counted 25 log lines for one event).
+            said = state.setdefault("held_said", [])
+            fresh = [e for e in events if e.split(" at ")[0][:40] not in said]
+            if fresh:
+                state["held_said"] = (said + [e.split(" at ")[0][:40] for e in fresh])[-40:]
+                log(f"held back (scheduled run covers it): {'; '.join(fresh)}")
             # the scheduled run sees the same prices; a LIMIT is still sent once it has run
             state["pending"] = [e for e in pending if e.startswith(URGENT)][-5:]
             # HALFWAY is said once per level, not once a day: one dropped here was never
