@@ -800,6 +800,11 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
                 log(f"held back (scheduled run covers it): {'; '.join(events)}")
             # the scheduled run sees the same prices; a LIMIT is still sent once it has run
             state["pending"] = [e for e in pending if e.startswith(URGENT)][-5:]
+            # HALFWAY is said once per level, not once a day: one dropped here was never
+            # said, so it is asked again after the run unless the run raised the stop.
+            unsaid = {_event_ticker(e) for e in pending if e.startswith("HALFWAY")}
+            if unsaid:
+                state["halfway"] = [k for k in state.get("halfway") or [] if k.split("@")[0] not in unsaid]
         else:
             state["pending"] = pending[-10:]
             log(f"waiting to wake the trader ({why}): {'; '.join(events) or 'earlier events'}")

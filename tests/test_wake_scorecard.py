@@ -185,6 +185,22 @@ def test_halfway_asks_for_a_higher_stop_once_per_target_and_stop_level():
     assert any(e.startswith("TARGET") for e in events) and not any(e.startswith("HALFWAY") for e in events)
 
 
+def test_a_halfway_swallowed_by_a_scheduled_run_is_said_after_it_unless_the_stop_was_raised():
+    memory = {"open": [lot("AMD", 500.0, stop=480.0, target=560.0)]}
+    sent = []
+    args = dict(quote=quotes({"AMD": (531.0, 0.012), "SPY": (750.0, 0.0)}), crypto_quote=lambda t: None, news=None,
+                post=lambda u, t, b: sent.append(b))
+    state = {}
+    at_run = datetime(2026, 11, 3, 16, 30, tzinfo=timezone.utc)         # 5 minutes before the :35 run
+    assert watcher.tick(state, at_run, memory=memory, **args) is None and state["pending"] == []
+    raised = {"open": [lot("AMD", 500.0, stop=502.0, target=560.0)]}
+    assert watcher.tick(dict(state), at_run + timedelta(minutes=30), memory=raised, **args) is None, \
+        "the run raised the stop: nothing left to say"
+    text = watcher.tick(state, at_run + timedelta(minutes=30), memory=memory, **args)
+    assert text and "HALFWAY: AMD" in text, "the run did not: said once, after it"
+    assert watcher.tick(state, at_run + timedelta(minutes=90), memory=memory, **args) is None
+
+
 def test_after_hours_near_and_halfway_wait_like_any_event_a_fraction_cannot_act_on():
     assert watcher._event_ticker("NEAR: ORCL at 125.20 is 1.0% above its stop") == "ORCL"
     assert watcher._event_ticker("HALFWAY: AMD at 531.00 is halfway") == "AMD"

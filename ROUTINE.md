@@ -128,7 +128,9 @@ app, by changing the loader line to OFF, or by saying "stop" or "pause".
 5. **Manage what you hold first.** For each position: is the reason it was
    bought still true? Stops and targets set (resting stop orders where
    possible, section 7)? Earnings before the next session: hold through it
-   or sell, and say which. Exits are never gated by confidence.
+   or sell, and say which. Exits are never gated by confidence. A position
+   halfway to its target with the stop still under the entry: raise the
+   stop (STOP line), wake-up or no wake-up.
 6. **Find setups.** Run the four saved StockSage screens (section 6a), then
    the brief's `candidates` and `actions`, news and earnings reactions, the
    crowd's surges, falling-market plays (section 8), crypto (section 9).
