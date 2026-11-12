@@ -896,6 +896,181 @@ def tax_view(trips: list, fills: list[dict], now: datetime) -> dict:
             "wash_sale_losses": round(sum(w["loss"] for w in wash), 2), "wash_sales": wash[-10:]}
 
 
+# --- the wake-up scorecard --------------------------------------------------------------
+
+WAKE_KINDS = ("STOP", "LIMIT", "NEAR", "TARGET", "HALFWAY", "MOVE", "DROP", "MARKET", "NEWS")
+WAKE_DIRECTION = {"STOP": -1, "NEAR": -1, "DROP": -1, "LIMIT": -1, "TARGET": 1, "HALFWAY": 1}
+WAKE_ANSWER = timedelta(minutes=45)     # a run that followed a wake-up wrote its RUN line by then
+WAKE_WINDOW = timedelta(days=60)        # the scorecard looks this far back
+WAKE_FLAT = 0.003                       # under 0.3% after the wake-up: the price went nowhere
+NEWS_MOVED = 0.01                       # a headline "mattered" if the price moved 1%+ either way
+# What the scorecard may adjust, and the fence around each: (lowest, highest, default).
+# MOVE and NEAR are multipliers on the watcher's own trigger sizes; NEWS_CAP is headline-only
+# wake-ups a day. STOP and LIMIT are exits and the daily brake: graded, never tuned.
+WAKE_TUNE_BOUNDS = {"MOVE": (0.8, 1.5, 1.0), "NEAR": (0.75, 1.25, 1.0), "NEWS_CAP": (1, 3, 3)}
+NEVER_TUNED = ("STOP", "LIMIT")
+_WAKE_SPLIT = re.compile(r"; (?=(?:%s): )" % "|".join(WAKE_KINDS))
+_WAKE_HEAD = re.compile(r"(%s): (?:([A-Z][A-Z0-9.\-]*)(?![a-z]))?" % "|".join(WAKE_KINDS))
+
+
+def parse_wakes(text: str) -> list[dict]:
+    """The watcher's WAKE lines, oldest first, each split into its events
+    (`kind`, `ticker` where the event names one, `direction` +1/-1/0)."""
+    out = []
+    for raw in (text or "").splitlines():
+        parts = [p.strip() for p in raw.split("|")]
+        if len(parts) < 3 or parts[0].upper() != "WAKE":
+            continue
+        at = _ts(parts[1])
+        if at is None:
+            continue
+        events, seen = [], set()
+        for piece in _WAKE_SPLIT.split(" | ".join(parts[2:])):
+            m = _WAKE_HEAD.match(piece)
+            if not m:
+                continue
+            kind, ticker = m.group(1), m.group(2)
+            if (kind, ticker) in seen:          # three headlines on one stock are one wake-up reason
+                continue
+            seen.add((kind, ticker))
+            direction = WAKE_DIRECTION.get(kind, 0)
+            if kind in ("MOVE", "MARKET"):
+                pct = re.search(r"([+-]\d+(?:\.\d+)?)% against the market", piece) or \
+                    re.search(r"([+-]\d+(?:\.\d+)?)%", piece)
+                direction = (1 if float(pct.group(1)) > 0 else -1) if pct and float(pct.group(1)) else 0
+            events.append({"kind": kind, "ticker": ticker, "direction": direction, "text": piece[:160]})
+        if events:
+            out.append({"at": at, "events": events})
+    return sorted(out, key=lambda w: w["at"])
+
+
+def parse_afters(text: str) -> dict:
+    """`AFTER | <UTC time of the wake-up> | minutes | TICKER price-then price-after; ...`:
+    the watcher's own price check about an hour after each wake-up. Keyed by wake-up time."""
+    out: dict = {}
+    for raw in (text or "").splitlines():
+        parts = [p.strip() for p in raw.split("|")]
+        if len(parts) < 4 or parts[0].upper() != "AFTER":
+            continue
+        at, minutes = _ts(parts[1]), _num(parts[2])
+        if at is None or not minutes:
+            continue
+        prices = {}
+        for piece in parts[3].split(";"):
+            bits = piece.split()
+            if len(bits) == 3 and _num(bits[1]) and _num(bits[2]):
+                prices[bits[0].upper()] = (_num(bits[1]), _num(bits[2]))
+        if prices:
+            out[at] = {"minutes": minutes, "prices": prices}
+    return out
+
+
+def _wake_verdict(row: dict) -> str:
+    if row["priced"] < MIN_TO_JUDGE:
+        return f"too few to judge ({row['priced']} of {MIN_TO_JUDGE} with a price check)"
+    rate = row["useful_rate"]
+    return "earning its wake-ups" if rate >= 0.5 else "mostly noise" if rate < 0.25 else "mixed"
+
+
+def wake_tuning(by_kind: dict) -> dict:
+    """What the watcher may change by itself, from the grades, always inside
+    WAKE_TUNE_BOUNDS. A kind speaks only with 10 price-checked wake-ups. Noise makes a
+    trigger harder to set off; a kind that earns its wake-ups gets a little more room.
+    STOP and LIMIT are not here and never will be: exits are never tuned or gated."""
+    def rate(kind):
+        row = by_kind.get(kind)
+        return row["useful_rate"] if row and row["priced"] >= MIN_TO_JUDGE else None
+
+    out = {k: d for k, (_lo, _hi, d) in WAKE_TUNE_BOUNDS.items()}
+    move, near, headlines = rate("MOVE"), rate("NEAR"), rate("NEWS")
+    if move is not None:
+        out["MOVE"] = 1.5 if move < 0.10 else 1.25 if move < 0.25 else 0.9 if move >= 0.6 else 1.0
+    if near is not None:                     # a smaller band is a later, rarer warning
+        out["NEAR"] = 0.75 if near < 0.25 else 1.25 if near >= 0.6 else 1.0
+    if headlines is not None:
+        out["NEWS_CAP"] = 1 if headlines < 0.10 else 2 if headlines < 0.25 else 3
+    return {k: min(hi, max(lo, out[k])) for k, (lo, hi, _d) in WAKE_TUNE_BOUNDS.items() if k not in NEVER_TUNED}
+
+
+def wake_scorecard(text: str, now: datetime | None = None) -> dict:
+    """Grade every wake-up of the last 60 days per trigger kind, from the notes file alone
+    (so the trader's light path can rebuild it): was it answered by a run, did the trader
+    trade or move a stop on it in that run, and did the price keep going the wake-up's
+    way in the hour after (the watcher's AFTER line). A wake-up was `useful` when the
+    trader acted on it or the price kept going (a headline: the price moved 1%+)."""
+    now = now or datetime.now(timezone.utc)
+    wakes = [w for w in parse_wakes(text) if now - w["at"] <= WAKE_WINDOW]
+    runs, tags, stops, afters = parse_runs(text), parse_tags(text), parse_stops(text), parse_afters(text)
+    by_kind: dict[str, dict] = {}
+    recent = []
+    for w in wakes:
+        answer = next((r for r in runs if w["at"] < r["at"] <= w["at"] + WAKE_ANSWER), None)
+        end = answer["at"] + timedelta(minutes=5) if answer else w["at"] + WAKE_ANSWER
+        after = afters.get(w["at"])
+        for ev in w["events"]:
+            whole = ev["ticker"] is None or ev["kind"] in ("MARKET", "LIMIT")   # about the whole account
+            mine = lambda x: w["at"] < x["at"] <= end and (whole or x["ticker"] == ev["ticker"])  # noqa: E731, B023
+            traded, adjusted = any(mine(t) for t in tags), any(mine(s) for s in stops)
+            pair = (after or {}).get("prices", {}).get(ev["ticker"] or "SPY") if ev["kind"] != "LIMIT" else None
+            ret = pair[1] / pair[0] - 1 if pair else None
+            if ret is None:
+                went = None
+            elif ev["direction"] == 0:
+                went = "moved" if abs(ret) >= NEWS_MOVED else "flat"
+            else:
+                went = "continued" if ret * ev["direction"] >= WAKE_FLAT else \
+                    "reversed" if ret * ev["direction"] <= -WAKE_FLAT else "flat"
+            row = by_kind.setdefault(ev["kind"], {"wakes": 0, "answered": 0, "traded": 0, "adjusted": 0, "acted": 0,
+                                                  "priced": 0, "continued": 0, "reversed": 0, "useful": 0})
+            row["wakes"] += 1
+            row["answered"] += answer is not None
+            row["traded"] += traded
+            row["adjusted"] += adjusted
+            row["acted"] += traded or adjusted
+            if went is not None:
+                row["priced"] += 1
+                row["continued"] += went in ("continued", "moved")
+                row["reversed"] += went == "reversed"
+                row["useful"] += traded or adjusted or went in ("continued", "moved")
+            recent.append({"at": w["at"].isoformat(timespec="minutes"), "kind": ev["kind"], "ticker": ev["ticker"],
+                           "answered": answer is not None, "traded": traded, "adjusted": adjusted,
+                           "after": round(ret, 4) if ret is not None else None, "went": went})
+    for row in by_kind.values():
+        row["useful_rate"] = round(row["useful"] / row["priced"], 3) if row["priced"] else None
+        row["verdict"] = _wake_verdict(row)
+    ordered = {k: by_kind[k] for k in WAKE_KINDS if k in by_kind}
+    return {"days": WAKE_WINDOW.days, "wakes": len(wakes), "by_kind": ordered, "tuning": wake_tuning(ordered),
+            "bounds": {k: [lo, hi] for k, (lo, hi, _d) in WAKE_TUNE_BOUNDS.items()}, "recent": recent[-12:][::-1],
+            "note": "graded from the notes: acted = a TAG or STOP line in the run that followed; price = the "
+                    "watcher's check about an hour later. STOP and LIMIT wake-ups are graded but never tuned."}
+
+
+def _wakes(text: str | None) -> dict:
+    """The scorecard for a rebuild. It is a report card, never worth a failed rebuild:
+    the trade record must publish even if a strange WAKE line trips the grading."""
+    try:
+        return wake_scorecard(text or "")
+    except Exception as exc:
+        log.warning("wake-ups not graded: %s", exc)
+        return {}
+
+
+def _wake_lines(wk: dict) -> list[str]:
+    """The phone report's section."""
+    if not (wk or {}).get("by_kind"):
+        return []
+    lines = ["", f"WAKE-UPS GRADED (last {wk['days']} days: did the trader act, did the price keep going)"]
+    for kind, r in wk["by_kind"].items():
+        lines.append(f"  {kind:<8}{r['wakes']:>3} wake-ups, trader acted on {r['acted']}"
+                     + (f", price kept going in {r['continued']} of {r['priced']} checked" if r["priced"] else
+                        ", none price-checked yet") + f": {r['verdict']}")
+    t = wk.get("tuning") or {}
+    lines.append(f"  Learned settings (inside fixed limits): MOVE trigger x{t.get('MOVE', 1.0):.2f}, "
+                 f"NEAR band x{t.get('NEAR', 1.0):.2f}, headline wake-ups {int(t.get('NEWS_CAP', 3))} a day. "
+                 "STOP and LIMIT are never tuned.")
+    return lines
+
+
 def trader_state(runs: list[dict], now: datetime) -> dict:
     if not runs:
         return {"last_run": None}
@@ -917,7 +1092,7 @@ def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | Non
               account: str = "", runs: list[dict] | None = None, source: str = "robinhood",
               grades: list[str] | None = None, deposits: list[dict] | None = None,
               stops: list[dict] | None = None, archived: list[dict] | None = None,
-              closed: list[dict] | None = None) -> dict:
+              closed: list[dict] | None = None, wakes: dict | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     trips, open_lots = round_trips(attach_tags(fills, tags), spy=spy, now=now)
     archived = list(archived or [])
@@ -967,6 +1142,7 @@ def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | Non
         "old_account_closed": closed_by_owner,
         "spy_closes": spy_for_memory(spy_arrays),
         "grades": list(grades or []),
+        "wakes": wakes or {},
         "fills": [{k: f.get(k) for k in ("order_id", "ticker", "side", "quantity", "price", "executed_at")}
                   for f in sorted(fills, key=lambda f: str(f["executed_at"]))],
     }
@@ -1050,6 +1226,7 @@ def render_text(summary: dict) -> str:
                 lines.append(f"  {k:<12}{st['trades']:>3} trades, won {st['win_rate'] * 100:.0f}%, "
                              f"avg {_pct(st['avg_return'])} ({_pct(st.get('avg_adj'))} vs the market), "
                              f"${st['pnl']:+.2f}: {st['verdict']}")
+    lines += _wake_lines(summary.get("wakes") or {})
     lines += ["", "OPEN NOW"]
     if not summary["open"]:
         lines.append("  Nothing open.")
@@ -1181,6 +1358,8 @@ def append_note(line: str, upload: bool = True) -> str:
         raise ValueError("not a valid IDEA line: IDEA | UTC time | BUY or SELL | TICKER | setup | price | [LEVEL] why")
     if kind == "DEPOSIT" and not parse_deposits(line):
         raise ValueError("not a valid DEPOSIT line: DEPOSIT | UTC time | amount (negative for a withdrawal)")
+    if kind == "AFTER" and not parse_afters(line):
+        raise ValueError("not a valid AFTER line: AFTER | UTC time of the wake-up | minutes | TICKER price price")
     if kind in ("WAKE", "WATCH"):
         parts = [p.strip() for p in line.split("|")]
         if len(parts) < 3 or _ts(parts[1]) is None:
@@ -1189,15 +1368,15 @@ def append_note(line: str, upload: bool = True) -> str:
         raise ValueError("not a valid STOP line: STOP | UTC time | TICKER | stop price | target price (optional)")
     if kind == "CLOSED" and not parse_closed(line):
         raise ValueError("not a valid CLOSED line: CLOSED | UTC time | TICKER | why (optional)")
-    if kind not in ("TAG", "RUN", "IDEA", "DEPOSIT", "WAKE", "WATCH", "STOP", "CLOSED"):
-        raise ValueError("a note starts with TAG, RUN, IDEA, DEPOSIT, STOP, CLOSED, WAKE or WATCH")
+    if kind not in NOTE_KINDS:
+        raise ValueError("a note starts with TAG, RUN, IDEA, DEPOSIT, STOP, CLOSED, WAKE, WATCH or AFTER")
     if not upload:
         return line
     _write_notes([line])
     return line
 
 
-NOTE_KINDS = ("TAG", "RUN", "IDEA", "DEPOSIT", "STOP", "CLOSED", "WAKE", "WATCH")
+NOTE_KINDS = ("TAG", "RUN", "IDEA", "DEPOSIT", "STOP", "CLOSED", "WAKE", "WATCH", "AFTER")
 
 
 def split_notes(args) -> list[str]:
@@ -1328,7 +1507,7 @@ def refresh(engine, client, upload: bool = True, account: str | None = None,
     summary = summarize(fills, parse_tags(tags_text), spy=_spy_closes(engine), account=account,
                         runs=runs, source="robinhood", grades=grades,
                         deposits=_with_move(deposits, move), stops=parse_stops(tags_text), archived=archived,
-                        closed=parse_closed(tags_text))
+                        closed=parse_closed(tags_text), wakes=_wakes(tags_text))
     if since:
         summary["account_since"] = since
         summary["account_move"] = _move_view(move)
@@ -1535,7 +1714,7 @@ def refresh_without_broker(engine, upload: bool = True, previous: dict | None = 
                         deposits=_with_move(deposits, move),
                         source="robinhood" if not fills or len(fills) == len(confirmed) + len(crypto_confirmed)
                         else "robinhood+notes",
-                        grades=previous.get("grades"))
+                        grades=previous.get("grades"), wakes=_wakes(tags_text))
     if since:
         summary["account_since"] = since
         summary["account_move"] = _move_view(move)

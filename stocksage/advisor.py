@@ -396,6 +396,12 @@ def build_brief(
     except Exception as exc:
         log.warning("look-alike evidence skipped: %s", exc)
 
+    ranges = {}
+    try:                 # each stock's normal daily range: sizes the watcher's MOVE and NEAR wake-ups
+        ranges = daily_ranges(engine, by_ticker)
+    except Exception as exc:
+        log.warning("daily ranges skipped: %s", exc)
+
     crypto_packet = None
     try:                 # the crypto test's context: trend gate, fear/greed, funding, memes, measured lessons
         from . import crypto
@@ -412,6 +418,7 @@ def build_brief(
         "crypto": crypto_packet,
         "live": live_packet,
         "evidence": evidence,
+        "ranges": ranges,
         "market": market_snapshot,
         "snapshot_absorbed": snapshot,
         "graded_this_call": graded_now,
@@ -504,6 +511,44 @@ def market_regime(indexes: dict, sectors: dict) -> dict:
 
 
 EXTRA_EVIDENCE = 40
+
+
+def daily_ranges(engine, by_ticker: dict) -> dict:
+    """{ticker: normal daily range as a share of price (14-day ATR)} for every scanned
+    name, plus what the trader holds (the local trade memory) and SPY, worked out from
+    price history when the scan did not cover them. The watcher sizes its MOVE and NEAR
+    wake-ups with it; a missing ticker simply gets the watcher's flat rule."""
+    import json
+
+    from .indicators import atr
+
+    out: dict[str, float] = {}
+    for t, sug in by_ticker.items():
+        v = (getattr(sug, "risk", None) or {}).get("atr_pct")
+        if v and v == v and v > 0:
+            out[t] = round(float(v), 4)
+    held = ["SPY"]
+    try:
+        from .journal import is_crypto, state_dir
+
+        mem = json.loads((state_dir() / "trade_memory.json").read_text(encoding="utf-8"))
+        held += [str(o.get("ticker", "")).upper() for o in mem.get("open") or []
+                 if o.get("ticker") and not is_crypto(str(o["ticker"]))]
+    except Exception:
+        pass
+    for t in dict.fromkeys(held):
+        if t in out:
+            continue
+        try:
+            hist = engine.market.history(t)
+            if hist is None or len(hist) < 20:
+                continue
+            last, rng = float(hist["Close"].iloc[-1]), float(atr(hist).iloc[-1])
+            if last > 0 and rng == rng and rng > 0:
+                out[t] = round(rng / last, 4)
+        except Exception:
+            continue
+    return out
 
 
 def _attention_tickers(social_packet: dict | None, live_packet: dict | None) -> list[str]:
@@ -1066,6 +1111,9 @@ def carry_forward_picks(packet: dict, previous: dict | None) -> dict:
         out = dict(out)
         out["evidence"] = previous["evidence"]
         out["evidence_from"] = previous.get("evidence_from") or previous.get("as_of")
+    if not packet.get("ranges") and previous.get("ranges"):
+        out = dict(out)
+        out["ranges"] = previous["ranges"]
     if packet.get("candidates") or (packet.get("scan_errors") or 0) < SCAN_BROKEN_AT or not previous.get("candidates"):
         return out
     out = dict(out)

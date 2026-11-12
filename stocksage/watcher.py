@@ -4,9 +4,20 @@ The routine runs hourly. Between runs nobody watches, so this runs on the
 always-on computer, checks every minute, and fires the routine's API trigger
 when one of these happens to something the trader holds:
 
-  * MOVE    a stock moves 3%+ today (crypto 5%+), and again each further 3%/5%;
-            a position bought today counts from its buy price, not yesterday's
-            close (the rally it was bought into is not news)
+  * MOVE    a stock moves unusually far for THAT stock today, measured against
+            the market: its day's change minus SPY's, in steps of 1.5x its normal
+            daily range (the ATR the brief carries; never under 1.5% nor over 8%;
+            a flat 3% when the range is unknown). Funds are measured as they are.
+            Crypto: 5%+ from a check-point. A position bought today counts from
+            its buy price, not yesterday's close (the rally it was bought into
+            is not news)
+  * NEAR    a holding is close to its stop without having touched it (within
+            half its normal daily range, 0.75%-2.5%, and at least half the room
+            between entry and stop used up): time to decide before the STOP.
+            Once per stop level a day
+  * HALFWAY a holding is halfway from its entry to its target while its stop
+            still sits below the entry: time to raise the stop. Once per target
+            and stop level (a new STOP line re-arms it)
   * DROP    a position sits 5%+ below what it was bought at (once a day each)
   * MARKET  SPY moves 1.5%+ today (once per direction per day)
   * NEWS    a new company headline on a holding (Finnhub, every 5 minutes;
@@ -35,6 +46,13 @@ after a scheduled run fires as soon as that run has written its RUN line (it has
 finished, so the two cannot overlap). The message is plain facts; the routine reads
 it as information (the routine-fire-payload block), never as an instruction.
 
+It grades itself: about an hour after each wake-up it writes an AFTER line with the
+prices then and now, and the journal's wake-up scorecard (in the trade memory and the
+phone report) says per kind whether the trader acted and whether the price kept
+going. The scorecard may widen or narrow MOVE and NEAR and lower the headline
+allowance, only inside journal.WAKE_TUNE_BOUNDS. STOP and LIMIT are never tuned,
+loosened or gated; the cap of 10 a day and the 20-minute cooldown are fixed.
+
 The watcher is the only stop a fractional position has, so its own failures
 reach the owner's phone: no stock prices for 10 minutes in the session (once a
 day), and a STOP or LIMIT the trader has not answered with a run (once each).
@@ -60,6 +78,8 @@ from zoneinfo import ZoneInfo
 ET = ZoneInfo("America/New_York")
 URL_VAR, TOKEN_VAR = "STOCKSAGE_TRADER_FIRE_URL", "STOCKSAGE_TRADER_TOKEN"
 STOCK_MOVE, CRYPTO_MOVE, DROP, MARKET_MOVE = 0.03, 0.05, -0.05, 0.015
+MOVE_ATR_MULT, MOVE_MIN, MOVE_MAX = 1.5, 0.015, 0.08     # a MOVE step: 1.5x the stock's normal day, fenced
+NEAR_ATR_MULT, NEAR_MIN, NEAR_MAX, NEAR_DEFAULT = 0.5, 0.0075, 0.025, 0.015   # how close to a stop is "near"
 SCHEDULED_MINUTE, QUIET_BEFORE, QUIET_AFTER = 35, 10, 15
 COOLDOWN = timedelta(minutes=20)
 DAILY_CAP = 10
@@ -69,6 +89,9 @@ ANSWER_WITHIN = timedelta(minutes=20)           # a STOP/LIMIT wake-up should sh
 ANSWER_WITHIN_QUIET = timedelta(minutes=30)     # ...when it had to wait out a scheduled run first
 NEWS_EVERY = timedelta(minutes=5)
 MEMORY_EVERY = timedelta(minutes=5)             # new positions and moved stops reach the watcher fast
+BRIEF_EVERY = timedelta(minutes=30)             # each stock's normal daily range comes from the brief
+FOLLOW_AFTER = timedelta(minutes=60)            # the price check that grades a wake-up
+FOLLOW_GIVE_UP = timedelta(hours=3)
 BETA = "experimental-cc-routine-2026-04-01"
 HEARTBEAT = timedelta(hours=2)
 STARTUP_FILE = "StockSage Watcher.cmd"
@@ -227,6 +250,79 @@ def read_memory(state: dict, now: datetime, reader=None) -> dict:
     return {}
 
 
+def ranges_from_brief(brief: dict) -> dict:
+    """Each stock's normal daily range (ATR as a share of its price) from the brief:
+    its `ranges` map, and the cards under focus and candidates. Odd values are dropped."""
+    out: dict[str, float] = {}
+    pairs = list(((brief or {}).get("ranges") or {}).items())
+    for key in ("focus", "candidates"):
+        pairs += [(c.get("ticker"), c.get("atr_pct")) for c in (brief or {}).get(key) or [] if isinstance(c, dict)]
+    for t, v in pairs:
+        try:
+            if t and 0.003 <= float(v) <= 0.25:
+                out[str(t).upper()] = float(v)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def read_ranges(state: dict, now: datetime, reader=None) -> dict:
+    """The ranges, from the brief in Drive at most every 30 minutes; kept in the state
+    file, so a failed read leaves the last known ones (and no ranges at all means the
+    flat 3% rule)."""
+    last = state.get("ranges_read")
+    if reader is not None or not last or now - datetime.fromisoformat(last) >= BRIEF_EVERY:
+        state["ranges_read"] = now.isoformat()
+        try:
+            if reader is None:
+                from .drive_api import BRIEF_NAME, read_drive_text
+
+                raw = read_drive_text(BRIEF_NAME)
+            else:
+                raw = reader()
+            got = ranges_from_brief(json.loads(raw or "null") or {})
+            if got:
+                state["ranges"] = got
+        except Exception as exc:
+            log(f"could not read the brief's daily ranges ({type(exc).__name__}); keeping the last ones")
+    return state.get("ranges") or {}
+
+
+def tuning(memory: dict) -> dict:
+    """The wake-up scorecard's settings from the trade memory, fenced a second time
+    here: whatever the file says, nothing leaves journal.WAKE_TUNE_BOUNDS, and there
+    is no setting at all for STOP or LIMIT."""
+    from .journal import WAKE_TUNE_BOUNDS
+
+    said = ((memory or {}).get("wakes") or {}).get("tuning") or {}
+    out = {}
+    for key, (lo, hi, default) in WAKE_TUNE_BOUNDS.items():
+        try:
+            out[key] = min(hi, max(lo, float(said.get(key, default))))
+        except (TypeError, ValueError):
+            out[key] = default
+    return out
+
+
+def move_step(ticker: str, ranges: dict | None = None, factor: float = 1.0) -> float:
+    """How far a stock must move (against the market) for one MOVE step."""
+    atr = (ranges or {}).get(ticker)
+    base = MOVE_ATR_MULT * atr if atr else STOCK_MOVE
+    return min(MOVE_MAX, max(MOVE_MIN, base * factor))
+
+
+def near_band(ticker: str, stop: float, entry: float | None, ranges: dict | None = None,
+              factor: float = 1.0) -> float:
+    """How far above its stop a price still counts as near it: half a normal day,
+    fenced, and never more than half the room the trade was given (a stop set 2%
+    under the buy price is not "near" from the first minute)."""
+    atr = (ranges or {}).get(ticker)
+    band = min(NEAR_MAX, max(NEAR_MIN, (NEAR_ATR_MULT * atr if atr else NEAR_DEFAULT) * factor))
+    if entry and entry > stop:
+        band = min(band, 0.5 * (entry / stop - 1))
+    return band
+
+
 def account_view(memory: dict, now: datetime) -> dict | None:
     """What the daily limit is measured against: the last check-in before today and
     today's realized result, from the trade memory (only if worked out today)."""
@@ -274,15 +370,27 @@ def _fresh(q: dict | None, now: datetime) -> dict | None:
 
 
 def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, news,
-          account: dict | None = None, names=None) -> list[str]:
+          account: dict | None = None, names=None, ranges: dict | None = None,
+          tuned: dict | None = None) -> list[str]:
     """Plain-language events since the last check. Updates `state` so each fires once."""
     from .journal import DAILY_LOSS_LIMIT, is_crypto
 
     day = now.astimezone(ET).date().isoformat()
     if state.get("day") != day:
-        state.update(day=day, moved={}, dropped=[], market=[], crypto_open={}, limit=False, stopped=[], targeted=[])
+        state.update(day=day, moved={}, dropped=[], market=[], crypto_open={}, limit=False, stopped=[], targeted=[],
+                     neared=[])
     events: list[str] = []
     in_hours = stock_hours(now)
+    tuned = tuned or {}
+    seen_at = state.setdefault("last_price", {})      # what a wake-up's later price check starts from
+    spy = None
+    if in_hours:
+        try:
+            spy = _fresh(quote("SPY"), now)
+            if spy:
+                seen_at["SPY"] = spy["price"]
+        except Exception:
+            spy = None
     day_pnl = 0.0
     asked = answered = 0                        # stock quotes this minute: asked for, and came back
     for h in held:
@@ -307,20 +415,29 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
                 price = q["price"] if q else None
                 change = q["day_change"] if q else None
                 bought_today = bool(h.get("lots")) and all(_opened_today(lot, now) for lot in h["lots"])
-                move, since = change, "today"
+                move, since, versus = change, "today", None
                 if bought_today and price and h.get("entry"):
                     move, since = price / h["entry"] - 1, "since it was bought today"
-                if move is not None:
-                    level = int(abs(move) // STOCK_MOVE) * (1 if move > 0 else -1)
+                elif change is not None and spy and t not in FUNDS:
+                    versus = change - spy["day_change"]        # the stock's own move, the market's taken out
+                measure = move if versus is None else versus
+                if measure is not None:
+                    step = move_step(t, ranges, tuned.get("MOVE", 1.0))
+                    level = int((abs(measure) + 1e-9) // step) * (1 if measure > 0 else -1)
                     done = state["moved"].get(t, 0)
                     if level and (abs(level) > abs(done) or level * done < 0):
                         state["moved"][t] = level
+                        normal = (ranges or {}).get(t)
                         events.append(f"MOVE: {t} {move:+.1%} {since}, now {_p(price)}"
-                                      + (f" (bought at {_p(h['entry'])})" if h.get("entry") else ""))
+                                      + (f" (bought at {_p(h['entry'])})" if h.get("entry") else "")
+                                      + (f"; {versus:+.1%} against the market (SPY {spy['day_change']:+.1%})"
+                                         if versus is not None else "")
+                                      + (f"; its normal day is about {normal:.1%}" if normal else ""))
         except Exception:
             continue
         if price is None:
             continue
+        seen_at[t] = price
         if crypto:
             day_open = state.setdefault("crypto_open", {}).setdefault(t, price)
         else:
@@ -341,6 +458,21 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
             state["targeted"].append(t)
             events.append(f"TARGET: {t} at {_p(price)} has reached its target {_p(target)}: take the profit "
                           "or raise the stop (STOP line)")
+        entry = h.get("entry")
+        if stop and price > stop and f"{t}@{stop:g}" not in state.setdefault("neared", []) and \
+                price <= stop * (1 + near_band(t, stop, entry, ranges, tuned.get("NEAR", 1.0))):
+            state["neared"].append(f"{t}@{stop:g}")
+            events.append(f"NEAR: {t} at {_p(price)} is {price / stop - 1:.1%} above its stop {_p(stop)}"
+                          + (f" (bought at {_p(entry)})" if entry else "")
+                          + ": decide now whether the reason to hold still stands; a STOP wake-up follows if it "
+                            "is touched")
+        if target and entry and target > entry and price < target and not (stop and stop >= entry):
+            key = f"{t}@{target:g}@{stop or 0:g}"
+            if price >= entry + 0.5 * (target - entry) and key not in state.setdefault("halfway", []):
+                state["halfway"] = (state["halfway"] + [key])[-60:]
+                events.append(f"HALFWAY: {t} at {_p(price)} is halfway from its entry {_p(entry)} to its target "
+                              f"{_p(target)}; " + (f"its stop is still {_p(stop)}" if stop else "it has no stop on record")
+                              + ": raise the stop (STOP line) so a winner cannot turn into a loss")
         if h.get("entry") and t not in state["dropped"] and price / h["entry"] - 1 <= DROP:
             state["dropped"].append(t)
             events.append(f"DROP: {t} is {price / h['entry'] - 1:+.1%} below its entry {_p(h['entry'])} "
@@ -350,16 +482,11 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
         state["quote_fail"] = 0 if answered else state.get("quote_fail", 0) + 1
     elif not asked:
         state["quote_fail"] = 0
-    if in_hours:
-        try:
-            spy = _fresh(quote("SPY"), now)
-            if spy:
-                direction = "up" if spy["day_change"] > 0 else "down"
-                if abs(spy["day_change"]) >= MARKET_MOVE and direction not in state["market"]:
-                    state["market"].append(direction)
-                    events.append(f"MARKET: SPY {spy['day_change']:+.1%} today")
-        except Exception:
-            pass
+    if spy:
+        direction = "up" if spy["day_change"] > 0 else "down"
+        if abs(spy["day_change"]) >= MARKET_MOVE and direction not in state["market"]:
+            state["market"].append(direction)
+            events.append(f"MARKET: SPY {spy['day_change']:+.1%} today")
     if account and account.get("start") and not state.get("limit"):
         total = day_pnl + account.get("realized", 0.0)
         if total / account["start"] <= DAILY_LOSS_LIMIT:
@@ -512,7 +639,7 @@ def _can_trade_now(held: list[dict]) -> bool:
 
 
 def _event_ticker(event: str) -> str | None:
-    m = re.match(r"(?:MOVE|DROP|TARGET|NEWS|STOP): ([A-Z0-9.\-]+)", event)
+    m = re.match(r"(?:MOVE|DROP|TARGET|NEWS|STOP|NEAR|HALFWAY): ([A-Z0-9.\-]+)", event)
     return m.group(1) if m else None
 
 
@@ -565,12 +692,58 @@ def _self_checks(state: dict, now: datetime, memory: dict, push=None) -> None:
                   "that account yourself.", push)
 
 
+def follow_up(state: dict, now: datetime, quote, crypto_quote, post=None) -> list[str]:
+    """Grade the watcher's own wake-ups: about an hour after each one, write an AFTER
+    line with every named ticker's price then and now. The journal's scorecard reads
+    it. Never fatal, never a wake-up; a check that cannot get a price is dropped after
+    three hours."""
+    from .journal import is_crypto
+
+    written, waiting = [], []
+    for f in state.get("followups") or []:
+        at = _when(f.get("iso"))
+        if at is None or not f.get("prices"):
+            continue
+        if now - at < FOLLOW_AFTER:
+            waiting.append(f)
+            continue
+        pairs = []
+        for t, then in f["prices"].items():
+            try:
+                if is_crypto(t):
+                    price = crypto_quote(t)
+                else:
+                    price = (quote(t) or {}).get("price")
+            except Exception:
+                price = None
+            if price and then:
+                pairs.append(f"{t} {then:.6g} {price:.6g}")
+        gave_up = now - at >= FOLLOW_GIVE_UP
+        if len(pairs) < len(f["prices"]) and not gave_up:
+            waiting.append(f)
+            continue
+        if pairs:
+            line = f"AFTER | {f['at']} | {int((now - at).total_seconds() // 60)} | " + "; ".join(pairs)
+            if note(line, post=post) or gave_up:
+                written.append(line)
+            else:
+                waiting.append(f)
+    state["followups"] = waiting[-20:]
+    return written
+
+
 def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict, post=None,
-         push=None, names=None) -> str | None:
+         push=None, names=None, ranges: dict | None = None) -> str | None:
     """One check. Returns the message that was sent, or None."""
     held = holdings(memory)
-    events = check(state, now, held, quote, crypto_quote, news, account=account_view(memory, now), names=names)
+    tuned = tuning(memory)
+    events = check(state, now, held, quote, crypto_quote, news, account=account_view(memory, now), names=names,
+                   ranges=ranges, tuned=tuned)
     _self_checks(state, now, memory, push)
+    try:
+        follow_up(state, now, quote, crypto_quote, post=post)
+    except Exception as exc:                    # grading must never cost a wake-up
+        log(f"wake-up price check failed ({type(exc).__name__})")
     if events and not regular_session(now):
         # Outside 9:30-4:00 a fractional stock position cannot be sold: a wake-up about it
         # can only look, so it is left to the next scheduled run. Decided per position
@@ -606,10 +779,11 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
         return None
     news_only = all(e.startswith("NEWS") for e in pending)
     news_fires = state.get("news_fires", 0) if state.get("news_fires_day") == day else 0
-    if news_only and news_fires >= NEWS_CAP:
+    news_cap = min(NEWS_CAP, int(tuned.get("NEWS_CAP", NEWS_CAP)))    # the scorecard can only lower it
+    if news_only and news_fires >= news_cap:
         # Headlines may not use up the day's wake-ups: the hourly run reads the news anyway.
         if events:
-            log(f"headline allowance of {NEWS_CAP} wake-ups used today: left to the next scheduled run: "
+            log(f"headline allowance of {news_cap} wake-ups used today: left to the next scheduled run: "
                 + "; ".join(events))
         state["pending"] = []
         return None
@@ -645,6 +819,12 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
         state["urgent"] = {"at": now.isoformat(), "due": (now + ANSWER_WITHIN).isoformat()}
     log(f"woke the trader: {'; '.join(pending)}")
     note(f"WAKE | {_utc(now)} | " + "; ".join(pending), post=post)
+    seen_at = state.get("last_price") or {}
+    named = {_event_ticker(e) or "SPY" for e in pending}
+    then = {t: seen_at[t] for t in sorted(named) if seen_at.get(t)}
+    if then:                                    # the price check that will grade this wake-up
+        state["followups"] = (state.get("followups") or []) + [{"at": _utc(now), "iso": now.isoformat(),
+                                                                "prices": then}]
     return text
 
 
@@ -687,7 +867,8 @@ def run_once(memory_reader=None) -> str | None:
     if state.get("urgent"):
         state.pop("memory_read", None)          # waiting for the trader's answer: look for its run every minute
     memory = read_memory(state, now, reader=memory_reader)
-    sent = tick(state, now, quote=quote, crypto_quote=cq, news=news, memory=memory, names=_names(state))
+    sent = tick(state, now, quote=quote, crypto_quote=cq, news=news, memory=memory, names=_names(state),
+                ranges=read_ranges(state, now))
     heartbeat(state, now, memory, force=state.pop("starting", False))
     save_state(state)
     return sent
@@ -731,6 +912,19 @@ def status() -> int:
     if s.get("quote_fail", 0) >= QUOTE_FAIL_TICKS:
         print(f"  PRICES: none for {s['quote_fail']} minutes. Stops are not being watched. Run .\\start.bat keys "
               "to check the price key.")
+    try:
+        from .journal import is_crypto, state_dir
+
+        memory = json.loads((state_dir() / "watcher_memory.json").read_text(encoding="utf-8"))
+        tuned, ranges = tuning(memory), s.get("ranges") or {}
+        stocks = [h["ticker"] for h in holdings(memory) if not is_crypto(h["ticker"])]
+        if stocks:
+            print("  MOVE wakes at (against the market; from each stock's normal day, 3% when unknown): "
+                  + ", ".join(f"{t} {move_step(t, ranges, tuned['MOVE']):.1%}" for t in stocks))
+        print(f"  learned settings: MOVE x{tuned['MOVE']:.2f}, NEAR x{tuned['NEAR']:.2f}, headline wake-ups "
+              f"{min(NEWS_CAP, int(tuned['NEWS_CAP']))} a day (STOP and LIMIT are never tuned)")
+    except Exception:
+        pass
     print(f"  starts at sign-in: {'yes' if (startup_dir() / STARTUP_FILE).exists() else 'no'}"
           if sys.platform.startswith("win") else "")
     try:

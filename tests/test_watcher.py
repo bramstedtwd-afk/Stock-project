@@ -60,10 +60,10 @@ def test_a_big_move_fires_once_per_step_with_plain_facts():
     later = NOW + timedelta(minutes=60)          # 12:05 ET: clear of the 11:35 and 12:35 runs
     assert watcher.tick(state, later, quote=quotes(table), crypto_quote=lambda t: 70000.0, news=no_news,
                         memory=MEMORY, post=post) is None, "same move, no second wake-up"
-    table["PLD"] = (118.0, -0.062)
-    text2 = watcher.tick(state, later + timedelta(minutes=1), quote=quotes(table), crypto_quote=lambda t: 70000.0,
+    table["PLD"] = (118.0, -0.066)              # 6.2% against the market: the second 3% step
+    text2 =watcher.tick(state, later + timedelta(minutes=1), quote=quotes(table), crypto_quote=lambda t: 70000.0,
                          news=no_news, memory=MEMORY, post=post)
-    assert "MOVE: PLD -6.2%" in text2 and "DROP: PLD" in text2
+    assert "MOVE: PLD -6.6%" in text2 and "-6.2% against the market" in text2 and "DROP: PLD" in text2
 
 
 def test_rationing_cooldown_cap_and_scheduled_runs():
@@ -272,7 +272,8 @@ def test_yesterdays_quote_before_the_open_wakes_nobody():
                        "at": yesterday}
     memory = {"open": [{"ticker": "MSFT", "dollars_in": 7.0, "entry": 549.4, "opened": "2026-11-04T14:37+00:00"}]}
     assert watcher.check({}, seven_am, watcher.holdings(memory), stale, lambda t: None, None) == []
-    live = lambda t: {"symbol": t, "price": 530.0, "day_change": -0.035, "at": seven_am.isoformat()}  # noqa: E731
+    live = lambda t: {"symbol": t, "price": 530.0, "day_change": -0.035 if t != "SPY" else -0.002,  # noqa: E731
+                      "at": seven_am.isoformat()}
     assert any(e.startswith("MOVE: MSFT") for e in watcher.check({}, seven_am, watcher.holdings(memory), live,
                                                                   lambda t: None, None))
 
