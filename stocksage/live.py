@@ -116,8 +116,9 @@ def _cap(text: str) -> float:
         return 0.0
 
 
-def earnings(day, fetch=None, limit: int = 15) -> list[dict]:
-    """The biggest companies reporting on `day`, with when and what is expected."""
+def earnings(day, fetch=None, limit: int | None = 15) -> list[dict]:
+    """The biggest companies reporting on `day`, with when and what is expected
+    (`limit=None`: every company, which is what the watcher's pre-event review reads)."""
     data = _json(EARNINGS.format(day=day.isoformat()), fetch).get("data") or {}
     rows = sorted(data.get("rows") or [], key=lambda r: -_cap(r.get("marketCap")))
     when = {"time-pre-market": "before the open", "time-after-hours": "after the close"}
@@ -220,13 +221,29 @@ def wire(tickers=(), fetch=None, now: datetime | None = None) -> dict:
     nxt = today + timedelta(days=3 if today.weekday() == 4 else 2 if today.weekday() == 5 else 1)
     safe("calendar", lambda: calendar(fetch, now), [])
     safe("week_ahead", lambda: calendar(fetch, now, first=2, last=7, impacts=("High",)), [])
-    safe("earnings_today", lambda: earnings(today, fetch), [])
-    safe("earnings_next", lambda: earnings(nxt, fetch), [])
+    mine = {t.upper() for t in tickers if t}
+
+    def reporting(day):
+        """Nasdaq's calendar; where it refuses the connection (it answered "Access Denied"
+        to the always-on PC on 2026-11-11) Finnhub's, for the given tickers only (it
+        carries no company size to rank the rest by)."""
+        try:
+            return earnings(day, fetch)
+        except Exception:
+            from . import finnhub
+
+            if fetch is not None or not finnhub.key():
+                raise
+            return [{"ticker": r["ticker"], "name": "", "when": r["when"], "eps_forecast": r["eps_forecast"],
+                     "market_cap_b": None} for r in finnhub.earnings_calendar(day, day)
+                    if r["ticker"] in mine and r["day"] == day.isoformat()]
+
+    safe("earnings_today", lambda: reporting(today), [])
+    safe("earnings_next", lambda: reporting(nxt), [])
     safe("headlines", lambda: headlines(fetch, now), [])
     safe("press_releases", lambda: rss(PRESS, "PR Newswire", fetch, now, timedelta(hours=6), listed_only=True)[:10], [])
     safe("fed", lambda: rss(FED, "Federal Reserve", fetch, now, timedelta(days=3))[:5], [])
     safe("odds", lambda: odds(fetch), [])
-    mine = {t.upper() for t in tickers if t}
     out["company_news"] = []
     try:                 # ticker-tagged company news (Finnhub), only with its free key
         from . import finnhub

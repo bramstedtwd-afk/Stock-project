@@ -11,9 +11,13 @@ computer starts.
   .\\start.bat mobile off       stop starting it automatically
 
 Safety: it is reachable by anything on your Wi-Fi, so every request must carry
-a long random key (kept in .env, part of the link you scan). It serves exactly
-one thing, only for GET, never a broker credential, never an action. It cannot
-place or confirm an order, and it cannot trigger a broker read.
+a long random key (kept in .env, part of the link you scan). It serves the
+saved sheet and, above it, the live overview (what the trader watcher saw on
+its last check: each position's distance to its stop and target, today's move
+against the market, ideas waiting for their entry, what is on the calendar;
+the page re-reads that block every minute from `/live`, same key, plain text).
+Only for GET, never a broker credential, never an action. It cannot place or
+confirm an order, and it cannot trigger a broker read or a watcher check.
 """
 
 from __future__ import annotations
@@ -73,10 +77,113 @@ def sheet_path() -> Path:
     return state_dir() / "today.txt"
 
 
+WATCHER_LATE_MINUTES = 5        # the watcher checks every minute: this long without one is worth saying
+
+
+def _pct_from(price: float, level: float) -> str:
+    gap = level / price - 1
+    return f"{abs(gap):.1%} {'above' if gap > 0 else 'below'}"
+
+
+def live_text(now=None, folder: Path | None = None) -> str:
+    """The live overview, as plain text: what the trader watcher saw on its last check
+    (it writes its state file every minute). For each position: the price, today's move
+    and the move against the market, and how far the stop and the target are. Then the
+    ideas waiting for their entry price and what is on the calendar. Prices and percent
+    only: no dollar amounts, no share counts, no account. Reads two local files; it
+    cannot reach a broker or start a check. Empty when no watcher has run here."""
+    import json
+    from datetime import datetime, timezone
+
+    from . import watcher
+
+    folder = folder or sheet_path().parent
+    now = now or datetime.now(timezone.utc)
+    try:
+        state = json.loads((folder / "watcher_state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    checked = watcher._when(state.get("checked"))
+    if checked is None:
+        return ""
+    try:
+        memory = json.loads((folder / "watcher_memory.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        memory = {}
+
+    def clock(at):
+        return at.astimezone(watcher.ET).strftime("%a %I:%M %p ET")
+
+    ago = max(0, int((now - checked).total_seconds() // 60))
+    lines = [f"LIVE  (the watcher's last check: {clock(checked)}, "
+             + ("under a minute ago" if ago < 1 else f"{ago} min ago") + ")"]
+    if ago >= WATCHER_LATE_MINUTES:
+        lines.append(f"  THE WATCHER HAS NOT CHECKED FOR {ago} MINUTES. Is its window open on the computer? "
+                     "On the computer: .\\start.bat watch-trader install")
+    live = state.get("live") or {}
+    spy = live.get("spy") or {}
+    spy_at = watcher._when(spy.get("at"))
+    spy_today = spy_at is not None and spy_at.astimezone(watcher.ET).date() == now.astimezone(watcher.ET).date()
+    if spy_today:
+        lines.append(f"  Market (SPY) {spy['change']:+.1%} today")
+    held = watcher.holdings(memory)
+    if not held:
+        lines.append("  Nothing is held.")
+    for h in held:
+        t, row = h["ticker"], (live.get("rows") or {}).get(h["ticker"])
+        at = watcher._when((row or {}).get("at"))
+        if not row or not row.get("price") or at is None:
+            lines.append(f"  {t}: no price yet")
+            continue
+        price, change = float(row["price"]), row.get("change")
+        line = f"  {t}  {watcher._p(price)}"
+        if change is not None and at.astimezone(watcher.ET).date() == now.astimezone(watcher.ET).date():
+            line += f"  {change:+.1%} today"
+            if spy_today and t not in watcher.FUNDS and not t.endswith("-USD"):
+                line += f" ({change - spy['change']:+.1%} vs the market)"
+        if (now - at).total_seconds() > 15 * 60:
+            line += f"  [price from {clock(at)}]"
+        lines.append(line)
+        stop, target = h.get("stop"), h.get("target")
+        if stop:
+            touched = price <= stop
+            detail = f"      stop {watcher._p(stop)} " + ("HAS BEEN TOUCHED" if touched else f"is {_pct_from(price, stop)}")
+        else:
+            detail = "      NO STOP ON RECORD"
+        if target and target != float("inf"):
+            detail += f"; target {watcher._p(target)} " + ("reached" if price >= target else f"is {_pct_from(price, target)}")
+        lines.append(detail)
+    ideas = state.get("idea_rows") or {}
+    watched = {i["ticker"]: i for i in watcher.watched_ideas(memory, now, held)}
+    if watched:
+        lines += ["", "WAITING TO BUY  (good ideas not bought, watched for their entry price)"]
+        for t, i in watched.items():
+            row = ideas.get(t) or {}
+            line = f"  {t}  [{i['level']}] {i.get('setup') or ''}: entry {watcher._p(i['entry'])}"
+            if row.get("price"):
+                line += f" is {_pct_from(float(row['price']), i['entry'])} (now {watcher._p(float(row['price']))})"
+            if row.get("waiting"):
+                line += f"; {row['waiting']}"
+            lines.append(line)
+    try:
+        coming = watcher.upcoming(now, held, state.get("events") or {})
+    except Exception:
+        coming = []
+    if coming:
+        lines += ["", "COMING UP  (the trader is woken to review before each)"]
+        lines += ["  " + r["text"].split(": decide")[0].split(": check")[0].replace("market: ", "") for r in coming]
+    return "\n".join(lines)
+
+
 def render_page(now: float | None = None, path: Path | None = None) -> str:
     path = path or sheet_path()
     now = now or time.time()
     banner = ""
+    try:
+        live = live_text(folder=path.parent)
+    except Exception:                         # the overview must never take the sheet down with it
+        live = ""
+    live_block = (f'<pre id="live">{html.escape(live)}</pre>' if live else "")
     try:
         text = path.read_text(encoding="utf-8")
         age_h = (now - path.stat().st_mtime) / 3600.0
@@ -114,8 +221,19 @@ a {{ color:inherit; }}
 pre {{ white-space:pre-wrap; word-wrap:break-word; font:13.5px/1.5 ui-monospace, Menlo, Consolas, monospace; }}
 </style></head><body><main>
 <div class="stamp">StockSage &middot; {html.escape(stamp)} &middot; read-only</div>
-{jump}{banner}<pre>{html.escape(text)}</pre>{trades}
+{jump}{banner}{live_block}<pre>{html.escape(text)}</pre>{trades}
 <button onclick="location.reload()">Reload</button>
+<script>
+// Refresh the live overview each minute: a GET of plain text, shown as text (never as HTML).
+setInterval(function () {{
+  var box = document.getElementById("live");
+  if (!box || document.hidden) return;
+  fetch("/live" + location.search, {{cache: "no-store"}})
+    .then(function (r) {{ return r.ok ? r.text() : null; }})
+    .then(function (t) {{ if (t) box.textContent = t; }})
+    .catch(function () {{}});
+}}, 60000);
+</script>
 </main></body></html>"""
 
 
@@ -136,8 +254,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         url = urlparse(self.path)
         given = (parse_qs(url.query).get("k") or [None])[0]
-        if url.path != "/" or not key_ok(given, phone_key()):
+        if url.path not in ("/", "/live") or not key_ok(given, phone_key()):
             self._send(403, "Open the link StockSage printed for you (it includes a private key).")
+            return
+        if url.path == "/live":                # the page's own once-a-minute refresh: plain text, same key
+            try:
+                self._send(200, live_text())
+            except Exception:
+                self._send(200, "")
             return
         self._send(200, render_page(), "text/html; charset=utf-8")
 

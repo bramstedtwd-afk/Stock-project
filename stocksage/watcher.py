@@ -39,6 +39,19 @@ when one of these happens to something the trader holds:
             allows no new buys until tomorrow. StockSage still never trades:
             the owner's own switch is trade approvals ON in Robinhood.
 
+  * ENTRY   an idea the trader rated HIGH or MEDIUM and did not buy reaches the
+            entry price its IDEA line named, while settled cash is free and the
+            day's discipline allows a buy. Only the latest idea per ticker, at most
+            one trading day old, at most six at a time; once per entry level; at
+            most 2 wake-ups a day carry nothing but ENTRY. The trader re-scores it:
+            the wake-up is a prompt to look, never a reason to buy
+  * EVENT   a review before something scheduled: a held stock reports earnings
+            after today's close or before the next open (asked once, in the last
+            hour of the session, when a fractional position can still be sold), or
+            a major release (CPI, the Fed's decision, payrolls, core PCE) is due:
+            15-60 minutes ahead in the session, or the afternoon before a
+            pre-market one. Once per event, only while something is held
+
 Firing costs a full routine run, so it is rationed: never within the 10 minutes
 before or the 15 after a scheduled run (minute :35 of each hour), at least 20
 minutes apart, at most 10 a day. One exception: a STOP or LIMIT in the minutes
@@ -84,6 +97,17 @@ SCHEDULED_MINUTE, QUIET_BEFORE, QUIET_AFTER = 35, 10, 15
 COOLDOWN = timedelta(minutes=20)
 DAILY_CAP = 10
 NEWS_CAP = 3                                    # wake-ups a day that carry nothing but headlines
+ENTRY_CAP = 2                                   # wake-ups a day that carry nothing but an idea's entry
+ENTRY_CHASE = 0.015                             # a breakout entry passed by more than this has run away
+ENTRY_UNDER = 0.03                              # a pullback entry undercut this far (no stop named) is broken
+ENTRY_MIN_CASH = 10.0                           # settled cash that counts as "free" (the playbook's reserve)
+IDEA_LEVELS = ("HIGH", "MEDIUM")
+IDEAS_MAX = 6                                   # ideas watched at once: each is a price lookup a minute
+EVENTS_EVERY = timedelta(hours=2)               # how often the calendars are re-read
+EVENT_AHEAD = (timedelta(minutes=15), timedelta(minutes=60))   # a release in the session: wake this far ahead
+REVIEW_HOUR = 15                                # 3:00-3:59 PM ET: the last hour a fractional share can be sold
+# The scheduled releases that move the whole market within seconds.
+MAJOR = re.compile(r"\bCPI\b|Federal Funds Rate|FOMC Statement|Non-Farm Employment Change|Core PCE Price Index", re.I)
 QUOTE_FAIL_TICKS = 10                           # minutes without one stock price before the phone is told
 ANSWER_WITHIN = timedelta(minutes=20)           # a STOP/LIMIT wake-up should show a run by then
 ANSWER_WITHIN_QUIET = timedelta(minutes=30)     # ...when it had to wait out a scheduled run first
@@ -383,12 +407,16 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
     in_hours = stock_hours(now)
     tuned = tuned or {}
     seen_at = state.setdefault("last_price", {})      # what a wake-up's later price check starts from
+    live = state.setdefault("live", {})               # what the phone page shows: last price and day's change
+    owned = {h["ticker"] for h in held}
+    live["rows"] = {t: r for t, r in (live.get("rows") or {}).items() if t in owned}
     spy = None
     if in_hours:
         try:
             spy = _fresh(quote("SPY"), now)
             if spy:
                 seen_at["SPY"] = spy["price"]
+                live["spy"] = {"change": spy["day_change"], "at": now.isoformat()}
         except Exception:
             spy = None
     day_pnl = 0.0
@@ -442,6 +470,8 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
             day_open = state.setdefault("crypto_open", {}).setdefault(t, price)
         else:
             day_open = price / (1 + change) if change is not None and change > -1 else None
+        live["rows"][t] = {"price": price, "at": now.isoformat(),
+                           "change": price / day_open - 1 if crypto and day_open else change}
         for lot in h.get("lots") or []:
             basis = lot["entry"] if _opened_today(lot, now) else day_open
             if basis:
@@ -518,6 +548,227 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
                         events.append(f"NEWS: {h['ticker']}: {item['title']} ({item['source']})")
         state["news_seen"] = list(seen)[-500:]
     return events
+
+
+# --- ideas waiting for their entry price ---------------------------------------------
+
+def watched_ideas(memory: dict, now: datetime, held: list[dict]) -> list[dict]:
+    """The memory's `idea_watch` list (journal.idea_watch), fenced a second time here:
+    HIGH and MEDIUM only, not held, not expired, never more than six."""
+    today = now.astimezone(ET).date().isoformat()
+    owned = {h["ticker"] for h in held}
+    out = []
+    for i in (memory or {}).get("idea_watch") or []:
+        try:
+            t, entry = str(i["ticker"]).upper(), float(i["entry"])
+            if t in owned or entry <= 0 or i.get("level") not in IDEA_LEVELS or str(i.get("expires") or "") < today:
+                continue
+            stop = float(i["stop"]) if i.get("stop") else None
+            out.append(dict(i, ticker=t, entry=entry, stop=stop if stop and stop < entry else None,
+                            direction="above" if i.get("direction") == "above" else "below"))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out[:IDEAS_MAX]
+
+
+def cash_free(state: dict, memory: dict, now: datetime) -> tuple[bool, str]:
+    """May the trader open something right now? Settled cash from its last RUN line, and
+    not on a day the daily loss limit has stopped new buys."""
+    from .confidence import todays_discipline
+
+    if state.get("limit") or todays_discipline(memory, now).get("limit_hit"):
+        return False, "the daily loss limit allows no new buys today"
+    try:
+        cash = float((memory.get("trader") or {}).get("cash"))
+    except (TypeError, ValueError):
+        return False, "settled cash is not known"
+    return (True, "") if cash >= ENTRY_MIN_CASH else (False, "no settled cash is free")
+
+
+def _idea_when(iso) -> str:
+    at = _when(iso)
+    return at.astimezone(ET).strftime("%a %I:%M %p ET") if at else "earlier"
+
+
+def entry_events(state: dict, now: datetime, memory: dict, held: list[dict], quote, crypto_quote) -> list[str]:
+    """ENTRY: a watched idea has reached the entry price it named. A breakout entry (above
+    the price the idea was written at) counts from the entry to 1.5% past it; further and
+    it has run away (the playbook does not chase). A pullback entry (below) counts from
+    the entry down to the idea's stop (3% under the entry when it named none); lower and
+    the idea is broken. Once per entry level, kept across days."""
+    from .confidence import todays_discipline
+    from .journal import is_crypto
+
+    ideas = watched_ideas(memory, now, held)
+    rows: dict = {}
+    state["idea_rows"] = rows                         # for the phone page
+    if not ideas:
+        return []
+    day = now.astimezone(ET).date().isoformat()
+    free, why_not = cash_free(state, memory, now)
+    if free and state.get("entry_fires_day") == day and state.get("entry_fires", 0) >= ENTRY_CAP:
+        free, why_not = False, f"today's {ENTRY_CAP} entry wake-ups are used"
+    sold_at_a_loss = set(todays_discipline(memory, now).get("stopped_today") or [])
+    done = state.setdefault("entered", [])
+    seen_at = state.setdefault("last_price", {})
+    events = []
+    for i in ideas:
+        t, entry, crypto = i["ticker"], i["entry"], is_crypto(i["ticker"])
+        row = {"entry": entry, "direction": i["direction"], "level": i["level"], "setup": i.get("setup"),
+               "expires": i.get("expires"), "waiting": why_not}
+        rows[t] = row
+        if not crypto and not regular_session(now):
+            continue                                  # a new stock position is opened in the regular session
+        try:
+            price = crypto_quote(t) if crypto else (_fresh(quote(t), now) or {}).get("price")
+        except Exception:
+            price = None
+        if not price:
+            continue
+        row.update(price=price, at=now.isoformat())
+        seen_at[t] = price
+        key = f"{t}@{entry:g}"
+        if key in done:
+            row["waiting"] = "the trader has been told"
+            continue
+        if t in sold_at_a_loss:
+            row["waiting"] = "sold at a loss today: not bought back today"
+            continue
+        if not free:
+            continue
+        if i["direction"] == "above":
+            reached = entry <= price <= entry * (1 + ENTRY_CHASE)
+        else:
+            reached = (i["stop"] or entry * (1 - ENTRY_UNDER)) < price <= entry
+        if reached:
+            state["entered"] = done = (done + [key])[-60:]
+            row["waiting"] = "the trader has been told"
+            events.append(f"ENTRY: {t} at {_p(price)} has reached the entry {_p(entry)} of your [{i['level']}] "
+                          f"{i.get('setup') or 'buy'} idea from {_idea_when(i.get('at'))}"
+                          + (f" (its stop was {_p(i['stop'])})" if i["stop"] else "")
+                          + ", and settled cash is free: re-score it with the confidence command and buy only if "
+                            "it still qualifies")
+    return events
+
+
+# --- reviews before scheduled events ---------------------------------------------------
+
+def _next_session(day):
+    day += timedelta(days=1)
+    while day.weekday() >= 5:
+        day += timedelta(days=1)
+    return day
+
+
+def _reporting(day) -> list[dict]:
+    """Who reports on `day`: Finnhub's calendar with the key the watcher already has (the
+    Nasdaq one answered "Access Denied" from the always-on PC on 2026-11-11), else the
+    live wire's."""
+    from . import finnhub
+    from . import live as wire
+
+    if finnhub.key():
+        try:
+            return [r for r in finnhub.earnings_calendar(day, day) if r["day"] == day.isoformat()]
+        except Exception:
+            pass
+    return wire.earnings(day, limit=None)
+
+
+def read_events(state: dict, now: datetime, calendar=None, earnings=None) -> dict:
+    """The week's major releases (the live wire's calendar) and who reports today and
+    next session (`_reporting`), re-read every two hours in stock hours and kept in the state file
+    (a failed read keeps the last answer; entries are looked up by date, so an old
+    answer can only be silent, never wrong)."""
+    last = state.get("events_read")
+    injected = calendar is not None or earnings is not None
+    if injected or (stock_hours(now) and (not last or now - datetime.fromisoformat(last) >= EVENTS_EVERY)):
+        from . import live as wire
+
+        state["events_read"] = now.isoformat()
+        got = dict(state.get("events") or {})
+        try:
+            rows = calendar() if calendar else wire.calendar(now=now, first=0, last=6, impacts=("High",))
+            got["releases"] = [{"at": r["at"], "title": r["title"], "forecast": r.get("forecast"),
+                                "previous": r.get("previous")} for r in rows if MAJOR.search(r.get("title") or "")]
+        except Exception as exc:
+            log(f"could not read the economic calendar ({type(exc).__name__}); keeping the last one")
+        today = now.astimezone(ET).date()
+        by_day = dict(got.get("earnings") or {})
+        for day in (today, _next_session(today)):
+            try:
+                rows = earnings(day) if earnings else _reporting(day)
+                by_day[day.isoformat()] = {str(r["ticker"]).upper(): {"when": r.get("when"), "eps": r.get("eps_forecast")}
+                                           for r in rows if r.get("ticker")}
+            except Exception as exc:
+                log(f"could not read the earnings calendar for {day} ({type(exc).__name__}); keeping the last one")
+        got["earnings"] = {d: v for d, v in by_day.items() if d >= today.isoformat()}
+        state["events"] = got
+    return state.get("events") or {}
+
+
+def upcoming(now: datetime, held: list[dict], events: dict) -> list[dict]:
+    """What is scheduled for what is held: each row has a `key` (once per event), a plain
+    `text`, and `review` = the wake-up is due now. Also what the phone page lists."""
+    from .journal import is_crypto
+
+    if not events or not held:
+        return []
+    et = now.astimezone(ET)
+    today, nxt = et.date(), _next_session(et.date())
+    last_hour = regular_session(now) and et.hour == REVIEW_HOUR
+    out = []
+    for h in held:
+        t = h["ticker"]
+        if is_crypto(t) or t in FUNDS:
+            continue
+        for day in (today, nxt):
+            e = ((events.get("earnings") or {}).get(day.isoformat()) or {}).get(t)
+            when = (e or {}).get("when") or "time not given"
+            # Already out (before today's open), or tomorrow afternoon's question (after tomorrow's close).
+            if not e or (day == today and when == "before the open") or (day == nxt and when == "after the close"):
+                continue
+            on = "today" if day == today else "on " + day.strftime("%a %d %b")
+            out.append({"key": f"earn:{t}:{day.isoformat()}", "review": last_hour,
+                        "text": f"{t} reports earnings {when if when != 'time not given' else '(time not given)'} {on}"
+                                + (f" (EPS expected {e['eps']})" if e.get("eps") else "")
+                                + ": decide before the close whether to hold through it or sell, and say which in "
+                                  "the RUN line"})
+    open_next = datetime(nxt.year, nxt.month, nxt.day, 9, 30, tzinfo=ET)
+    by_time: dict = {}
+    for r in events.get("releases") or []:
+        at = _when(r.get("at"))
+        if at and at > now:
+            by_time.setdefault(at, []).append(r)
+    for at in sorted(by_time):
+        rows = by_time[at]
+        in_session = at.astimezone(ET).date() == today and regular_session(at)
+        if in_session:
+            review = regular_session(now) and EVENT_AHEAD[0] <= at - now <= EVENT_AHEAD[1]
+        elif at <= open_next:
+            review = last_hour                       # out before the next open: the review is this afternoon
+        else:
+            review = False
+        first = rows[0]
+        names = ", ".join(dict.fromkeys(r["title"] for r in rows))[:80]
+        out.append({"key": f"macro:{at.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M')}", "review": review,
+                    "market": True,
+                    "text": f"market: {names} is due {at.astimezone(ET).strftime('%a %I:%M %p ET')}"
+                            + (f" (forecast {first['forecast']}, previous {first.get('previous') or '-'})"
+                               if first.get("forecast") else "")
+                            + ": check every stop and how much is at risk before it; no new positions in the 15 "
+                              "minutes before a release"})
+    return out
+
+
+def pre_events(state: dict, now: datetime, held: list[dict], events: dict) -> list[str]:
+    """EVENT: one review before each scheduled event, while something is held."""
+    out = []
+    for row in upcoming(now, held, events):
+        if row["review"] and row["key"] not in state.setdefault("evented", []):
+            state["evented"] = (state["evented"] + [row["key"]])[-60:]
+            out.append("EVENT: " + row["text"])
+    return out
 
 
 # --- firing -----------------------------------------------------------------------
@@ -639,7 +890,7 @@ def _can_trade_now(held: list[dict]) -> bool:
 
 
 def _event_ticker(event: str) -> str | None:
-    m = re.match(r"(?:MOVE|DROP|TARGET|NEWS|STOP|NEAR|HALFWAY): ([A-Z0-9.\-]+)", event)
+    m = re.match(r"(?:MOVE|DROP|TARGET|NEWS|STOP|NEAR|HALFWAY|ENTRY|EVENT): ([A-Z][A-Z0-9.\-]*)(?![a-z])", event)
     return m.group(1) if m else None
 
 
@@ -733,12 +984,22 @@ def follow_up(state: dict, now: datetime, quote, crypto_quote, post=None) -> lis
 
 
 def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict, post=None,
-         push=None, names=None, ranges: dict | None = None) -> str | None:
-    """One check. Returns the message that was sent, or None."""
+         push=None, names=None, ranges: dict | None = None, events: dict | None = None) -> str | None:
+    """One check. Returns the message that was sent, or None. `events` is the calendar
+    packet from read_events (None: no pre-event reviews)."""
+    from .journal import is_crypto
+
     held = holdings(memory)
     tuned = tuning(memory)
+    scheduled = events
     events = check(state, now, held, quote, crypto_quote, news, account=account_view(memory, now), names=names,
                    ranges=ranges, tuned=tuned)
+    state["checked"] = now.isoformat()
+    try:                                        # the wider view must never cost a STOP its wake-up
+        events += entry_events(state, now, memory, held, quote, crypto_quote)
+        events += pre_events(state, now, held, scheduled or {})
+    except Exception as exc:
+        log(f"idea and calendar checks failed ({type(exc).__name__}: {exc})")
     _self_checks(state, now, memory, push)
     try:
         follow_up(state, now, quote, crypto_quote, post=post)
@@ -748,7 +1009,7 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
         # Outside 9:30-4:00 a fractional stock position cannot be sold: a wake-up about it
         # can only look, so it is left to the next scheduled run. Decided per position
         # (one whole-share holding used to let every other position's headlines through).
-        can = _tradable_now(held)
+        can = _tradable_now(held) | {t for t in map(_event_ticker, events) if t and is_crypto(t)}
         later = [e for e in events if not e.startswith(URGENT)
                  and (_event_ticker(e) not in can if _event_ticker(e) else not can)]
         if later:
@@ -805,6 +1066,10 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
             unsaid = {_event_ticker(e) for e in pending if e.startswith("HALFWAY")}
             if unsaid:
                 state["halfway"] = [k for k in state.get("halfway") or [] if k.split("@")[0] not in unsaid]
+            # The same for an idea's entry: the scheduled run does not know it was reached.
+            unasked = {_event_ticker(e) for e in pending if e.startswith("ENTRY")}
+            if unasked:
+                state["entered"] = [k for k in state.get("entered") or [] if k.split("@")[0] not in unasked]
         else:
             state["pending"] = pending[-10:]
             log(f"waiting to wake the trader ({why}): {'; '.join(events) or 'earlier events'}")
@@ -820,7 +1085,10 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
     state.update(fires_day=day, last_fire=now.isoformat(), pending=[])
     if news_only:
         state.update(news_fires_day=day, news_fires=news_fires + 1)
-    if urgent:                                  # the clock for an answer runs from the wake-up that went out
+    if all(e.startswith("ENTRY") for e in pending):
+        state.update(entry_fires_day=day,
+                     entry_fires=(state.get("entry_fires", 0) if state.get("entry_fires_day") == day else 0) + 1)
+    if urgent:                                 # the clock for an answer runs from the wake-up that went out
         state["urgent"] = {"at": now.isoformat(), "due": (now + ANSWER_WITHIN).isoformat()}
     log(f"woke the trader: {'; '.join(pending)}")
     note(f"WAKE | {_utc(now)} | " + "; ".join(pending), post=post)
@@ -872,8 +1140,13 @@ def run_once(memory_reader=None) -> str | None:
     if state.get("urgent"):
         state.pop("memory_read", None)          # waiting for the trader's answer: look for its run every minute
     memory = read_memory(state, now, reader=memory_reader)
+    try:
+        scheduled = read_events(state, now)
+    except Exception as exc:                    # a calendar must never stop a check
+        log(f"calendars not read ({type(exc).__name__})")
+        scheduled = state.get("events") or {}
     sent = tick(state, now, quote=quote, crypto_quote=cq, news=news, memory=memory, names=_names(state),
-                ranges=read_ranges(state, now))
+                ranges=read_ranges(state, now), events=scheduled)
     heartbeat(state, now, memory, force=state.pop("starting", False))
     save_state(state)
     return sent
@@ -928,6 +1201,15 @@ def status() -> int:
                   + ", ".join(f"{t} {move_step(t, ranges, tuned['MOVE']):.1%}" for t in stocks))
         print(f"  learned settings: MOVE x{tuned['MOVE']:.2f}, NEAR x{tuned['NEAR']:.2f}, headline wake-ups "
               f"{min(NEWS_CAP, int(tuned['NEWS_CAP']))} a day (STOP and LIMIT are never tuned)")
+        now = datetime.now(timezone.utc)
+        ideas = watched_ideas(memory, now, holdings(memory))
+        print("  ideas watched for their entry price: "
+              + (", ".join(f"{i['ticker']} [{i['level']}] {i['direction']} {_p(i['entry'])}" for i in ideas)
+                 or "none (an IDEA line needs a HIGH or MEDIUM level and 'entry <price>', and lasts one trading day)"))
+        coming = upcoming(now, holdings(memory), s.get("events") or {})
+        print("  coming up for what is held: " + ("; ".join(r["text"].split(":")[0] if not r.get("market")
+                                                             else r["text"].split(": check")[0] for r in coming)
+                                                  or "nothing on the calendars"))
     except Exception:
         pass
     print(f"  starts at sign-in: {'yes' if (startup_dir() / STARTUP_FILE).exists() else 'no'}"

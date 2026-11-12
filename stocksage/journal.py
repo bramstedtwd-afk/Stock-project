@@ -643,9 +643,8 @@ NOT_AN_IDEA = re.compile(r"not a real idea|\btest (check|only|line|run)\b|--help
                          r"^\W*(\[\w+\]\s*)?(test|check|testing)\W*$", re.I)
 
 
-def parse_ideas(text: str) -> list[dict]:
-    """`IDEA | <UTC time> | BUY or SELL | TICKER | setup | price | [LEVEL] why`: a trade the
-    trader considered (taken or not). Graded later against the market, free evidence."""
+def _idea_rows(text: str) -> list[dict]:
+    """Every well-formed IDEA line, in file order, repeats included."""
     out = []
     for raw in (text or "").splitlines():
         parts = [p.strip() for p in raw.split("|")]
@@ -659,13 +658,79 @@ def parse_ideas(text: str) -> list[dict]:
         if NOT_AN_IDEA.search(note):
             continue                       # a check of the command, not a trade considered
         level = re.match(r"\s*\[(HIGH|MEDIUM|LOW|NO)\]", note, re.I)
-        setup = setup_word(parts[4])
-        if any(o["ticker"] == ticker and o["side"] == side and o["setup"] == setup
-               and abs((at - o["at"]).total_seconds()) <= 2 * 3600 for o in out):
-            continue                       # the same idea noted twice counts once
-        out.append({"at": at, "side": side, "ticker": ticker, "setup": setup, "price": price,
+        out.append({"at": at, "side": side, "ticker": ticker, "setup": setup_word(parts[4]), "price": price,
                     "confidence": level.group(1).upper() if level else "unrated", "note": note})
     return out
+
+
+def parse_ideas(text: str) -> list[dict]:
+    """`IDEA | <UTC time> | BUY or SELL | TICKER | setup | price | [LEVEL] why`: a trade the
+    trader considered (taken or not). Graded later against the market, free evidence."""
+    out: list[dict] = []
+    for idea in _idea_rows(text):
+        if any(o["ticker"] == idea["ticker"] and o["side"] == idea["side"] and o["setup"] == idea["setup"]
+               and abs((idea["at"] - o["at"]).total_seconds()) <= 2 * 3600 for o in out):
+            continue                       # the same idea noted twice counts once
+        out.append(idea)
+    return out
+
+
+# --- ideas worth watching: a good idea that was not bought, waiting for its entry price ---
+
+ENTRY_RE = re.compile(r"\bentry(?:[\s\-]*(?:price|level|at|near|above|over|below|under|@|:|=))*\s*(\d+(?:\.\d+)?)", re.I)
+IDEA_WATCH_LEVELS = ("HIGH", "MEDIUM")     # a LOW or NO idea is never worth a wake-up
+IDEA_WATCH_SESSIONS = 1                    # watched the day it was written and one trading day more
+IDEA_WATCH_MAX = 6                         # each watched idea costs a price lookup a minute
+ENTRY_MIN_GAP = 0.001                      # an entry at the price it was written at was a pass, not a wait
+
+
+def stated_entry(note: str) -> float | None:
+    """The entry level an idea's why names ("entry 141.50", "entry above 141.50"), if any."""
+    m = ENTRY_RE.search(note or "")
+    return float(m.group(1)) if m and float(m.group(1)) > 0 else None
+
+
+def _sessions_after(day, n: int):
+    """The date `n` weekdays after `day` (holidays are not known here: one extra day at worst)."""
+    while n > 0:
+        day += timedelta(days=1)
+        n -= day.weekday() < 5
+    return day
+
+
+def idea_watch(text: str, open_tickers=(), now: datetime | None = None) -> list[dict]:
+    """The unbought ideas the watcher should keep an eye on, from the notes alone (so the
+    trader's light path rebuilds it after every note). For each ticker only its LATEST
+    idea line counts, and it is watched only if it is a BUY rated HIGH or MEDIUM, names
+    an entry level away from the price it was written at, is not held, was not bought
+    since, and is at most one trading day old. Old IDEA lines (no entry level) are
+    graded as always and simply never watched."""
+    now = now or datetime.now(timezone.utc)
+    today = _et_date(now)
+    held = {str(t).upper() for t in open_tickers if t}
+    bought: dict = {}
+    for t in parse_tags(text):
+        if t["side"] == "buy":
+            bought[t["ticker"]] = max(bought.get(t["ticker"], t["at"]), t["at"])
+    latest: dict[str, dict] = {}
+    for idea in sorted(_idea_rows(text), key=lambda i: i["at"]):
+        latest[idea["ticker"]] = idea
+    out = []
+    for t, idea in latest.items():
+        entry = stated_entry(idea["note"])
+        expires = _sessions_after(_et_date(idea["at"]), IDEA_WATCH_SESSIONS)
+        if idea["side"] != "buy" or idea["confidence"] not in IDEA_WATCH_LEVELS or not entry or t in held:
+            continue
+        if today > expires or idea["at"] > now or (t in bought and bought[t] >= idea["at"]):
+            continue
+        if abs(entry / idea["price"] - 1) < ENTRY_MIN_GAP:
+            continue
+        stop = stated_stop(idea["note"])
+        out.append({"ticker": t, "entry": entry, "direction": "above" if entry > idea["price"] else "below",
+                    "price": idea["price"], "level": idea["confidence"], "setup": idea["setup"],
+                    "at": idea["at"].isoformat(timespec="minutes"), "expires": expires.isoformat(),
+                    "stop": stop if stop and stop < entry else None})
+    return sorted(out, key=lambda i: (i["level"] != "HIGH", -_ts(i["at"]).timestamp()))[:IDEA_WATCH_MAX]
 
 
 def grade_ideas(ideas: list[dict], history, spy=None, now: datetime | None = None) -> dict:
@@ -898,8 +963,8 @@ def tax_view(trips: list, fills: list[dict], now: datetime) -> dict:
 
 # --- the wake-up scorecard --------------------------------------------------------------
 
-WAKE_KINDS = ("STOP", "LIMIT", "NEAR", "TARGET", "HALFWAY", "MOVE", "DROP", "MARKET", "NEWS")
-WAKE_DIRECTION = {"STOP": -1, "NEAR": -1, "DROP": -1, "LIMIT": -1, "TARGET": 1, "HALFWAY": 1}
+WAKE_KINDS = ("STOP", "LIMIT", "NEAR", "TARGET", "HALFWAY", "MOVE", "DROP", "MARKET", "NEWS", "ENTRY", "EVENT")
+WAKE_DIRECTION = {"STOP": -1, "NEAR": -1, "DROP": -1, "LIMIT": -1, "TARGET": 1, "HALFWAY": 1, "ENTRY": 1}
 WAKE_ANSWER = timedelta(minutes=45)     # a run that followed a wake-up wrote its RUN line by then
 WAKE_WINDOW = timedelta(days=60)        # the scorecard looks this far back
 WAKE_FLAT = 0.003                       # under 0.3% after the wake-up: the price went nowhere
@@ -1282,6 +1347,11 @@ def _with_ideas(summary: dict, engine, tags_text: str, previous: dict | None = N
     between two full runs blind to the ideas, the memory's best evidence."""
     empty = {"graded": 0, "by_setup": {}, "by_confidence": {}, "recent": []}
     carried = (previous or {}).get("ideas") or empty
+    try:                                   # the watcher's list; never worth a failed rebuild
+        summary["idea_watch"] = idea_watch(tags_text, [o.get("ticker") for o in summary.get("open") or []])
+    except Exception as exc:
+        log.warning("ideas to watch not listed: %s", exc)
+        summary["idea_watch"] = []
     ideas = parse_ideas(tags_text)
     if not ideas:
         summary["ideas"] = empty

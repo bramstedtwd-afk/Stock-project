@@ -65,6 +65,24 @@ def company_name(symbol: str, fetch=None) -> str:
     return str((_json(f"/stock/profile2?symbol={symbol.upper()}", fetch) or {}).get("name") or "")
 
 
+EARNINGS_HOUR = {"bmo": "before the open", "amc": "after the close", "dmh": "during the session"}
+
+
+def earnings_calendar(first: date, last: date, fetch=None) -> list[dict]:
+    """Every company reporting from `first` to `last`: {ticker, day, when, eps_forecast},
+    in the live wire's words for `when`. The watcher's pre-event review reads this (the
+    Nasdaq calendar the live wire uses refuses some home connections)."""
+    data = _json(f"/calendar/earnings?from={first.isoformat()}&to={last.isoformat()}", fetch) or {}
+    out = []
+    for r in data.get("earningsCalendar") or []:
+        if r.get("symbol") and r.get("date"):
+            eps = r.get("epsEstimate")
+            out.append({"ticker": str(r["symbol"]).upper(), "day": str(r["date"])[:10],
+                        "when": EARNINGS_HOUR.get(str(r.get("hour") or "").lower(), "time not given"),
+                        "eps_forecast": f"{float(eps):.2f}" if isinstance(eps, (int, float)) else None})
+    return out
+
+
 def market_news(fetch=None, limit: int = 10) -> list[dict]:
     rows = _json("/news?category=general", fetch) or []
     out = []
