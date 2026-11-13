@@ -500,3 +500,54 @@ def test_a_held_stop_is_dropped_once_the_run_sold_the_position(monkeypatch):
     assert not sent and not state.get("pending") and "urgent" not in state
     watcher.tick(state, AFTER_RUN + timedelta(minutes=45), memory=sold, **args)
     assert "StockSage: the trader did not answer" not in [t for t, _ in got]
+
+
+# --- A stop answered by a run that could not see the account (2026-11-13) ----------------
+
+T0 = NOW - timedelta(minutes=10)      # 10:55 AM ET: 21 minutes on is still outside the quiet window
+
+
+def test_a_stop_answered_by_a_blind_run_is_asked_again_after_the_cooldown(monkeypatch):
+    got, push = _pushes(monkeypatch)
+    sent: list = []
+    state: dict = {}
+    args = dict(_stop_args(push), post=lambda u, t, b: sent.append(b))
+    assert "STOP: MSFT" in watcher.tick(state, T0, memory=STOPPED, **args)
+    blind = dict(STOPPED, trader={"equity": 100.0, "blind": True, "last_run": T0.isoformat(timespec="minutes")})
+    assert watcher.tick(state, T0 + timedelta(minutes=10), memory=blind, **args) is None, "cooldown first"
+    again = watcher.tick(state, T0 + watcher.COOLDOWN + timedelta(minutes=1), memory=blind, **args)
+    assert again and "STOP: MSFT" in again and len(sent) == 2, "a second wake-up went out"
+    assert "StockSage: the trader could not act" in [t for t, _ in got]
+    assert not re.search(r"\$|\d{4,}", dict(got)["StockSage: the trader could not act"])
+
+
+def test_a_blind_answer_is_asked_at_most_three_times_and_a_seeing_run_ends_it(monkeypatch):
+    got, push = _pushes(monkeypatch)
+    sent: list = []
+    state: dict = {}
+    args = dict(_stop_args(push), post=lambda u, t, b: sent.append(b))
+    watcher.tick(state, NOW, memory=STOPPED, **args)
+    fires, when = 1, NOW
+    for step in range(1, 12):                                       # blind runs keep answering, 21 min apart
+        blind = dict(STOPPED, trader={"blind": True, "last_run": when.isoformat(timespec="minutes")})
+        when = NOW + step * (watcher.COOLDOWN + timedelta(minutes=1))
+        if when.minute in range(25, 51):                            # the quiet window around :35 holds it
+            continue
+        if watcher.tick(state, when, memory=blind, **args):
+            fires += 1
+    assert fires == 1 + watcher.REASK_CAP
+    assert [t for t, _ in got].count("StockSage: the trader could not act") == 1, "said once"
+    fresh: dict = {}
+    watcher.tick(fresh, NOW, memory=STOPPED, **args)
+    seeing = dict(STOPPED, trader={"equity": 99.0, "blind": False,
+                                   "last_run": (NOW + timedelta(minutes=3)).isoformat(timespec="minutes")})
+    assert watcher.tick(fresh, NOW + timedelta(minutes=30), memory=seeing, **args) is None
+
+
+def test_the_memory_says_when_the_latest_run_had_no_account_reading():
+    from stocksage import journal as jr
+    runs = jr.parse_runs("RUN | 2026-11-13T12:37Z | 398.77 | 107.53 | v39: held\n"
+                         "RUN | 2026-11-13T14:49Z | 0 | 0 | v39: connectors failed")
+    state = jr.trader_state(runs, datetime(2026, 11, 13, 14, 50, tzinfo=timezone.utc))
+    assert state["blind"] and state["equity"] == 398.77
+    assert not jr.trader_state(runs[:1], datetime(2026, 11, 13, 13, 0, tzinfo=timezone.utc))["blind"]

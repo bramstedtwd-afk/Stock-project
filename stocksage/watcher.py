@@ -111,6 +111,7 @@ MAJOR = re.compile(r"\bCPI\b|Federal Funds Rate|FOMC Statement|Non-Farm Employme
 QUOTE_FAIL_TICKS = 10                           # minutes without one stock price before the phone is told
 ANSWER_WITHIN = timedelta(minutes=20)           # a STOP/LIMIT wake-up should show a run by then
 ANSWER_WITHIN_QUIET = timedelta(minutes=30)     # ...when it had to wait out a scheduled run first
+REASK_CAP = 3                                   # a STOP is asked again this often when the run that answered was blind
 NEWS_EVERY = timedelta(minutes=5)
 MEMORY_EVERY = timedelta(minutes=5)             # new positions and moved stops reach the watcher fast
 BRIEF_EVERY = timedelta(minutes=30)             # each stock's normal daily range comes from the brief
@@ -403,7 +404,7 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
     day = now.astimezone(ET).date().isoformat()
     if state.get("day") != day:
         state.update(day=day, moved={}, dropped=[], market=[], crypto_open={}, limit=False, stopped=[], targeted=[],
-                     neared=[])
+                     neared=[], stop_reasks={})
     events: list[str] = []
     in_hours = stock_hours(now)
     tuned = tuned or {}
@@ -1005,6 +1006,38 @@ def follow_up(state: dict, now: datetime, quote, crypto_quote, post=None) -> lis
     return written
 
 
+def reask_stops(state: dict, now: datetime, memory: dict, push=None) -> list[str]:
+    """A STOP that was answered by a run which could not see the account is not answered.
+    On 2026-11-13 a Claude outage took the trader's broker connection away: the run woken
+    for a touched stop wrote a RUN line with no account value and ended, and because a
+    stop speaks once per level a day nothing asked again until the next hourly run. When
+    the latest run is blind (memory `trader.blind`) and came after the last wake-up, each
+    stop said today is un-said once the cooldown has passed, so `check` asks again while
+    the price is still at or under it. At most REASK_CAP times per stop level a day."""
+    trader = memory.get("trader") or {}
+    said = state.get("stopped") or []
+    ran, fired = _when(trader.get("last_run")), _when(state.get("last_fire"))
+    if not trader.get("blind") or not said or not ran or not fired:
+        return []
+    # RUN lines carry minutes only: a run written in the minute of the wake-up came after it
+    if ran < fired.replace(second=0, microsecond=0) or now - fired < COOLDOWN:
+        return []
+    asked = state.setdefault("stop_reasks", {})
+    again = [k for k in said if asked.get(k, 0) < REASK_CAP]
+    if not again:
+        return []
+    for key in again:
+        asked[key] = asked.get(key, 0) + 1
+    state["stopped"] = [k for k in said if k not in again]
+    names = ", ".join(k.split("@")[0] for k in again)
+    log(f"the run that answered could not see the account: asking again about {names}")
+    if any(asked[k] == 1 for k in again):
+        phone("StockSage: the trader could not act", "A stop was touched in the agentic account and the run "
+              "that answered could not reach the broker. The trader is being asked again. Open Robinhood "
+              "and look at that account yourself.", push)
+    return again
+
+
 def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict, post=None,
          push=None, names=None, ranges: dict | None = None, events: dict | None = None,
          kinds=None) -> str | None:
@@ -1017,6 +1050,7 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
     held = holdings(memory)
     tuned = tuning(memory)
     scheduled = events
+    reask_stops(state, now, memory, push)
     events = check(state, now, held, quote, crypto_quote, news, account=account_view(memory, now), names=names,
                    ranges=ranges, tuned=tuned)
     state["checked"] = now.isoformat()

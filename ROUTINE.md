@@ -1,4 +1,4 @@
-# Agentic Trading Routine — Playbook (v39, 2026-11-12)
+# Agentic Trading Routine — Playbook (v40, 2026-11-13)
 
 The trader's complete operating manual. Read it from the Google Drive folder
 **"StockSage"**, file **exactly "StockSage Routine Playbook.md"** (find the
@@ -6,14 +6,21 @@ folder first, then the file inside it; never a bare title search: stray copies
 elsewhere are stale by definition). State the version you loaded, from this
 header, at the top of every report.
 
+**v40: when a connector will not connect** (section 13). On 2026-11-13 a
+Claude outage answered 502 for Robinhood and Google Drive, and a run woken for
+a touched stop gave up after one look. Now: look for the tools again, three
+times about 30 seconds apart, before giving up; if they stay away, write the
+RUN line with `0 | 0` and say which connection failed. The watcher reads that
+as "not answered" and asks again about a touched stop 20 minutes later. Start
+RUN lines with `v40:`.
+
 **v39: a backstop for when the owner's computer is off** (owner, 2026-11-12;
 sections 2b and 7). Two changes. **Whole shares where the size allows, each
 with a resting stop order** placed in the same run as the buy: that stop
 works at Robinhood with the owner's computer off, the internet down, or you
 out of usage. And **the first command of every run asks whether the watcher
 is alive** (`python -m stocksage.journal watcher`): if it answers WATCHER
-SILENT, you are the only stop until it is back (section 2b). Start RUN lines
-with `v39:`.
+SILENT, you are the only stop until it is back (section 2b).
 
 **v38: the watcher looks wider** (sections 2a and 10). Two more wake-ups:
 **ENTRY** (an idea you rated HIGH or MEDIUM and did not buy has reached the
@@ -168,7 +175,7 @@ app, by changing the loader line to OFF, or by saying "stop" or "pause".
    from the screens, taken or not); a DEPOSIT if the owner added money.
 10. **Housekeeping** on the run starting 10:30-11:30 Eastern (section 11).
 11. **Report** in plain English (section 12), then the **RUN line** last,
-    starting with the playbook version: `v39: held PLD, bought ...`.
+    starting with the playbook version: `v40: held PLD, bought ...`.
 
 ## 2b. When the watcher is silent
 
@@ -640,7 +647,7 @@ Trade Tags.txt" yourself. Times are UTC, e.g. `2026-11-04T15:10Z`.
     IDEA | time | BUY or SELL | TICKER | setup word | price now | [LEVEL] entry <price> stop <price>, why (taken or not)
     DEPOSIT | time | amount (negative for a withdrawal)
     STOP | time | TICKER | new stop price | target price (optional) | why (optional)
-    RUN | time | account value | settled cash | v39: one plain sentence on what this run did
+    RUN | time | account value | settled cash | v40: one plain sentence on what this run did
 
 - **TAG** every filled order, from the confirmed fill. Buys start the why
   with the confidence level and name the stop and the target:
@@ -737,6 +744,19 @@ push anything in the repository.
   positions defensively on live data, no new entries, log as usual, retry
   next run.
 - **Research unreachable** is a degraded run, not an anomaly.
+- **A connector will not connect** (no Robinhood or Google Drive tools when
+  the run starts, or every call answers an error): connections can come up
+  a little after the run does, so look for the tools again, **three times,
+  about 30 seconds apart** (`sleep 30` between looks), before giving up.
+  Robinhood back but Drive not: read this playbook from the repo copy
+  (`ROUTINE.md`) and trade as usual; `python -m stocksage.journal note`
+  reaches Drive by its own route. Robinhood still missing: you cannot see or
+  sell anything, so write the RUN line with `0 | 0` (no reading, never a
+  guess), name the connection that failed, and end the run. On a STOP or
+  LIMIT wake-up also tell the owner's phone to look at the account. Do not
+  wait inside the run any longer than that: the watcher reads a RUN line
+  with no account value as "not answered" and wakes you again about the
+  stop 20 minutes later, up to three times.
 
 ## 14. Moving to a new Robinhood account
 

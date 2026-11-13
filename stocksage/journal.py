@@ -1217,6 +1217,9 @@ def trader_state(runs: list[dict], now: datetime) -> dict:
     eq = [r for r in runs if r["equity"] is not None]
     today = _et_date(now)
     return {"last_run": runs[-1]["at"].isoformat(timespec="minutes"),
+            # no account value on the latest RUN line: that run could not see the account
+            # (a failed broker connection); the watcher asks a touched stop again
+            "blind": runs[-1]["equity"] is None,
             "minutes_since": round((now - runs[-1]["at"]).total_seconds() / 60),
             "runs_today": sum(_et_date(r["at"]) == today for r in runs),
             "last_note": runs[-1]["note"],
