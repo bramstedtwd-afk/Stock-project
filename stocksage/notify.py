@@ -199,7 +199,14 @@ def weekly_watcher(db, wakes: dict, topic: str | None = None, post=None, now: da
         key, last = _watcher_week(now), db.get_meta(WATCHER_WEEK_KEY) or ""
         et = now.astimezone(ZoneInfo("America/New_York"))
         weekend = et.weekday() >= 5 or (et.weekday() == 4 and (et.hour, et.minute) >= (16, 15))
-        if last == key or (not last and not weekend):     # the very first one waits for a Friday close
+        if not last and not weekend:
+            # The very first one waits for a Friday close. The week is written down now, so the
+            # first run AFTER that close sends it: no run happens between Friday 4:15 PM and
+            # Monday on a computer that only publishes on weekday mornings, and without this
+            # the first digest never came (found 2026-11-16).
+            db.set_meta(WATCHER_WEEK_KEY, key)
+            return False
+        if last == key:
             return False
         lines = wake_digest(wakes)
         if not lines:

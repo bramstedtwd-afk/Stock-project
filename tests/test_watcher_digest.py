@@ -86,6 +86,12 @@ def test_one_push_a_week_after_fridays_close_with_counts_only():
     assert notify.weekly_watcher(db, card, TOPIC, post, NOW + timedelta(days=10)), \
         "the computer was off on Friday: sent on its next run"
     assert len(sent) == 2
+    # A computer that only runs on weekday mornings: first seen on a Thursday, next run on Monday.
+    weekday_only = Database(":memory:")
+    assert not notify.weekly_watcher(weekday_only, card, TOPIC, post, thursday)
+    assert notify.weekly_watcher(weekday_only, card, TOPIC, post, NOW + timedelta(days=3)), \
+        "the first digest is not lost because nothing ran over the weekend"
+    assert len(sent) == 3
     url, body, headers = sent[0]
     assert url.endswith(TOPIC) and headers["Title"] == "StockSage: the watcher's week" and headers["Priority"] == "low"
     assert "Wake-ups in the last 7 days: 3" in body
