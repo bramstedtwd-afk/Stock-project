@@ -1393,6 +1393,22 @@ def cmd_publish_drive(args) -> int:
         watchdog.check_trader(once_a_day=state_dir() / "trader_alert_day.txt")
     except Exception as exc:
         print(f"(Trader check skipped: {exc})")
+    if not args.no_broker:   # the always-on computer keeps its own watcher and phone page running
+        try:
+            from . import mobile, watcher
+
+            back = [what for what, alive in (("the trader watcher", watcher.revive()),
+                                             ("the phone page", mobile.revive())) if alive]
+            if back:
+                print(f"(Was not running, started again: {' and '.join(back)}.)")
+                from . import notify
+                from .watchdog import _send
+
+                _send(notify._post, "StockSage restarted itself",
+                      f"{' and '.join(back).capitalize()} had stopped on the always-on computer and "
+                      f"{'were' if len(back) > 1 else 'was'} started again. Nothing for you to do.")
+        except Exception as exc:
+            print(f"(Self-restart check skipped: {exc})")
     if not args.no_broker:   # once a week, from the always-on computer only: what the watcher learned
         try:
             import json as _json

@@ -99,6 +99,9 @@ def _no_real_secrets(monkeypatch, tmp_path):
     for key in list(os.environ):
         if key.startswith(("STOCKSAGE_", "ROBINHOOD_")) and key != "STOCKSAGE_STATE":
             monkeypatch.delenv(key)
+    # The owner's real Startup folder is not this test's: a publish under test must never
+    # find the installed watcher or phone page there and start a real window.
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
 
 
 @pytest.fixture(autouse=True)

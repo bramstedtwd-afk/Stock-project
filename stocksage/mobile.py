@@ -408,6 +408,33 @@ def install() -> int:
     return show_link()
 
 
+def answering(port: int = PORT) -> bool:
+    """Is something listening on the phone page's port on this computer?"""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=2):
+            return True
+    except OSError:
+        return False
+
+
+def revive(start=None, listening=None) -> bool:
+    """Start the phone page again when the owner installed it (Windows Startup file
+    present; `mobile off` removes it) and nothing answers on its port. Called by the
+    scheduled publish job. Never raises; True when it was started."""
+    try:
+        if not sys.platform.startswith("win") or not (startup_dir() / STARTUP_FILE).exists():
+            return False
+        if (listening or answering)():
+            return False
+        if start is not None:
+            return bool(start())
+        subprocess.Popen(["cmd", "/c", "start", "", "/min", start_command()[0], "mobile", "serve"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+
 def off() -> int:
     if sys.platform == "darwin":
         subprocess.run(["launchctl", "unload", str(_plist_path())], capture_output=True)

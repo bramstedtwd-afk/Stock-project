@@ -109,6 +109,11 @@ has gone quiet", once a day) and treats itself as the only stop until the comput
 Before E that took 150 quiet minutes. Your phone also hears "the computer has gone quiet" after 30 business hours.
 The phone page is also off, because this computer serves it.
 
+Since 2026-11-16 the computer also repairs itself: each scheduled publish (five every weekday)
+checks that the watcher and the phone page are running and starts whichever has stopped, then
+tells your phone "StockSage restarted itself". That covers a closed window, not a computer
+that is off.
+
 | | Option | What you get | What it costs or risks |
 |---|---|---|---|
 | **A** | **Stop orders held at Robinhood for whole-share positions.** The trader places a resting stop order right after buying (the playbook already allows it), and prefers a whole share when the position size allows one. | Sells within seconds at the stop, with this computer off, the internet down, or Claude out of usage. No new machine, no cost. | Whole shares only: Robinhood does not hold stop orders for fractional shares, and in a small account most positions are fractional. Works in regular hours only. A stop order sells on a brief dip with no judgement, and after a gap down it sells at the open, wherever that is. The trader must cancel it before selling another way. |

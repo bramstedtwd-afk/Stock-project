@@ -119,6 +119,7 @@ FOLLOW_AFTER = timedelta(minutes=60)            # the price check that grades a 
 FOLLOW_GIVE_UP = timedelta(hours=3)
 BETA = "experimental-cc-routine-2026-04-01"
 HEARTBEAT = timedelta(hours=2)
+REVIVE_AFTER = 300                     # seconds without a state write before the publish job restarts it
 PULSE = timedelta(minutes=5)           # the "still alive" file in Drive; silent for 20 minutes is told
 STARTUP_FILE = "StockSage Watcher.cmd"
 # Brands people write instead of the listed name.
@@ -1344,6 +1345,12 @@ def install() -> int:
     except OSError as exc:
         print(f"Could not set it to start automatically: {exc}")
         return 1
+    _start_window()
+    print("The trader watcher now starts by itself when you sign in, and is starting now in a small window.")
+    return 0
+
+
+def _start_window() -> bool:
     import subprocess
 
     from .mobile import PROJECT_ROOT
@@ -1351,10 +1358,35 @@ def install() -> int:
     try:
         subprocess.Popen(["cmd", "/c", "start", "StockSage watcher", "/min", str(PROJECT_ROOT / "start.bat"),
                           "watch-trader", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
     except OSError:
-        pass
-    print("The trader watcher now starts by itself when you sign in, and is starting now in a small window.")
-    return 0
+        return False
+
+
+def revive(now: float | None = None, start=None) -> bool:
+    """Start the watcher again when it should be running and is not. Called by the
+    scheduled publish job on the always-on computer: on 2026-11-15 its window (and the
+    phone page's) stopped with no restart and no sign-out, and nothing noticed for 19
+    hours. "Should be running" = the owner installed it (the Startup file is there; `off`
+    removes it) and the keys are saved. "Is not" = the state file, written every minute,
+    is older than `REVIVE_AFTER`. Never raises; True when it was started."""
+    from . import finnhub
+
+    try:
+        if not sys.platform.startswith("win") or not (startup_dir() / STARTUP_FILE).exists():
+            return False
+        if any(not os.environ.get(v, "").strip() for v in (URL_VAR, TOKEN_VAR, finnhub.KEY_VAR)):
+            return False
+        path = state_path()
+        quiet = (time.time() if now is None else now) - (path.stat().st_mtime if path.exists() else 0)
+        if quiet <= REVIVE_AFTER:
+            return False
+        if not (start or _start_window)():
+            return False
+        log(f"was not running (last sign of life {quiet / 60:.0f} minutes ago): started again by the publish job")
+        return True
+    except Exception:
+        return False
 
 
 def off() -> int:
