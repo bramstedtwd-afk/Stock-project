@@ -30,6 +30,44 @@ SESSION_SECONDS = 30 * 24 * 60 * 60
 # robin_stocks says this in the response when it reused the cached session
 # instead of authenticating. Version-tolerant substring, not an exact match.
 REUSE_MARKER = "logged in using authentication"
+# Commands the owner runs at the computer (they can approve a sign-in on the phone). Anything
+# else (the scheduled publish and daily runs) does not try again for a while after a failure.
+OWNER_TRIGGERS = {"portfolio", "doctor", "switch-login", "setup", "app", "web", "phone", "cli", "dashboard"}
+LOGIN_BACKOFF_HOURS = 3
+
+
+def _failure_path():
+    from .journal import state_dir
+
+    return state_dir() / "robinhood_login_failed.txt"
+
+
+def _recent_failure(now=None):
+    """When the last sign-in failed, if within LOGIN_BACKOFF_HOURS; else None."""
+    from datetime import datetime, timedelta, timezone
+
+    try:
+        at = datetime.fromisoformat(_failure_path().read_text(encoding="utf-8").strip())
+    except Exception:
+        return None
+    now = now or datetime.now(timezone.utc)
+    return at if now - at < timedelta(hours=LOGIN_BACKOFF_HOURS) else None
+
+
+def _note_failure() -> None:
+    from datetime import datetime, timezone
+
+    try:
+        _failure_path().write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _clear_failure() -> None:
+    try:
+        _failure_path().unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 @dataclass
@@ -183,6 +221,13 @@ class RobinhoodClient:
             log.warning("robin_stocks not installed — run: pip install robin_stocks pyotp")
             return False
         trigger = trigger or os.environ.get("STOCKSAGE_TRIGGER") or "unknown"
+        if trigger not in OWNER_TRIGGERS and _recent_failure() is not None:
+            # A scheduled run cannot approve a sign-in. On 2026-11-17 five of them in a row each
+            # sent a fresh sign-in with an approval request, and Robinhood answered the owner's own
+            # attempt with "429 Too Many Requests". Scheduled runs now wait it out.
+            log.warning("Robinhood sign-in skipped: one failed in the last %d hours; run .\\start.bat portfolio "
+                        "and approve the sign-in on your phone", LOGIN_BACKOFF_HOURS)
+            return False
         mfa_code = None
         secret = os.environ.get("ROBINHOOD_MFA_SECRET")
         if secret:
@@ -200,7 +245,12 @@ class RobinhoodClient:
                 expiresIn=SESSION_SECONDS,
                 store_session=True,
             )
+            if not (result or {}).get("access_token") and REUSE_MARKER not in str((result or {}).get("detail", "")):
+                # robin_stocks prints "Login failed" and returns nothing instead of raising when
+                # the device approval does not come through: that is a failure, not a session.
+                raise RuntimeError("Robinhood did not complete the sign-in (approval not received)")
             self._logged_in = True
+            _clear_failure()
             # A reused token is silent at Robinhood's end; a fresh sign-in is
             # what sends the owner an alert and can raise a new-device
             # challenge. Logging which one happened is the whole point.
@@ -215,6 +265,7 @@ class RobinhoodClient:
             return True
         except Exception as exc:
             log.error("Robinhood login failed: %s", exc)
+            _note_failure()
             security.record_access(
                 security.LOGIN_FAILED, trigger, type(exc).__name__
             )

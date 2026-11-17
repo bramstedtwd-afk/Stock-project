@@ -348,3 +348,21 @@ def test_no_broker_publishes_and_grades_without_a_session(tmp_path, monkeypatch)
     assert stats["broker_skipped"] is True
     assert stats["graded"] == 3
     engine.db.close()
+
+
+def test_a_signin_that_was_never_approved_is_a_failure_and_scheduled_runs_wait(state, creds, fake_rh, monkeypatch):
+    """2026-11-17: robin_stocks printed "Login failed" and returned nothing; that counted as a
+    sign-in, and five scheduled runs each sent a new approval request until Robinhood
+    answered the owner's own attempt with 429 Too Many Requests."""
+    from stocksage import robinhood
+    from stocksage.robinhood import RobinhoodClient
+
+    monkeypatch.setattr(security, "harden_file", lambda path: True)
+    rh = fake_rh(None)
+    assert RobinhoodClient().login(trigger="publish-drive") is False
+    assert security.recent_access()[0]["event"] == security.LOGIN_FAILED
+    assert RobinhoodClient().login(trigger="publish-drive") is False and len(rh.calls) == 1, "waits it out"
+    rh.result = {"access_token": "x"}
+    assert RobinhoodClient().login(trigger="portfolio") is True and len(rh.calls) == 2, "the owner can always try"
+    assert robinhood._recent_failure() is None, "a good sign-in clears the wait"
+    assert RobinhoodClient().login(trigger="publish-drive") is True
