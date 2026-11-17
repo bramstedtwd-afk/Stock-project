@@ -1,10 +1,20 @@
-# Agentic Trading Routine — Playbook (v40, 2026-11-13)
+# Agentic Trading Routine — Playbook (v41, 2026-11-17)
 
 The trader's complete operating manual. Read it from the Google Drive folder
 **"StockSage"**, file **exactly "StockSage Routine Playbook.md"** (find the
 folder first, then the file inside it; never a bare title search: stray copies
 elsewhere are stale by definition). State the version you loaded, from this
 header, at the top of every report.
+
+**v41: one trader, all day** (owner, 2026-11-17; sections 2, 7 and 8). A
+good opportunity is a good opportunity before the open, in the session or after
+the close: every run follows the same steps and may buy or sell, whatever the
+clock. What changes outside 9:30-4:00 is only HOW you trade: whole shares,
+limit orders, extended hours (the table in section 8). So buy whole shares
+whenever they fit, and the position can be managed in every session. The
+watcher now sees pre-market and after-hours prices and watches whole-share
+positions (STOP, NEAR, TARGET, HALFWAY, MOVE) and ideas' entries from 7:00 AM
+to 8:00 PM. Start RUN lines with `v41:`.
 
 **v40: when a connector will not connect** (section 13). On 2026-11-13 a
 Claude outage answered 502 for Robinhood and Google Drive, and a run woken for
@@ -141,6 +151,11 @@ app, by changing the loader line to OFF, or by saying "stop" or "pause".
 
 ## 2. Each run, in order
 
+The same steps on every run, scheduled or woken, at 7:35 AM or 6:35 PM:
+outside 9:30-4:00 you still look for setups and may buy, using the
+session's way of trading (section 8). "After hours, so no trades" is not a
+reason; "no setup qualified" or "nothing fits as whole shares" is.
+
 1. **Load and pull.** `python -m stocksage.journal watcher` first (is the
    owner's watcher alive? WATCHER SILENT: section 2b). Playbook version; the brief ("StockSage Brief.json",
    same folder rule); the trade memory ("StockSage Trade Memory.json"). Pull
@@ -175,7 +190,7 @@ app, by changing the loader line to OFF, or by saying "stop" or "pause".
    from the screens, taken or not); a DEPOSIT if the owner added money.
 10. **Housekeeping** on the run starting 10:30-11:30 Eastern (section 11).
 11. **Report** in plain English (section 12), then the **RUN line** last,
-    starting with the playbook version: `v40: held PLD, bought ...`.
+    starting with the playbook version: `v41: held PLD, bought ...`.
 
 ## 2b. When the watcher is silent
 
@@ -263,7 +278,9 @@ first and fast:
    decide to hold through the report or sell before the close, and say
    which and why in the RUN line; holding through needs evidence that
    covers it (section 3), a fractional position cannot be sold after 4:00
-   PM, and its stop will not protect it against a gap. *A major release*
+   PM, and its stop will not protect it against a gap. A whole-share
+   position can be sold after the report, 4:00-8:00 PM, and the watcher
+   wakes you if it gaps through its stop then. *A major release*
    (CPI, the Fed's decision, payrolls, core PCE; asked 15-60 minutes ahead
    in the session, or the afternoon before a pre-market one): check every
    stop is on record and how much of the account is at risk, tighten or
@@ -495,11 +512,14 @@ parked in SPY or SGOV), `inverse`, `defensive`, `bounce`, `social`; crypto:
 ## 7. Day-trading mechanics
 
 - **Cadence and stops.** You run about hourly; between runs the owner's
-  watcher checks every minute. **Prefer whole shares:** when the planned
-  dollars buy at least one whole share and rounding to whole shares keeps the
-  position within about a fifth of the planned size, buy whole shares only
-  (no fractional top-up: a resting stop covers whole shares only). Otherwise
-  buy fractional as before. **Every whole-share position carries a resting
+  watcher checks every minute. **Prefer whole shares:** they trade in every
+  session and carry a resting stop. When the planned dollars buy at least one
+  whole share and rounding to whole shares keeps the position within about a
+  fifth of the planned size, buy whole shares only (no fractional top-up).
+  Otherwise, in the regular session, buy fractional as before (it can then
+  only be managed 9:30-4:00). Outside 9:30-4:00 only whole shares can be
+  bought: round down; when not one share fits the size, pass and write the
+  IDEA with `entry <price>` for the open. **Every whole-share position carries a resting
   stop order** (`stop_market`; `gfd` for a same-day trade, `gtc` for longer),
   placed in the same run right after the fill is confirmed, at the stop named
   in the buy's why. It sells at Robinhood within seconds, with the owner's
@@ -511,7 +531,10 @@ parked in SPY or SGOV), `inverse`, `defensive`, `bounce`, `social`; crypto:
   review and quote check apply to it like any order. Fractional shares
   cannot carry one: their
   stop is the one named in the buy's why (`stop 276.50`), and the watcher
-  wakes you the minute it is touched during the regular session. When you
+  wakes you the minute it is touched during the regular session. Outside
+  9:30-4:00 a resting stop order does not trigger; for whole shares the
+  watcher is the stop then (7:00 AM-8:00 PM): on a STOP wake-up, sell with a
+  limit order (section 8). When you
   move a stop (or set one on a position that has none), write a STOP line
   (section 10) or the watcher keeps guarding the old level. Every crypto buy
   gets a resting `stop_loss` (`gtc`) right after it fills.
@@ -527,22 +550,37 @@ parked in SPY or SGOV), `inverse`, `defensive`, `bounce`, `social`; crypto:
   pre-market highs/lows, spread and liquidity. The first 30 minutes are the
   wildest, midday is often choppy, the last hour moves again.
 - **The last run before the 4:00 PM Eastern close** decides, for every open
-  trade, whether it stays overnight, and says why.
+  trade, whether it stays overnight, and says why. Fractional positions are
+  stuck from 4:00 PM to 9:30 AM; whole shares can still be sold until 8:00 PM
+  and from 7:00 AM.
 - No averaging down a loser; no chasing an extended run without a pullback.
 - Fills for fractional or dollar buys are market orders; for whole shares
   use limits. The quote check (hard rule 3) is the safety net either way.
 
 ## 8. Outside market hours and falling markets
 
-**Extended and overnight sessions** (Eastern: pre-market 7:00-9:30 AM,
-after-hours 4:00-8:00 PM, overnight 8:00 PM-4:00 AM Sunday to Friday night):
-limit orders only, with `market_hours` `extended_hours` or `all_day_hours`;
-whole shares only (fractional positions cannot be sold outside 9:30-4:00);
-check `get_equity_tradability` (needs `all_day_tradability: tradable`);
-buy at or just above the ask, sell at or just below the bid, never more than
-0.5% through the last trade, and skip if the spread is over 1%. Use them for
-earnings and big news released outside the session, not routine trading.
-Add "after-hours" or "overnight" to the why.
+**How to trade in each session** (Eastern time). Same setups, same
+confidence command, same sizes, same stops, same notes in every session; only
+the order changes:
+
+| Session | Your runs | What you can trade | The order | The stop |
+|---|---|---|---|---|
+| Pre-market 7:00-9:30 AM | 7:35, 8:35 + wake-ups | Whole shares | Limit, `market_hours` `extended_hours` | The watcher (STOP wake-up); the resting order waits for 9:30 |
+| Regular 9:30 AM-4:00 PM | Hourly + wake-ups | Whole or fractional | Whole: limit. Fractional/dollars: market | Resting stop order (whole shares); the watcher (fractional) |
+| After-hours 4:00-8:00 PM | 4:35, 5:35, 6:35 + wake-ups to 8:00 | Whole shares | Limit, `market_hours` `extended_hours` | The watcher (STOP wake-up); the resting order waits for 9:30 |
+| Overnight 8:00 PM-4:00 AM | None | Nothing new | Do not leave an order working overnight | Unwatched: hold only what you would hold through a gap |
+
+Outside 9:30-4:00: buy at or just above the ask, sell at or just below the
+bid, never more than 0.5% through the last trade, and skip when the spread is
+over 1% (most liquid names qualify; thin small caps often do not). A buy
+limit that has not filled by the next run is cancelled or re-priced, never
+left to chase. Extended-hours orders expire at 8:00 PM. Leave the resting
+`stop_market` order in place (it covers the next regular session) and, when a
+STOP wake-up tells you a whole-share position broke its stop after hours,
+sell it with a limit order and cancel the resting one. Earnings reactions and
+news after the close are the main chance here: the report is out, so judge
+the reaction like any setup, with the confidence command. Add "pre-market"
+or "after-hours" to the why.
 
 **When the market falls** (a cash account cannot short, borrow or use margin):
 1. **Lose less**: in a `down` regime tighten stops on longs, never add to losers.
@@ -647,7 +685,7 @@ Trade Tags.txt" yourself. Times are UTC, e.g. `2026-11-04T15:10Z`.
     IDEA | time | BUY or SELL | TICKER | setup word | price now | [LEVEL] entry <price> stop <price>, why (taken or not)
     DEPOSIT | time | amount (negative for a withdrawal)
     STOP | time | TICKER | new stop price | target price (optional) | why (optional)
-    RUN | time | account value | settled cash | v40: one plain sentence on what this run did
+    RUN | time | account value | settled cash | v41: one plain sentence on what this run did
 
 - **TAG** every filled order, from the confirmed fill. Buys start the why
   with the confidence level and name the stop and the target:

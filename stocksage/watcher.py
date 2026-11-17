@@ -480,8 +480,8 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
             if basis:
                 day_pnl += lot["shares"] * (price - basis)
         stop, target = h.get("stop"), h.get("target")
-        if not crypto and not regular_session(now):
-            stop = target = None                # a fractional position cannot be sold now: tell the run that can
+        if not crypto and not regular_session(now) and (h.get("shares") or 0) < 1:
+            stop = target = None                # fractional: cannot be sold outside 9:30-4:00, tell the run that can
         if stop and price <= stop and f"{t}@{stop:g}" not in state.setdefault("stopped", []):
             state["stopped"].append(f"{t}@{stop:g}")
             events.insert(0, f"STOP: {t} at {_p(price)} has touched its stop {_p(stop)}"
@@ -620,8 +620,9 @@ def entry_events(state: dict, now: datetime, memory: dict, held: list[dict], quo
         row = {"entry": entry, "direction": i["direction"], "level": i["level"], "setup": i.get("setup"),
                "expires": i.get("expires"), "waiting": why_not}
         rows[t] = row
-        if not crypto and not regular_session(now):
-            continue                                  # a new stock position is opened in the regular session
+        extended = not crypto and not regular_session(now)
+        if extended and not stock_hours(now):
+            continue                                  # 8 PM-7 AM: no stock prices are watched
         try:
             price = crypto_quote(t) if crypto else (_fresh(quote(t), now) or {}).get("price")
         except Exception:
@@ -629,6 +630,11 @@ def entry_events(state: dict, now: datetime, memory: dict, held: list[dict], quo
         if not price:
             continue
         row.update(price=price, at=now.isoformat())
+        if extended and free and float((memory.get("trader") or {}).get("cash") or 0) < price:
+            # Outside 9:30-4:00 only whole shares trade: an idea one share of which the free cash
+            # cannot buy waits for the open, where a fractional buy is possible.
+            row["waiting"] = "outside 9:30-4:00 only whole shares trade, and one share costs more than the free cash"
+            continue
         seen_at[t] = price
         key = f"{t}@{entry:g}"
         if key in done:
@@ -650,7 +656,8 @@ def entry_events(state: dict, now: datetime, memory: dict, held: list[dict], quo
                           f"{i.get('setup') or 'buy'} idea from {_idea_when(i.get('at'))}"
                           + (f" (its stop was {_p(i['stop'])})" if i["stop"] else "")
                           + ", and settled cash is free: re-score it with the confidence command and buy only if "
-                            "it still qualifies")
+                            "it still qualifies"
+                          + (" (outside 9:30-4:00: whole shares, limit order, extended hours)" if extended else ""))
     return events
 
 
@@ -1170,11 +1177,53 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
     return text
 
 
+def yahoo_quote(symbol: str, fetch=None) -> dict | None:
+    """The latest trade INCLUDING pre-market and after-hours, from Yahoo's chart (no key, no
+    account). The free Finnhub quote stops at the 4:00 PM close: on 2026-11-16 it read TSN
+    63.95 at 4:51 and at 5:51 PM while the stock traded 63.80. Same shape as finnhub.quote;
+    `day_change` is against the previous regular close, as during the day. None when unknown."""
+    import urllib.request
+
+    url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}"
+           "?interval=1m&range=1d&includePrePost=true")
+    try:
+        if fetch is None:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read().decode("utf-8"))
+        else:
+            data = fetch(url)
+        res = data["chart"]["result"][0]
+        meta = res.get("meta") or {}
+        stamps = res.get("timestamp") or []
+        closes = ((res.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
+        last = [(s, c) for s, c in zip(stamps, closes) if c]
+        if not last:
+            return None
+        at, price = last[-1]
+        prev = float(meta.get("previousClose") or meta.get("chartPreviousClose") or 0) or None
+        return {"symbol": symbol.upper(), "price": round(float(price), 4), "prev_close": prev,
+                "day_change": round(float(price) / prev - 1, 4) if prev else 0.0,
+                "at": datetime.fromtimestamp(int(at), tz=timezone.utc).isoformat(), "source": "yahoo"}
+    except Exception:
+        return None
+
+
+def session_quote(t: str, now: datetime, finnhub_quote, yahoo=None) -> dict | None:
+    """Finnhub in the regular session; outside it Yahoo first (it carries pre-market and
+    after-hours trades), Finnhub when Yahoo has nothing."""
+    if not regular_session(now):
+        q = (yahoo or yahoo_quote)(t)
+        if q:
+            return q
+    return finnhub_quote(t)
+
+
 def _sources():
     from . import finnhub
 
     def quote(t):
-        return finnhub.quote(t)
+        return session_quote(t, datetime.now(timezone.utc), finnhub.quote)
 
     def news(t):
         return finnhub.company_news(t, days=1)
