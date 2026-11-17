@@ -315,3 +315,19 @@ def test_the_committed_snapshot_in_this_repo_is_clean():
     counts = _counts(SNAPSHOT_PATH)
     for table in PRIVATE_TABLES:
         assert counts.get(table, 0) == 0, f"{table} in the committed snapshot has real data"
+
+
+def test_a_word_in_another_brain_never_replaces_a_dated_setting(tmp_path):
+    # 2026-11-16: a placeholder sorted above the real week key, came back from the Drive
+    # snapshot on every publish and sent the weekly watcher digest six times in a day.
+    local, other = tmp_path / "local.db", tmp_path / "other.db"
+    a, b = Database(local), Database(other)
+    a.set_meta("watcher_week_sent", "2026-W46")
+    a.set_meta("last_daily_run", "2026-11-16")
+    b.set_meta("watcher_week_sent", "first-week-missed")
+    b.set_meta("last_daily_run", "2026-11-17")
+    a.close(), b.close()
+    brain.merge_brains(local, other)
+    merged = Database(local)
+    assert merged.get_meta("watcher_week_sent") == "2026-W46"
+    assert merged.get_meta("last_daily_run") == "2026-11-17", "a newer date still wins"

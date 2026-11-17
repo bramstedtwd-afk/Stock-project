@@ -228,7 +228,11 @@ def merge_brains(dest_path: str | Path, src_path: str | Path) -> dict:
                 dest.set_meta(key, incoming)
             elif key == "warmup_samples":
                 dest.set_meta(key, str(max(int(current), int(incoming))))
-            elif incoming > current:  # ISO dates compare correctly as strings
+            elif incoming > current and incoming[:1].isdigit() == current[:1].isdigit():
+                # ISO dates and week keys compare correctly as strings. A word never replaces
+                # a date: on 2026-11-16 a placeholder ("first-week-missed") sorted above the
+                # real week key, came back from the Drive snapshot on every publish and sent
+                # the weekly digest six times in a day.
                 dest.set_meta(key, incoming)
         conn.commit()
     finally:
