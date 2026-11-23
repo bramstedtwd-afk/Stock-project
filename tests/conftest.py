@@ -54,6 +54,10 @@ def _no_internet(monkeypatch):
     Every outside connection now fails loudly; localhost (the phone page's own server) works."""
     import socket
 
+    # A proxy on localhost (cloud sandboxes route all traffic through one) would let every
+    # request through the localhost exception below: no test uses a proxy.
+    for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(var, raising=False)
     real_connect, real_connect_ex, real_getaddrinfo = socket.socket.connect, socket.socket.connect_ex, socket.getaddrinfo
 
     def blocked(host):

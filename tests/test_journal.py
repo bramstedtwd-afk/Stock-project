@@ -605,3 +605,23 @@ def test_switch_login_reads_the_traders_account_even_when_robinhood_leaves_it_ou
     assert cli.cmd_switch_login(argparse.Namespace()) == 0
     out = capsys.readouterr().out
     assert "reads fine" in out and "not under this login" not in out
+
+
+def test_the_record_says_what_works_what_loses_and_what_is_leaning():
+    s = {"by_setup": {"pullback": {"trades": 12, "avg_adj": 0.011, "t": 2.9, "verdict": "working: keep doing it",
+                                   "win_rate": 0.66},
+                      "untagged": {"trades": 29, "avg_adj": 0.007, "t": 0.5, "verdict": "no clear edge yet"}},
+         "ideas": {"by_setup": {"momentum": {"ideas": 68, "avg_5d": -0.017, "t": -3.1, "right": 0.4,
+                                             "verdict": "losing money: do less of this"},
+                                "defensive": {"ideas": 18, "avg_5d": 0.016, "t": 2.1, "right": 0.71,
+                                              "verdict": "too few to judge (18 of 20 ideas)"}},
+                   "by_condition": {"jump": {"ideas": 25, "avg_5d": -0.02, "t": -2.8, "right": 0.36,
+                                             "verdict": "losing money: do less of this"}}}}
+    w = jr.wisdom(s)
+    assert w["do_more"][0].startswith("'pullback' trades: +1.1%")
+    assert any("momentum" in x for x in w["do_less"]) and any("after a 5%+ jump" in x for x in w["do_less"])
+    assert w["leaning"] and "defensive" in w["leaning"][0] and "leaning right" in w["leaning"][0]
+    assert not any("untagged" in x for x in w["do_more"] + w["leaning"])
+    assert "Lean into: 'pullback' trades" in w["line"]
+    assert "WHAT THE RECORD SAYS" in "\n".join(jr._wisdom_lines(w))
+    assert "Nothing is proven" in jr.wisdom({})["line"]

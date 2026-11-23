@@ -106,6 +106,8 @@ def _num(value, allow_zero: bool = False) -> float | None:
 
 SETUP_WORDS = ("breakout", "pullback", "momentum", "gap", "news", "earnings", "reversal", "brain", "index", "inverse",
                "defensive", "bounce", "social",
+               # the information edge (playbook v42 section 6b): public facts read in full, graded as ideas first
+               "filing", "guidance", "insider", "congress",
                "trend", "fear", "meme",
                "target", "stop", "thesis", "time", "close", "rotate", "profit")
 
@@ -738,6 +740,16 @@ def idea_watch(text: str, open_tickers=(), now: datetime | None = None) -> list[
     return sorted(out, key=lambda i: (i["level"] != "HIGH", -_ts(i["at"]).timestamp()))[:IDEA_WATCH_MAX]
 
 
+JUMP_AT = 0.05      # a buy idea priced 5%+ above the last close is a buy after a jump (a chase)
+
+
+def idea_condition(move: float) -> str:
+    """What the stock had just done when a buy was considered: `jump` (5%+ above the last
+    close), `drop` (5%+ below it) or `calm`. Graded separately, so the record says whether
+    buying right after a big move works, instead of a rule assuming it."""
+    return "jump" if move >= JUMP_AT else "drop" if move <= -JUMP_AT else "calm"
+
+
 def grade_ideas(ideas: list[dict], history, spy=None, now: datetime | None = None) -> dict:
     """Each idea's move over 1 and 5 trading days from its stated price, in the idea's
     direction and (for stocks) against SPY. `history(ticker)` returns daily closes."""
@@ -765,7 +777,11 @@ def grade_ideas(ideas: list[dict], history, spy=None, now: datetime | None = Non
         day = pd.Timestamp(_et_date(idea["at"])).to_datetime64()
         first_after = int(np.searchsorted(idx, day, side="right"))      # first close strictly after the idea's day
         row = {"ticker": t, "setup": idea["setup"], "confidence": idea["confidence"], "side": idea["side"],
-               "setup_regime": f"{idea['setup']}|{regime_before(spy_arr, idea['at'])}" if spy_arr else None}
+               "setup_regime": f"{idea['setup']}|{regime_before(spy_arr, idea['at'])}" if spy_arr else None,
+               "condition": None}
+        prev = int(np.searchsorted(idx, day, side="left")) - 1           # the last close before the idea's day
+        if idea["side"] == "buy" and prev >= 0 and vals[prev] > 0:
+            row["condition"] = idea_condition(idea["price"] / float(vals[prev]) - 1)
         sign = 1 if idea["side"] == "buy" else -1
         for h in IDEA_HORIZONS:
             if len(vals) - first_after < h:
@@ -782,7 +798,7 @@ def grade_ideas(ideas: list[dict], history, spy=None, now: datetime | None = Non
 
     def group(key):
         out = {}
-        for k in sorted({g[key] for g in graded}):
+        for k in sorted({g[key] for g in graded if g.get(key) is not None}):
             rows = [g for g in graded if g[key] == k and "d5" in g]
             if rows:
                 vals = [r["d5"] for r in rows]
@@ -793,7 +809,10 @@ def grade_ideas(ideas: list[dict], history, spy=None, now: datetime | None = Non
         return out
 
     day1 = [g["d1"] for g in graded]
+    conditions = group("condition")
+    conditions.pop(None, None)
     return {"graded": len(graded), "by_setup": group("setup"), "by_confidence": group("confidence"),
+            "by_condition": conditions,
             "by_setup_regime": group("setup_regime") if spy is not None else {},
             "day1": {"ideas": len(day1), "avg": round(sum(day1) / len(day1), 4) if day1 else None,
                      "right": round(sum(v > 0 for v in day1) / len(day1), 2) if day1 else None},
@@ -1305,6 +1324,7 @@ def render_text(summary: dict) -> str:
     """The phone report: confidence first, then the trader's pulse, then every trade's reasons."""
     lines = [f"STOCKSAGE TRADES  ({summary.get('account') or 'agentic account'}, updated {_et(summary['as_of'])})",
              "", "CONFIDENCE", "  " + summary["confidence"]["line"], ""]
+    lines += _wisdom_lines(summary.get("wisdom"))
     t = summary.get("trader") or {}
     lines.append("TRADER")
     if not t.get("last_run"):
@@ -1360,7 +1380,10 @@ def render_text(summary: dict) -> str:
                          "vs the market (early read; the 5-day grades below are the ones that count)")
         if not ideas.get("by_setup"):
             lines.append("  no idea is 5 trading days old yet: per-setup grades start then")
-        for k, st in list(ideas.get("by_setup", {}).items()) + [(f"[{k}]", v) for k, v in ideas.get("by_confidence", {}).items()]:
+        cond_words = {"jump": "buy after a jump", "drop": "buy after a drop", "calm": "buy, calm day"}
+        for k, st in (list(ideas.get("by_setup", {}).items())
+                      + [(f"[{k}]", v) for k, v in ideas.get("by_confidence", {}).items()]
+                      + [(cond_words.get(k, k), v) for k, v in (ideas.get("by_condition") or {}).items()]):
             lines.append(f"  {k:<12}{st['ideas']:>4} ideas, right {st['right'] * 100:.0f}%, avg {_pct(st['avg_5d'])}: {st['verdict']}")
     for name in ("by_asset", "by_confidence", "by_play", "by_style", "by_setup", "by_exit"):
         if summary.get(name) and (name not in ("by_asset", "by_confidence") or len(summary[name]) > 1):
@@ -1451,6 +1474,84 @@ def _with_ideas(summary: dict, engine, tags_text: str, previous: dict | None = N
     return summary
 
 
+LEAN_T = 1.5          # not proven yet, but leaning: worth knowing, not yet worth sizing on
+WISDOM_MAX = 6
+
+
+def wisdom(summary: dict) -> dict:
+    """What the record says, in plain words: what is working (lean into it), what is losing
+    (do less), and what is leaning either way but not proven yet. Built from the trades AND
+    the graded ideas, per setup, per setup in each kind of market, by what the stock had
+    just done, and by confidence level. It grows by itself: every closed trade and every
+    idea graded five days later moves it. The trader reads it at the start of every run;
+    the confidence command already scores from the same groups."""
+    rows = []
+    cond = {"jump": "buys right after a 5%+ jump", "drop": "buys right after a 5%+ drop",
+            "calm": "buys on a calm day"}
+
+    def label(name, key, kind):
+        if name == "by_setup_regime":
+            setup, _, reg = key.partition("|")
+            return f"'{setup}' {kind} in a {reg} market"
+        if name == "by_condition":
+            return f"{cond.get(key, key)} ({kind})"
+        if name == "by_confidence":
+            return f"[{key}] {kind}"
+        if name == "by_play":
+            return f"{key} {kind}"
+        return f"'{key}' {kind}"
+
+    for name in ("by_setup", "by_setup_regime", "by_play", "by_confidence"):
+        for k, g in (summary.get(name) or {}).items():
+            if k == "untagged" or k.startswith("untagged|") or not g.get("trades"):
+                continue
+            avg = g.get("avg_adj") if g.get("avg_adj") is not None else g.get("avg_return")
+            rows.append({"label": label(name, k, "trades"), "n": g["trades"], "bar": MIN_TO_JUDGE, "avg": avg,
+                         "t": g.get("t"), "verdict": g.get("verdict", ""), "right": g.get("win_rate"),
+                         "unit": "a trade"})
+    ideas = summary.get("ideas") or {}
+    for name in ("by_setup", "by_setup_regime", "by_condition", "by_confidence"):
+        for k, g in (ideas.get(name) or {}).items():
+            if not g.get("ideas"):
+                continue
+            rows.append({"label": label(name, k, "ideas"), "n": g["ideas"], "bar": MIN_IDEAS, "avg": g.get("avg_5d"),
+                         "t": g.get("t"), "verdict": g.get("verdict", ""), "right": g.get("right"),
+                         "unit": "over 5 days"})
+
+    def say(r):
+        right = f", right {r['right'] * 100:.0f}%" if r.get("right") is not None else ""
+        return f"{r['label']}: {_pct(r['avg'])} vs the market {r['unit']} ({r['n']}{right})"
+
+    def strength(r):
+        return abs(r.get("t") or 0)
+
+    more = sorted((r for r in rows if r["verdict"].startswith("working")), key=strength, reverse=True)
+    less = sorted((r for r in rows if r["verdict"].startswith("losing")), key=strength, reverse=True)
+    lean = sorted((r for r in rows if not r["verdict"].startswith(("working", "losing"))
+                   and r["n"] >= r["bar"] / 2 and abs(r.get("t") or 0) >= LEAN_T), key=strength, reverse=True)
+    out = {"do_more": [say(r) for r in more[:WISDOM_MAX]], "do_less": [say(r) for r in less[:WISDOM_MAX]],
+           "leaning": [say(r) + (" (leaning right)" if (r.get("t") or 0) > 0 else " (leaning wrong)")
+                       for r in lean[:WISDOM_MAX]]}
+    if out["do_more"] or out["do_less"]:
+        out["line"] = ("Lean into: " + ("; ".join(r["label"] for r in more[:3]) or "nothing proven yet")
+                       + ". Do less: " + ("; ".join(r["label"] for r in less[:3]) or "nothing proven losing") + ".")
+    else:
+        out["line"] = "Nothing is proven either way yet: size from the evidence and keep writing ideas."
+    return out
+
+
+def _wisdom_lines(w: dict | None) -> list[str]:
+    if not w:
+        return []
+    lines = ["WHAT THE RECORD SAYS (it grows with every trade and every graded idea)", "  " + w["line"]]
+    for key, head in (("do_more", "Working, lean into it:"), ("do_less", "Losing, do less of it:"),
+                      ("leaning", "Leaning, not proven yet:")):
+        if w.get(key):
+            lines.append(f"  {head}")
+            lines += [f"    {x}" for x in w[key]]
+    return lines + [""]
+
+
 def state_dir():
     """Same folder as today.state_dir, without importing the sheet's dependencies."""
     import os
@@ -1461,6 +1562,10 @@ def state_dir():
 
 
 def _save_and_publish(summary: dict, upload: bool) -> None:
+    try:
+        summary["wisdom"] = wisdom(summary)
+    except Exception as exc:               # a summary of the record never blocks the record
+        log.warning("wisdom not built: %s", exc)
     text, report = json.dumps(summary, indent=1), render_text(summary)
     try:
         folder = state_dir()

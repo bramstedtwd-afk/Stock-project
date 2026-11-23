@@ -1088,6 +1088,37 @@ def cmd_insiders(args) -> int:
     return 0
 
 
+def cmd_congresslab(args) -> int:
+    """Do senators' disclosed stock purchases beat the market? (Senate filings 2014-2020)"""
+    import pandas as pd
+
+    from . import congresslab, earnings, research, today
+
+    base = today.state_dir()
+    print("Congress lab: every stock purchase senators disclosed electronically, 2014-2020, bought only")
+    print("once the filing was public. The first run downloads the filings and prices (a few minutes).\n")
+    try:
+        uni = earnings.load_universe(base / "sp500.csv")
+        px = earnings.load_prices(sorted(set(uni["ticker"])) + ["SPY"] + list(earnings.SECTOR_ETF.values()),
+                                  base / "eq_prices.parquet")
+        buys = congresslab.load_trades(base / "senate_buys.parquet", source=args.source)
+    except Exception as exc:
+        print(f"Could not get the data: {exc}")
+        return 1
+    cash = pd.Series(0.0, index=px.index)
+    try:
+        etf = research.load_prices(base / "research_prices.parquet")
+        cash = etf[research.CASH].pct_change().reindex(px.index).fillna(0.0)
+    except Exception:
+        pass
+    ev = congresslab.build_events(buys, uni, px)
+    print(f"{len(buys):,} disclosed purchases; {len(ev):,} filing days at today's S&P 500 companies.\n")
+    res = congresslab.run(ev, px, cash, uni, draws=args.draws)
+    print("\n".join(congresslab.describe(res, top=args.top)))
+    _save_lab("congress", res, earnings.strong(res["rows"]))
+    return 0
+
+
 def cmd_analogs(args) -> int:
     """Build the look-alike history that lets a BUY be stated plainly."""
     from . import backtest
@@ -2120,6 +2151,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--draws", type=int, default=2000)
     p.add_argument("--top", type=int, default=15)
     p.set_defaults(func=cmd_earnings)
+
+    p = sub.add_parser("congresslab", help="do senators' disclosed stock purchases beat the market?")
+    p.add_argument("--source", default=None, help="a folder with the Senate data set (instead of downloading it)")
+    p.add_argument("--draws", type=int, default=2000)
+    p.add_argument("--top", type=int, default=21)
+    p.set_defaults(func=cmd_congresslab)
 
     p = sub.add_parser("insiders", help="do officers and directors buying their own stock predict anything?")
     p.add_argument("--contact", help="your email, which the SEC requires with each download (saved in .env)")

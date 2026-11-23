@@ -105,3 +105,34 @@ def test_parking_cash_is_not_scored_and_a_wash_sale_is_noted():
     w = cf.for_trade("GOOGL", "bounce", memory={"recent": [{"ticker": "GOOGL", "pnl": -2.45, "closed": sold}]})
     assert any("wash sale" in x for x in w["reasons"])
     assert not any("wash sale" in x for x in cf.for_trade("MSFT", "bounce", memory={})["reasons"])
+
+
+def test_a_buy_after_a_big_jump_is_a_chase_until_the_record_says_otherwise():
+    """Nov 11: both HIGH buys (AMD, ORCL) came the day after a 9% jump and both lost."""
+    backed = {"n": 150, "dates": 60, "edge": 0.006, "lower": 0.002, "hit_rate": 0.58, "backed": True}
+    strong = dict(setup="momentum", lookalike=backed, regime="up", confirmations=2)
+    assert cf.score(memory={}, **strong)["level"] == "HIGH"
+    r = cf.score(memory={}, jump=9, **strong)
+    assert r["level"] == "MEDIUM" and any("CHASE" in x for x in r["reasons"]), "unproven: MEDIUM at most"
+    assert cf.score(memory={}, jump=0.03, **strong)["level"] == "HIGH", "a 3% day is not a chase"
+    losing = {"ideas": {"by_condition": {"jump": {"ideas": 40, "avg_5d": -0.017, "verdict": "losing money: do less"}}}}
+    assert cf.score(memory=losing, jump=9, **strong)["level"] == "LOW"
+    working = {"ideas": {"by_condition": {"jump": {"ideas": 40, "avg_5d": 0.012, "verdict": "working: keep doing it"}}}}
+    assert cf.score(memory=working, jump=9, **strong)["level"] == "HIGH"
+    assert not any("CHASE" in x for x in cf.score(memory={}, jump=9, **dict(strong, setup="inverse"))["reasons"])
+    assert not any("CHASE" in x for x in cf.score(memory={}, jump=9, side="sell", setup="stop")["reasons"])
+
+
+def test_ideas_are_graded_by_what_the_stock_had_just_done():
+    import pandas as pd
+
+    from stocksage import journal as jr
+
+    days = pd.bdate_range("2026-10-01", periods=30)
+    closes = pd.Series([100.0] * 30, index=days)
+    spy = pd.Series([500.0] * 30, index=days)
+    text = "\n".join(f"IDEA | {days[i]:%Y-%m-%d}T15:00Z | BUY | ZZ{chr(65 + i)} | momentum | {p} | [LOW] x"
+                     for i, p in [(1, 109), (2, 94), (3, 101)])
+    g = jr.grade_ideas(jr.parse_ideas(text), lambda t: closes, spy=spy)
+    assert set(g["by_condition"]) == {"jump", "drop", "calm"}
+    assert g["by_condition"]["jump"]["avg_5d"] < 0, "bought 9% up, the stock went back to 100"

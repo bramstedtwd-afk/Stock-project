@@ -158,9 +158,19 @@ def run(ev: pd.DataFrame, prices: pd.DataFrame, cash: pd.Series, universe: pd.Da
     """Judge every signal (luck-corrected, later years untouched) and measure each
     against the 'own every company equally' control over the same days."""
     from . import earnings
-    from .optionslab import _alpha
 
     res = earnings.run(ev, prices, cash, draws=draws, split=split, start=start, sigs=signals())
+    res["control"] = equal_weight_control(prices, universe, cash, start, split)
+    res["drift"] = {}
+    return res
+
+
+def equal_weight_control(prices: pd.DataFrame, universe: pd.DataFrame, cash: pd.Series, start: str,
+                         split: str) -> dict:
+    """Alpha (a year) and t of owning every company equally, each only after it joined the
+    index, before and after `split`: the bar a signal on these companies must clearly beat."""
+    from .optionslab import _alpha
+
     days = prices.loc[start:].index
     members = [t for t in universe["ticker"] if t in prices.columns]
     added = pd.to_datetime(universe.set_index("ticker")["added"], errors="coerce")
@@ -173,9 +183,7 @@ def run(ev: pd.DataFrame, prices: pd.DataFrame, cash: pd.Series, universe: pd.Da
     for label, mask in (("before", dev), ("after", ~dev)):
         a, _ = _alpha(control[mask], spy[mask], cash.reindex(days).fillna(0)[mask])
         out[label] = (float(a.mean() * 252), float(a.mean() / a.std() * math.sqrt(len(a))))
-    res["control"] = out
-    res["drift"] = {}
-    return res
+    return out
 
 
 def describe(res: dict, top: int = 15) -> list[str]:

@@ -60,6 +60,7 @@ SIZE_GUIDE = {"HIGH": "no limit beyond settled cash; may add to a winner",
 SHORT_SIDE_SETUPS = {"inverse", "defensive", "bounce", "fear"}
 MIN_GROUP = 10
 MIN_IDEAS = 20
+CHASE_EXEMPT = {"inverse", "defensive", "bounce", "fear", "index"}
 BRAKE_AT = -0.10          # account this far below its peak: new trades at LOW size until it recovers
 
 
@@ -135,6 +136,33 @@ def _discipline(level: str, reasons: list[str], d: dict, ticker: str) -> str:
     return level
 
 
+def _chase(memory: dict, jump: float | None, setup: str) -> tuple[int, str, str | None]:
+    """A buy right after a big one-day jump (points, reason, the highest level allowed).
+
+    The trader's two HIGH buys after the switch (AMD, ORCL, Nov 11) were both bought the
+    day after a 9% jump and both lost; its momentum ideas were losing too. So until the
+    record of buy-after-a-jump ideas is decided, such a buy costs a point and can be MEDIUM
+    at most. Once decided, the record rules: working lifts the limit, losing costs 2 and
+    caps it at LOW."""
+    from .journal import JUMP_AT
+
+    if jump is None or setup in CHASE_EXEMPT:
+        return 0, "", None
+    jump = jump / 100 if abs(jump) > 1 else jump
+    if jump < JUMP_AT:
+        return 0, "", None
+    g = ((memory.get("ideas") or {}).get("by_condition") or {}).get("jump") or {}
+    if str(g.get("verdict", "")).startswith("working"):
+        return 0, (f"CHASE: up {jump:.0%} on the day, but your buy-after-a-jump ideas work ({g['ideas']} graded, "
+                   f"avg {g.get('avg_5d', 0):+.1%} over 5 days): no penalty"), None
+    if str(g.get("verdict", "")).startswith("losing"):
+        return -2, (f"CHASE: up {jump:.0%} on the day, and your buy-after-a-jump ideas lose ({g['ideas']} graded, "
+                    f"avg {g.get('avg_5d', 0):+.1%} over 5 days): test size at most"), "LOW"
+    n = g.get("ideas", 0)
+    return -1, (f"CHASE: up {jump:.0%} on the day; buys right after a big jump are not proven yet "
+                f"({n} graded ideas, need {MIN_IDEAS} and a verdict): MEDIUM at most"), "MEDIUM"
+
+
 def _decided(group: dict | None) -> bool:
     return str((group or {}).get("verdict", "")).startswith(("working", "losing"))
 
@@ -162,7 +190,7 @@ def _context_points(memory: dict, setup: str) -> tuple[int | None, str]:
 def score(*, side: str = "buy", setup: str = "", asset: str = "stocks", play: str = "",
           lookalike: dict | None = None, memory: dict | None = None, regime: str | None = None,
           crypto_flags: dict | None = None, confirmations: int = 0, ticker: str = "",
-          now: datetime | None = None) -> dict:
+          now: datetime | None = None, jump: float | None = None) -> dict:
     """Points from each kind of evidence, the level, and the reasons in plain words."""
     if setup == "index":
         return {"level": "PARK", "score": 0, "size": SIZE_GUIDE["PARK"],
@@ -200,8 +228,16 @@ def score(*, side: str = "buy", setup: str = "", asset: str = "stocks", play: st
                          else (0, f"market regime {r or 'unknown'}"))
     c = max(0, min(int(confirmations or 0), 3))
     parts.append((1 if c >= 2 else 0, f"{c} live confirmation(s) (catalyst / relative strength / volume)"))
+    cap = None
+    if side == "buy" and asset == "stocks":
+        cpts, cwhy, cap = _chase(memory, jump, setup)
+        if cwhy:
+            parts.append((cpts, cwhy))
     total = sum(p for p, _ in parts)
     level = next((name for name, floor in LEVELS if total >= floor), "NO")
+    order = ["NO", "LOW", "MEDIUM", "HIGH"]
+    if cap and order.index(level) > order.index(cap):
+        level = cap
     reasons = [f"{p:+d}  {w}" for p, w in parts]
     dd = memory["trading_drawdown"] if "trading_drawdown" in memory else memory.get("drawdown")
     if side == "buy" and dd is not None and dd <= BRAKE_AT and level in ("HIGH", "MEDIUM"):
@@ -218,7 +254,8 @@ def evidence_for(brief: dict, ticker: str, side: str = "buy") -> dict | None:
 
 
 def for_trade(ticker: str, setup: str, *, side: str = "buy", play: str = "", confirmations: int = 0,
-              brief: dict | None = None, memory: dict | None = None, now: datetime | None = None) -> dict:
+              brief: dict | None = None, memory: dict | None = None, now: datetime | None = None,
+              jump: float | None = None) -> dict:
     """Score a trade from the brief (look-alikes, regime, crypto flags) and the trade memory."""
     brief, memory = brief or {}, memory or {}
     from .journal import is_crypto, setup_word
@@ -228,7 +265,7 @@ def for_trade(ticker: str, setup: str, *, side: str = "buy", play: str = "", con
                 lookalike=evidence_for(brief, ticker, side), memory=memory,
                 regime=((brief.get("market") or {}).get("regime") or {}).get("label"),
                 crypto_flags=(brief.get("crypto") or {}).get("flags"), confirmations=confirmations,
-                ticker=ticker, now=now)
+                ticker=ticker, now=now, jump=jump)
     out["ticker"] = ticker.upper()
     wash = _wash_sale(memory, ticker, side)
     if wash:
@@ -264,7 +301,7 @@ def render(r: dict) -> str:
     return "\n".join([f"CONFIDENCE {r.get('ticker', '')}: {r['level']} (score {r['score']:+d}) -> {r['size']}",
                       *("  " + x for x in r["reasons"]),
                       f"  Start the buy's why with [{r['level']}] and name its stop ('stop 118.40'): the level and the "
-                      "risk both get graded."])
+                      "risk both get graded. Pass --jump (today's move in percent) on every buy: a chase is scored."])
 
 
 def _drive_json(name: str) -> dict:
@@ -287,12 +324,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--play", default="")
     p.add_argument("--confirm", type=int, default=0, help="live confirmations you see: catalyst, strength, volume (0-3)")
     p.add_argument("--sell", action="store_true")
+    p.add_argument("--jump", type=float, default=None,
+                   help="the stock's move today in percent (9 = up 9%%); buys after a 5%%+ jump are scored as chases")
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
     from .drive_api import BRIEF_NAME
     from .journal import MEMORY_NAME
 
     r = for_trade(a.ticker, a.setup, side="sell" if a.sell else "buy", play=a.play, confirmations=a.confirm,
-                  brief=_drive_json(BRIEF_NAME), memory=_drive_json(MEMORY_NAME))
+                  brief=_drive_json(BRIEF_NAME), memory=_drive_json(MEMORY_NAME), jump=a.jump)
     print(render(r))
     return 0
 

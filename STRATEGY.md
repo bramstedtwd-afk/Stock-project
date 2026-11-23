@@ -205,6 +205,44 @@ t = 1.8 on 1,098 events) but within luck. Research finds the effect mostly in
 small companies, where free prices exist only for survivors, so a small-cap
 test here would be flattered and was not run.
 
+## Congress: senators' disclosed purchases (run `.\start.bat congresslab`; last run 2026-11-23)
+
+Every stock purchase US senators disclosed electronically, 2014-2020 (the
+Senate's own filings, collected by the public Senate Stock Watcher data set;
+House filings are PDFs with no free machine-readable history): 2,911
+purchases, 1,282 filing days at today's S&P 500 companies (after each joined).
+Bought the session after the filing became PUBLIC: filings came a median 18
+days after the trade, 90% within 32. 21 rules (any purchase, $15k+, $50k+, 2+
+senators within 30 days, own account, repeat buys, disclosed within 15 days;
+held 20/60/120 days), development 2014-2017, later years untouched.
+
+- **Nothing passed.** Following senators' disclosed buys did not beat the
+  index: "any senator purchase" earned -0.3% to -1.8% a year of alpha, and
+  their own-account buys did worse (-4.1%, t -1.7, held 60 days).
+- **Clusters leaned the right way but within luck:** 2+ senators buying the
+  same stock within 30 days earned +10% to +12% a year (t 1.9, 170 events,
+  p 0.22 after the luck correction). The insider lab found the same shape
+  (insider clusters +12.8%, t 1.8, within luck). Two independent data sets
+  leaning the same way is worth watching, not betting on: the trader records
+  cluster buys as IDEA lines (`insider`, `congress`, playbook section 6b), and
+  the graded ideas decide.
+- Whatever edge members have is in the weeks before disclosure, which the
+  public cannot trade.
+
+## Information and the trader's own record (playbook v42, 2026-11-23)
+
+What the trader's 517 graded ideas said on 2026-11-23, now summarised for it
+every run (`journal.wisdom`, "WHAT THE RECORD SAYS"): StockSage's own picks
+(`brain`, right 90%, +2.9% vs the market over 5 days) and `defensive` picks
+(right 71%, +1.6%) work; `momentum` (chasing what just moved) loses (right
+40%, -1.7%; in a mixed market -2.8%, right 31%); `earnings` reactions in a
+mixed market lean wrong (right 16%). Both HIGH buys after the account move
+were bought the day after a 9% jump and lost, so a buy 5%+ up on the day is
+now a CHASE (`confidence --jump`): MEDIUM at most until the graded
+buy-after-a-jump ideas (`ideas.by_condition`) decide it, LOW at most if they
+lose. Information setups (`filing`, `guidance`, `insider`, `congress`) are
+graded as ideas first and earn money only through their record.
+
 ## Crypto: what worked on real coin history (run `.\start.bat cryptolab`; last run 2026-11-03)
 
 For the owner-approved crypto test in the agentic account (playbook v25). Daily
