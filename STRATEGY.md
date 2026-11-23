@@ -192,6 +192,36 @@ November-April only, the session before holidays. One passed before 2016 (the
 three calmest industries, when they beat cash); after 2016 it earned 3.7% a
 year with negative alpha. Nothing cleared the bar.
 
+## The overnight effect (tested 2026-11-23; forward test `.\start.bat overnight`)
+
+Hold a fund only from the afternoon to the next open. 42 rules (14 funds: SPY, QQQ,
+IWM, DIA, MDY, nine sectors; overnight, intraday, overnight while above the 200-day
+average), daily prices 2001-2026, same judge as the labs (alpha vs SPY, Reality Check on
+2001-2016, holdout 2017+ for survivors, `holdout_bar`).
+
+- **The day loses, the night earns.** Intraday every fund lost (-8% to -17% a year of
+  alpha); the gains came between the close and the open, as the literature reports.
+- **Before costs, two rules pass everything**: QQQ and IWM overnight while above their
+  200-day average. Holdout 2017+: QQQ 14.5% a year (holding it 19.6%), Sharpe 1.16 vs
+  0.81, worst drop -20% vs -35%; IWM 12.8% vs 8.4%, Sharpe 1.16 vs 0.39, -22% vs -41%.
+- **Costs decide it.** Two trades a day, ~500 a year. At 0.25 bp a side IWM still
+  passes; at 0.5 bp neither clears the holdout bar; at 1 bp nothing passes the
+  development test. Robinhood charges no commission, but half the bid-ask gap plus the
+  SEC fee on sales is roughly 0.3-0.5 bp a side: on the line.
+- **The trader's times are close enough on entry.** Hourly bars, last 2 years: buying
+  at 3:30 PM did as well as the close; selling at 10:30 AM cost a good part of the move,
+  so a sale must come right at the open (the 9:35 run).
+- Every gain is short-term (taxed as income in a taxable account).
+
+**Not promoted.** The forward test (`stocksage/overnight.py`, run by the watcher every
+trading day) records the live bid and ask at 3:35 PM and 9:35 AM and, in an uptrend,
+holds $10,000 of each fund overnight in the Alpaca PAPER account. After 40 measured days
+it judges the cost per side (spread or fill slippage, whichever is worse, plus fees):
+<= 0.25 bp survives (worth a proposal to the owner), >= 0.5 bp too costly, between =
+on the edge. Alpaca's free quotes are IEX's, wider than the whole market's, so the meter
+leans pessimistic. First live reading (2026-11-23 2:42 PM): QQQ 0.39 bp, IWM 0.19 bp half
+spread; neither fund was in its uptrend, so only costs were being recorded.
+
 ## Insider buying (run `.\start.bat insiders`; last run 2026-10-27)
 
 Every open-market purchase by officers and directors reported to the SEC

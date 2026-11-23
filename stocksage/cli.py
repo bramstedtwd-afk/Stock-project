@@ -1065,6 +1065,31 @@ def cmd_earnings(args) -> int:
     return 0
 
 
+def cmd_overnight(args) -> int:
+    """The overnight edge, tested forward on paper: what a trade really costs, and the nights held."""
+    from . import overnight
+
+    book = overnight.load()
+    official = {}
+    days = sorted({n["day"] for n in book.get("nights") or []} | {n.get("sell_day") for n in book.get("nights") or []
+                                                                   if n.get("sell_day")})
+    if days:
+        try:
+            import yfinance as yf
+
+            for f in overnight.FUNDS:
+                df = yf.download(f, start=days[0], auto_adjust=True, progress=False)
+                df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+                official[f] = {str(d.date()): (float(r["Open"]), float(r["Close"])) for d, r in df.iterrows()}
+        except Exception:
+            pass                                 # the measured costs need no market data
+    print("\n".join(overnight.lines(overnight.report(book, official))))
+    if not book:
+        print("\nNothing measured yet. The watcher records it at 3:35 PM and 9:35 AM ET on trading days,")
+        print("once the Alpaca practice keys are saved (.\\start.bat keys).")
+    return 0
+
+
 def cmd_insiders(args) -> int:
     """Do companies' own insiders buying their stock predict anything? (SEC Form 4 data)"""
     import pandas as pd
@@ -2212,6 +2237,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--draws", type=int, default=2000)
     p.add_argument("--top", type=int, default=15)
     p.set_defaults(func=cmd_insiders)
+
+    p = sub.add_parser("overnight", help="the overnight edge's forward test: measured trading costs and paper nights")
+    p.set_defaults(func=cmd_overnight)
 
     p = sub.add_parser(
         "analogs",

@@ -1363,8 +1363,33 @@ def run_once(memory_reader=None) -> str | None:
     if not is_standby():                        # the pulse says the MAIN computer is alive; one practice mirror
         pulse(state, now)
         practice(state, now, memory)
+        overnight_test(now)
     save_state(state)
     return sent
+
+
+def overnight_test(now: datetime, http=None, book: dict | None = None) -> list[str]:
+    """The overnight edge's forward test (overnight.step) on the Alpaca PAPER account, where its
+    keys are saved. Never fatal: it must never cost a STOP its wake-up."""
+    from . import overnight, paper
+
+    if not paper.configured() and http is None:
+        return []
+    own = book is None
+    book = overnight.load() if own else book
+    try:
+        done = overnight.step(book, now, http=http)
+    except paper.NotPaper as exc:
+        log(f"overnight test stopped: {exc}")
+        return []
+    except Exception as exc:
+        log(f"overnight test skipped ({type(exc).__name__})")
+        return []
+    if own:
+        overnight.save(book)
+    for line in done:
+        log(line)
+    return done
 
 
 PRACTICE_EVERY = timedelta(minutes=5)
