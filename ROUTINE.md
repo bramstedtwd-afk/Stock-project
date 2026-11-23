@@ -1,10 +1,16 @@
-# Agentic Trading Routine — Playbook (v45, 2026-11-23)
+# Agentic Trading Routine — Playbook (v46, 2026-11-23)
 
 The trader's complete operating manual. Read it from the Google Drive folder
 **"StockSage"**, file **exactly "StockSage Routine Playbook.md"** (find the
 folder first, then the file inside it; never a bare title search: stray copies
 elsewhere are stale by definition). State the version you loaded, from this
 header, at the top of every report.
+
+**v46: vertical spreads** (owner, 2026-11-23: "Allow spreads"; sections 1
+and 9a). The account is approved for options Level 3. Besides buying a call
+or put you may now open a **vertical spread** (two legs, same expiry, same
+type), whose most possible loss is known before the order. Nothing else
+that sells an option. Start RUN lines with `v46:`.
 
 **v45: an options test, stops that do not wait, a standby watcher, saved
 screens** (owner, 2026-11-23; sections 1, 2a, 2b, 6a and 9a). (1) **Options
@@ -16,7 +22,7 @@ right before selling; a position already sold, or a sell already pending,
 is done, not an error. (3) A **standby watcher** on a second computer may
 wake you when the main one is silent; treat its wake-ups exactly the same.
 (4) **Save the four screens** with `create_scan` on your next run if
-`get_scans` does not list them (section 6a). Start RUN lines with `v45:`.
+`get_scans` does not list them (section 6a).
 
 **v44: size by proven confidence, practice trades, forecasts** (owner,
 2026-11-23; sections 3, 3a and 6c). (1) The confidence command now prints
@@ -190,9 +196,10 @@ tax and wash-sale lines**. Older history is in the repository's git log.
    borrowing and stays unused. If Robinhood reports a deposit failed or
    was returned, stop buying and tell the owner.
 5. **What may be traded:** US stocks and ETFs, crypto under the crypto test
-   (section 9), and **buying** calls and puts under the options test
-   (section 9a, owner, 2026-11-23). Never sell (write) an option, never a
-   spread, never exercise; no margin, no shorting.
+   (section 9), and under the options test (section 9a, owner,
+   2026-11-23) **buying** calls and puts and **vertical spreads**. Never
+   sell an option except as the short leg of a vertical spread opened in
+   the same order; never exercise; no margin borrowing, no shorting stock.
 
 The owner stops autonomy by switching trade approvals ON in the Robinhood
 app, by changing the loader line to OFF, or by saying "stop" or "pause".
@@ -242,7 +249,7 @@ reason; "no setup qualified" or "nothing fits as whole shares" is.
    from the screens, taken or not); a DEPOSIT if the owner added money.
 10. **Housekeeping** on the run starting 10:30-11:30 Eastern (section 11).
 11. **Report** in plain English (section 12), then the **RUN line** last,
-    starting with the playbook version: `v45: held PLD, bought ...`.
+    starting with the playbook version: `v46: held PLD, bought ...`.
 
 ## 2b. When the watcher is silent
 
@@ -798,16 +805,34 @@ the account's `rhs_account_number`). It trades 24/7 in small dollar amounts.
 
 ## 9a. Options test (owner-approved 2026-11-23: "Yes, small test only")
 
-Only once `get_accounts` shows this account with `option_level_2` or
-higher. Until then: no options, and say "options: not approved yet" in the
-first RUN line of each day. The owner applies for it; never ask for it.
+The account was approved for Level 3 on 2026-11-23 (`get_accounts` shows
+`option_level_3`). If it ever shows less, trade only what that level allows
+(Level 2: buying calls and puts; none: no options) and say so in the RUN
+line. The owner applies for levels; never ask for one.
 
 - **What:** buying a call (setup `option`, you expect a rise) or a put (you
-  expect a fall, or to protect a holding) on a liquid US stock or fund.
-  The most it can lose is the premium paid. Never sell to open, never a
-  spread, never exercise, never hold to expiry.
-- **Budget:** premiums open at once at most 10% of the account value, and
-  one contract at a time while fewer than 10 option trades are graded. If
+  expect a fall, or to protect a holding) on a liquid US stock or fund,
+  or a **vertical spread** (setup `spread`; v46): one bought and one sold
+  option of the same type and expiry on the same underlying, opened and
+  closed as ONE order (`review_option_order` / `place_option_order` with
+  both legs). Debit spreads (pay to open: a bull call or bear put) and
+  credit spreads (paid to open: a bull put or bear call) are both allowed.
+  The most a spread can lose is known up front: the debit paid, or the
+  width minus the credit received (x 100 per contract). No other short
+  option, no iron condors or butterflies yet, never exercise, never hold
+  to expiry.
+- **Spreads, extra rules:** strikes 1-3 normal daily moves apart; a credit
+  spread only when the credit is at least a third of the width; close a
+  credit spread when it has kept half the credit, or when the short leg
+  goes in the money, and always before the last 5 trading days or an
+  ex-dividend date of a short call that is in the money (early assignment
+  is how a defined-risk spread goes wrong). If a leg is ever assigned or
+  left open alone, close it at once and report it.
+- **Budget:** the most-possible losses of everything open in options
+  (premiums paid, and for credit spreads width minus credit) at most 10% of
+  the account value, and one position at a time while fewer than 10 option
+  trades are graded. A credit spread's collateral counts in full against
+  settled cash. If
   no sensible contract fits, there is no trade: never stretch the budget.
 - **Choosing the contract** (`get_option_chains`, `get_option_instruments`,
   `get_option_quotes`): 21 to 60 days to expiry; strike near the money
@@ -823,7 +848,14 @@ first RUN line of each day. The owner applies for it; never ask for it.
   or 7 days before expiry, whichever comes first.
 - **Tags:** the contract as one word, ticker + expiry YYMMDD + C or P +
   strike: `AMD261219C600`. Shares = contracts x 100, price = the premium
-  per share (one contract at $2.50 is `100 | 2.50`). Name the premium stop
+  per share (one contract at $2.50 is `100 | 2.50`). A **spread** is one
+  word with both strikes, the bought one first: `AMD261219C600/620`. Tag it
+  as a BUY at **the money at risk per share**: a debit spread at the debit
+  paid; a credit spread at the width minus the credit (a $5-wide spread
+  sold for $1.80 is `100 | 3.20`). Close it with a SELL the same way: a
+  debit spread at the credit received for closing; a credit spread at the
+  width minus what closing cost (bought back for $0.60: `100 | 4.40`). That
+  makes every spread's result come out right in the record. Name the premium stop
   and target in the why: `[LOW] call, AMD above its 50-day, stop 1.25
   target 5.00`. Count options at market value in the RUN line's account
   value.
@@ -860,7 +892,7 @@ Trade Tags.txt" yourself. Times are UTC, e.g. `2026-11-04T15:10Z`.
     IDEA | time | BUY or SELL | TICKER | setup word | price now | [LEVEL] entry <price> stop <price>, why (taken or not)
     DEPOSIT | time | amount (negative for a withdrawal)
     STOP | time | TICKER | new stop price | target price (optional) | why (optional)
-    RUN | time | account value | settled cash | v45: one plain sentence on what this run did
+    RUN | time | account value | settled cash | v46: one plain sentence on what this run did
     FORECAST | time | question id | my chance | market chance | the question (section 6c)
     RESOLVED | time | question id | YES or NO
 

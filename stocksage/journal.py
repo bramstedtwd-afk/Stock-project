@@ -254,7 +254,7 @@ def is_crypto(ticker: str) -> bool:
     return str(ticker).upper().endswith("-USD")
 
 
-OPTION = re.compile(r"^[A-Z.]{1,6}\d{6}[CP]\d+(\.\d+)?$")
+OPTION = re.compile(r"^[A-Z.]{1,6}\d{6}[CP]\d+(\.\d+)?(/\d+(\.\d+)?)?$")    # /strike: a vertical spread
 
 
 def is_option(ticker: str) -> bool:

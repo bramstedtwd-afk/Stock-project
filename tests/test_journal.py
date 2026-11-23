@@ -657,3 +657,16 @@ def test_the_watcher_leaves_options_to_the_hourly_run():
     memory = {"open": [{"ticker": "AMD261219C600", "dollars_in": 250, "entry": 2.5},
                        {"ticker": "LMT", "dollars_in": 100, "entry": 600, "stop": 590}]}
     assert [h["ticker"] for h in watcher.holdings(memory)] == ["LMT"]
+
+
+def test_a_credit_spread_tagged_by_its_money_at_risk_scores_its_real_result(tmp_path, monkeypatch):
+    monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path))
+    assert jr.is_option("AMD261219P560/550") and jr.asset_of("SPY261219C700/705") == "options"
+    assert not jr.is_option("AMD261219P560/") and not jr.is_option("AMD/AMC")
+    # a $5-wide bull put sold for $1.80 (at risk 3.20), bought back for $0.60 (4.40): kept $1.20 a share
+    tags = ("TAG | 2026-11-20T15:00Z | BUY | SPY261219P680/675 | SAFE | spread | 100 | 3.20 | [LOW] credit 1.80\n"
+            "TAG | 2026-11-23T15:00Z | SELL | SPY261219P680/675 | SAFE | target | 100 | 4.40 | kept two thirds")
+    fills = jr.crypto_fills(jr.parse_tags(tags))
+    assert len(fills) == 2
+    bought, sold = sorted(fills, key=lambda f: f["executed_at"])
+    assert round((sold["price"] - bought["price"]) * sold["quantity"], 2) == 120.0
