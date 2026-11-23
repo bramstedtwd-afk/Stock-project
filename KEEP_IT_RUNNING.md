@@ -98,7 +98,8 @@ changed (update the `STOCKSAGE_NTFY_TOPIC` secret).
 ## Part 6: if this computer is off while the market is open
 
 Written 2026-11-12. **You chose E and A the same day; both are in force** (playbook v39).
-B, C and D are not built.
+B is not built. C/D: the standby mode exists (`watch-trader standby`, 2026-11-23), but you chose
+**one always-on laptop for everything** the same day, so no second computer runs it.
 
 **What already covers you today.** The trader still runs every hour from the cloud
 (12:35-23:35 UTC) and checks every stop on each run, whether or not this computer is on.
