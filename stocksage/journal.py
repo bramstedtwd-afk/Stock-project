@@ -1007,8 +1007,10 @@ def tax_view(trips: list, fills: list[dict], now: datetime) -> dict:
 
 # --- the wake-up scorecard --------------------------------------------------------------
 
-WAKE_KINDS = ("STOP", "LIMIT", "NEAR", "TARGET", "HALFWAY", "MOVE", "DROP", "MARKET", "NEWS", "ENTRY", "EVENT")
-WAKE_DIRECTION = {"STOP": -1, "NEAR": -1, "DROP": -1, "LIMIT": -1, "TARGET": 1, "HALFWAY": 1, "ENTRY": 1}
+WAKE_KINDS = ("STOP", "LIMIT", "NEAR", "TARGET", "HALFWAY", "MOVE", "DROP", "MARKET", "NEWS", "ENTRY", "EVENT",
+              "GIVEBACK", "SETUP")
+WAKE_DIRECTION = {"STOP": -1, "NEAR": -1, "DROP": -1, "LIMIT": -1, "GIVEBACK": -1, "TARGET": 1, "HALFWAY": 1,
+                  "ENTRY": 1, "SETUP": 1}
 WAKE_ANSWER = timedelta(minutes=45)     # a run that followed a wake-up wrote its RUN line by then
 WAKE_WINDOW = timedelta(days=60)        # the scorecard looks this far back
 WAKE_FLAT = 0.003                       # under 0.3% after the wake-up: the price went nowhere

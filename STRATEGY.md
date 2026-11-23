@@ -440,6 +440,11 @@ measures **what the watcher says and when, not what the trader earns**.
 | Ideas reaching their entry: trader told | none | none | 45 of 47 |
 | Pre-event reviews | none | none | 30 |
 
+v47 (2026-11-23) adds GIVEBACK and SETUP. Same 60 sessions: 4.3 wake-ups a day
+against 4.2 for session 2, GIVEBACK said 5 times, STOP still 0 / 16 minutes, the
+cap never reached. SETUP needs the brief's cards, which the lab does not simulate,
+so its cost is fenced by rule instead: at most 2 setup-only wake-ups a day.
+
 What it shows:
 - **Sizing MOVE per stock removed four fifths of the MOVE wake-ups** (104 to
   20): the old flat 3% fired on the wild stock's ordinary days. The wake-ups

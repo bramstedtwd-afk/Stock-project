@@ -671,6 +671,9 @@ TRIGGER_SETS = {
     # session 2: an idea's ENTRY and the pre-EVENT review as well
     "session 2": {"kinds": {"MOVE", "DROP", "MARKET", "TARGET", "NEAR", "HALFWAY", "ENTRY", "EVENT"},
                   "ranges": True, "wider": True},
+    # v47: a winner giving back half its gain (SETUP needs the brief's cards, which the lab has none of)
+    "v47": {"kinds": {"MOVE", "DROP", "MARKET", "TARGET", "NEAR", "HALFWAY", "ENTRY", "EVENT", "GIVEBACK", "SETUP"},
+            "ranges": True, "wider": True},
 }
 REHEARSAL_STOCKS = (("CALM", 0.012, 0.8), ("MID", 0.025, 1.1), ("JUMPY", 0.045, 1.4), ("WILD", 0.07, 1.7))
 REHEARSAL_IDEAS = (("IDEAA", 0.02), ("IDEAB", 0.035))

@@ -101,6 +101,16 @@ ENTRY_CAP = 2                                   # wake-ups a day that carry noth
 ENTRY_CHASE = 0.015                             # a breakout entry passed by more than this has run away
 ENTRY_UNDER = 0.03                              # a pullback entry undercut this far (no stop named) is broken
 ENTRY_MIN_CASH = 10.0                           # settled cash that counts as "free" (the playbook's reserve)
+GIVE_ATR_MULT = 2.0                             # GIVEBACK: a gain counts once it reaches two normal days...
+GIVE_MIN, GIVE_MAX, GIVE_DEFAULT = 0.04, 0.15, 0.05    # ...fenced 4%-15% (5% when the range is unknown)
+GIVE_CRYPTO = 0.10
+GIVE_SHARE = 0.5                                # and fires once half of the best gain is gone
+CASH_LIKE = {"SGOV", "BIL", "SHV"}              # parking, not positions: no giveback
+SETUP_CAP = 2                                   # wake-ups a day that carry nothing but buy setups
+SETUPS_MAX = 8                                  # brief names watched for a setup (each is a quote a minute)
+SETUP_DIP = 1.0                                 # a dip: down this many normal days today...
+SETUP_STRONG = 1.0                              # strength: up this many normal days against the market...
+SETUP_CHASE = 0.05                              # ...but not 5%+ on the day (the playbook calls that a chase)
 IDEA_LEVELS = ("HIGH", "MEDIUM")
 IDEAS_MAX = 6                                   # ideas watched at once: each is a price lookup a minute
 EVENTS_EVERY = timedelta(hours=2)               # how often the calendars are re-read
@@ -310,9 +320,12 @@ def read_ranges(state: dict, now: datetime, reader=None) -> dict:
                 raw = read_drive_text(BRIEF_NAME)
             else:
                 raw = reader()
-            got = ranges_from_brief(json.loads(raw or "null") or {})
+            brief = json.loads(raw or "null") or {}
+            got = ranges_from_brief(brief)
             if got:
                 state["ranges"] = got
+            if brief.get("candidates") or brief.get("focus"):
+                state["setups"] = setups_from_brief(brief)
         except Exception as exc:
             log(f"could not read the brief's daily ranges ({type(exc).__name__}); keeping the last ones")
     return state.get("ranges") or {}
@@ -509,6 +522,10 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
                 events.append(f"HALFWAY: {t} at {_p(price)} is halfway from its entry {_p(entry)} to its target "
                               f"{_p(target)}; " + (f"its stop is still {_p(stop)}" if stop else "it has no stop on record")
                               + ": raise the stop (STOP line) so a winner cannot turn into a loss")
+        if entry and t not in CASH_LIKE:
+            give = giveback(state, t, entry, price, stop, crypto, ranges)
+            if give:
+                events.append(give)
         if h.get("entry") and t not in state["dropped"] and price / h["entry"] - 1 <= DROP:
             state["dropped"].append(t)
             events.append(f"DROP: {t} is {price / h['entry'] - 1:+.1%} below its entry {_p(h['entry'])} "
@@ -553,6 +570,121 @@ def check(state: dict, now: datetime, held: list[dict], quote, crypto_quote, new
                             (not known or about_company(item["title"], words)):
                         events.append(f"NEWS: {h['ticker']}: {item['title']} ({item['source']})")
         state["news_seen"] = list(seen)[-500:]
+    return events
+
+
+def give_min(ticker: str, crypto: bool, ranges: dict | None = None) -> float:
+    """The gain a position must have reached before giving half of it back is worth a wake-up."""
+    if crypto:
+        return GIVE_CRYPTO
+    atr = (ranges or {}).get(ticker)
+    return min(GIVE_MAX, max(GIVE_MIN, GIVE_ATR_MULT * atr)) if atr else GIVE_DEFAULT
+
+
+def giveback(state: dict, t: str, entry: float, price: float, stop: float | None, crypto: bool,
+             ranges: dict | None = None) -> str | None:
+    """GIVEBACK: the position's best price since the watcher has known it (kept across days, per
+    ticker and entry) gained at least `give_min`, and the price has since fallen back to half of
+    that gain or less while still above the entry (below it, DROP and the stop speak). Once per
+    position and best price; quiet when the stop already locks in half the best gain."""
+    key = f"{t}@{entry:g}"
+    peaks = state.setdefault("peaks", {})
+    peaks[key] = best = max(float(peaks.get(key) or 0), price)
+    if len(peaks) > 60:
+        state["peaks"] = dict(list(peaks.items())[-60:])
+    best_gain, now_gain = best / entry - 1, price / entry - 1
+    if best_gain < give_min(t, crypto, ranges) or not 0 < now_gain <= GIVE_SHARE * best_gain:
+        return None
+    if stop and stop >= entry * (1 + GIVE_SHARE * best_gain):
+        return None                                   # the trader already locked half of it in
+    said = state.setdefault("gave_back", {})
+    if said.get(key) == round(best, 6):
+        return None
+    said[key] = round(best, 6)
+    if len(said) > 60:
+        state["gave_back"] = dict(list(said.items())[-60:])
+    return (f"GIVEBACK: {t} at {_p(price)} was up {best_gain:+.1%} (best {_p(best)}, bought at {_p(entry)}) and is "
+            f"now {now_gain:+.1%}: half the gain is gone; "
+            + (f"its stop is {_p(stop)}" if stop else "it has no stop on record")
+            + ". Take the rest, or raise the stop above the entry (STOP line), or say in the RUN line why not")
+
+
+# --- buy setups in the brief's best-rated names ------------------------------------------
+
+def setups_from_brief(brief: dict) -> list[dict]:
+    """The brief's buy-rated cards (focus first, then candidates) the watcher may wake the trader
+    for: a BUY verdict, actionable, no earnings within 5 days, a stop below the price, and
+    look-alike history that does not say buys of it lose (`evidence` buy edge below zero)."""
+    out, seen = [], set()
+    evidence = (brief or {}).get("evidence") or {}
+    for key in ("focus", "candidates"):
+        for c in (brief or {}).get(key) or []:
+            try:
+                t = str(c["ticker"]).upper()
+                if t in seen or "BUY" not in str(c.get("verdict", "")).upper() or not c.get("actionable"):
+                    continue
+                if c.get("earnings_blackout") or (c.get("earnings_days") is not None and c["earnings_days"] <= 5):
+                    continue
+                price, stop, atr = float(c["price"]), float(c.get("stop") or 0), float(c.get("atr_pct") or 0)
+                edge = ((evidence.get(t) or {}).get("buy") or {}).get("edge")
+                if not (0 < stop < price) or not 0.003 <= atr <= 0.25 or (edge is not None and edge < 0):
+                    continue
+                seen.add(t)
+                out.append({"ticker": t, "verdict": c.get("verdict"), "stop": stop, "target": c.get("target"),
+                            "atr": atr, "edge": edge, "from": key})
+            except (KeyError, TypeError, ValueError):
+                continue
+    return out[:SETUPS_MAX]
+
+
+def setup_events(state: dict, now: datetime, memory: dict, held: list[dict], quote) -> list[str]:
+    """SETUP: a brief name (not held, not already an idea with an entry) does something a buyer
+    would want to know in the regular session: a DIP (down a normal day or more today, still
+    above the brief's stop) or STRENGTH (up a normal day or more against the market, under 5%
+    on the day). Once per name a day, only with settled cash free and no daily limit, at most
+    SETUP_CAP setup-only wake-ups a day. It is a prompt to re-score, never an order."""
+    from .confidence import todays_discipline
+    from .journal import is_crypto
+
+    setups = state.get("setups") or []
+    if not setups or not regular_session(now):
+        return []
+    day = now.astimezone(ET).date().isoformat()
+    if state.get("setup_day") != day:
+        state.update(setup_day=day, setup_said=[])
+    if state.get("setup_fires_day") == day and state.get("setup_fires", 0) >= SETUP_CAP:
+        return []
+    free, _why = cash_free(state, memory, now)
+    if not free:
+        return []
+    skip = {h["ticker"] for h in held} | {i["ticker"] for i in watched_ideas(memory, now, held)}
+    skip |= set(todays_discipline(memory, now).get("stopped_today") or [])
+    spy = ((state.get("live") or {}).get("spy") or {}).get("change")
+    seen_at = state.setdefault("last_price", {})
+    events = []
+    for s in setups:
+        t = s["ticker"]
+        if t in skip or is_crypto(t) or t in state["setup_said"]:
+            continue
+        try:
+            q = _fresh(quote(t), now)
+        except Exception:
+            q = None
+        if not q or q.get("day_change") is None or not q.get("price"):
+            continue
+        price, change, atr = q["price"], q["day_change"], s["atr"]
+        seen_at[t] = price
+        versus = change - spy if spy is not None and t not in FUNDS else None
+        rated = f"the brief rates it {s.get('verdict') or 'a buy'} (stop {_p(s['stop'])})"
+        tail = ": re-score it with the confidence command and buy only if it still qualifies"
+        if change <= -SETUP_DIP * atr and price > s["stop"]:
+            state["setup_said"].append(t)
+            events.append(f"SETUP: {t} at {_p(price)} has dipped {change:+.1%} today (about {abs(change) / atr:.1f} "
+                          f"of its normal days) and {rated}" + tail)
+        elif versus is not None and versus >= SETUP_STRONG * atr and 0 < change < SETUP_CHASE:
+            state["setup_said"].append(t)
+            events.append(f"SETUP: {t} at {_p(price)} is {change:+.1%} today, {versus:+.1%} against the market "
+                          f"(about {versus / atr:.1f} of its normal days) and {rated}" + tail)
     return events
 
 
@@ -924,7 +1056,8 @@ def _can_trade_now(held: list[dict]) -> bool:
 
 
 def _event_ticker(event: str) -> str | None:
-    m = re.match(r"(?:MOVE|DROP|TARGET|NEWS|STOP|NEAR|HALFWAY|ENTRY|EVENT): ([A-Z][A-Z0-9.\-]*)(?![a-z])", event)
+    m = re.match(r"(?:MOVE|DROP|TARGET|NEWS|STOP|NEAR|HALFWAY|ENTRY|EVENT|GIVEBACK|SETUP): ([A-Z][A-Z0-9.\-]*)"
+                 r"(?![a-z])", event)
     return m.group(1) if m else None
 
 
@@ -1093,6 +1226,7 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
     try:                                        # the wider view must never cost a STOP its wake-up
         events += entry_events(state, now, memory, held, quote, crypto_quote)
         events += pre_events(state, now, held, scheduled or {})
+        events += setup_events(state, now, memory, held, quote)
     except Exception as exc:
         log(f"idea and calendar checks failed ({type(exc).__name__}: {exc})")
     if kinds is not None:
@@ -1178,6 +1312,14 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
             unasked = {_event_ticker(e) for e in pending if e.startswith("ENTRY")}
             if unasked:
                 state["entered"] = [k for k in state.get("entered") or [] if k.split("@")[0] not in unasked]
+            # A setup and a giveback likewise: asked again after the run if they still hold.
+            unset = {_event_ticker(e) for e in pending if e.startswith("SETUP")}
+            if unset:
+                state["setup_said"] = [t for t in state.get("setup_said") or [] if t not in unset]
+            ungiven = {_event_ticker(e) for e in pending if e.startswith("GIVEBACK")}
+            if ungiven:
+                state["gave_back"] = {k: v for k, v in (state.get("gave_back") or {}).items()
+                                      if k.split("@")[0] not in ungiven}
         else:
             state["pending"] = pending[-10:]
             log(f"waiting to wake the trader ({why}): {'; '.join(events) or 'earlier events'}")
@@ -1193,6 +1335,9 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
     state.update(fires_day=day, last_fire=now.isoformat(), pending=[])
     if news_only:
         state.update(news_fires_day=day, news_fires=news_fires + 1)
+    if all(e.startswith("SETUP") for e in pending):
+        state.update(setup_fires_day=day,
+                     setup_fires=(state.get("setup_fires", 0) if state.get("setup_fires_day") == day else 0) + 1)
     if all(e.startswith("ENTRY") for e in pending):
         state.update(entry_fires_day=day,
                      entry_fires=(state.get("entry_fires", 0) if state.get("entry_fires_day") == day else 0) + 1)
@@ -1474,6 +1619,12 @@ def status() -> int:
         print("  ideas watched for their entry price: "
               + (", ".join(f"{i['ticker']} [{i['level']}] {i['direction']} {_p(i['entry'])}" for i in ideas)
                  or "none (an IDEA line needs a HIGH or MEDIUM level and 'entry <price>', and lasts one trading day)"))
+        print("  brief names watched for a buy setup (dip or strength): "
+              + (", ".join(x["ticker"] for x in s.get("setups") or []) or "none yet (read from the brief every 30 min)"))
+        peaks = s.get("peaks") or {}
+        if peaks:
+            print("  best price seen per position (for GIVEBACK): "
+                  + ", ".join(f"{k.split('@')[0]} {_p(v)}" for k, v in peaks.items()))
         coming = upcoming(now, holdings(memory), s.get("events") or {})
         print("  coming up for what is held: " + ("; ".join(r["text"].split(":")[0] if not r.get("market")
                                                              else r["text"].split(": check")[0] for r in coming)
