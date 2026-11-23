@@ -319,9 +319,9 @@ def for_trade(ticker: str, setup: str, *, side: str = "buy", play: str = "", con
               jump: float | None = None) -> dict:
     """Score a trade from the brief (look-alikes, regime, crypto flags) and the trade memory."""
     brief, memory = brief or {}, memory or {}
-    from .journal import is_crypto, setup_word
+    from .journal import asset_of, setup_word
 
-    asset = "crypto" if is_crypto(ticker) else "stocks"
+    asset = asset_of(ticker)
     out = score(side=side, setup=setup_word(setup), asset=asset, play=play.upper(),
                 lookalike=evidence_for(brief, ticker, side), memory=memory,
                 regime=((brief.get("market") or {}).get("regime") or {}).get("label"),

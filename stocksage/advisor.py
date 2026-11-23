@@ -553,11 +553,11 @@ def daily_ranges(engine, by_ticker: dict) -> dict:
             out[t] = round(float(v), 4)
     held = ["SPY"]
     try:
-        from .journal import is_crypto, state_dir
+        from .journal import is_noted, state_dir
 
         mem = json.loads((state_dir() / "trade_memory.json").read_text(encoding="utf-8"))
         held += [str(o.get("ticker", "")).upper() for o in mem.get("open") or []
-                 if o.get("ticker") and not is_crypto(str(o["ticker"]))]
+                 if o.get("ticker") and not is_noted(str(o["ticker"]))]
     except Exception:
         pass
     for t in dict.fromkeys(held):

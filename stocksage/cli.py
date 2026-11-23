@@ -1016,6 +1016,9 @@ def cmd_scenarios(args) -> int:
 
     from . import scenarios
 
+    if getattr(args, "watcher", False):          # the watcher rehearsal alone (~15 s)
+        print("\n".join(scenarios.trigger_report(scenarios.trigger_rehearsal())))
+        return 0
     print(f"Scenario lab: {args.seeds} markets per world, {len(scenarios.AGENTS)} rule sets each "
           "(several minutes; uses all but one processor)...\n", flush=True)
     out = scenarios.run(args.seeds, args.world, args.agent, workers=max(1, (os.cpu_count() or 2) - 1))
@@ -2113,8 +2116,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_alerts)
 
     p = sub.add_parser("watch-trader", help="wake the trading routine when a holding moves or has news "
-                       "(install, off, status, once, test, serve)")
-    p.add_argument("action", nargs="?", default="status", choices=["install", "off", "status", "once", "serve", "test"])
+                       "(install, off, status, once, test, serve, standby)")
+    p.add_argument("action", nargs="?", default="status", choices=["install", "off", "status", "once", "serve", "test", "standby"])
     p.set_defaults(func=cmd_watch_trader)
 
     p = sub.add_parser("switch-login", help="point this computer at another Robinhood login (read-only)")
@@ -2186,6 +2189,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seeds", type=int, default=10, help="random markets per world (default 10)")
     p.add_argument("--world", action="append", help="only this world (bull, meltup, bear, crash, chop, noise)")
     p.add_argument("--agent", action="append", help="only this rule set (system, no_learning, tilt, ...)")
+    p.add_argument("--watcher", action="store_true", help="only the watcher's wake-up rehearsal (~15 s)")
     p.set_defaults(func=cmd_scenarios)
 
     p = sub.add_parser("earnings", help="do stocks keep moving after an earnings surprise? (by industry)")

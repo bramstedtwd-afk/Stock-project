@@ -551,3 +551,40 @@ def test_the_memory_says_when_the_latest_run_had_no_account_reading():
     state = jr.trader_state(runs, datetime(2026, 11, 13, 14, 50, tzinfo=timezone.utc))
     assert state["blind"] and state["equity"] == 398.77
     assert not jr.trader_state(runs[:1], datetime(2026, 11, 13, 13, 0, tzinfo=timezone.utc))["blind"]
+
+
+# --- A stop does not wait long for a scheduled run that is late or never starts (2026-11-23) ---
+
+def test_a_stop_waits_for_a_late_scheduled_run_only_until_eight_minutes_past(monkeypatch):
+    got, push = _pushes(monkeypatch)
+    sent: list = []
+    state: dict = {}
+    args = dict(_stop_args(push), post=lambda u, t, b: sent.append(b))
+    touched = datetime(2026, 11, 3, 16, 36, tzinfo=timezone.utc)      # one minute after :35, no RUN line yet
+    for minute in range(0, 7):
+        watcher.tick(state, touched + timedelta(minutes=minute), memory=STOPPED, **args)
+    assert not sent, "held while the scheduled run may still be writing its notes (:36-:42)"
+    assert "STOP: MSFT" in watcher.tick(state, touched + timedelta(minutes=7), memory=STOPPED, **args)
+    assert len(sent) == 1, "fired at :43, not at :50"
+
+
+def test_a_stop_touched_before_a_run_is_held_no_later_than_eight_minutes_past(monkeypatch):
+    got, push = _pushes(monkeypatch)
+    sent: list = []
+    state: dict = {}
+    args = dict(_stop_args(push), post=lambda u, t, b: sent.append(b))
+    touched = datetime(2026, 11, 3, 16, 26, tzinfo=timezone.utc)
+    for minute in range(0, 17):                                        # :26 to :42
+        watcher.tick(state, touched + timedelta(minutes=minute), memory=STOPPED, **args)
+    assert not sent
+    assert "STOP: MSFT" in watcher.tick(state, touched + timedelta(minutes=17), memory=STOPPED, **args)
+
+
+def test_only_stops_and_limits_skip_the_rest_of_the_quiet_window():
+    late = datetime(2026, 11, 3, 16, 44, tzinfo=timezone.utc)
+    assert watcher.scheduled_run_late(late, STOPPED)
+    assert not watcher.scheduled_run_late(late, {"trader": {"last_run": "2026-11-03T16:38+00:00"}})
+    assert not watcher.scheduled_run_late(datetime(2026, 11, 3, 16, 41, tzinfo=timezone.utc), STOPPED)
+    assert not watcher.scheduled_run_late(datetime(2026, 11, 3, 16, 52, tzinfo=timezone.utc), STOPPED)
+    assert not watcher.may_fire({}, late, urgent=False)[0], "a MOVE or NEWS still waits out the window"
+    assert watcher.URGENT_WAIT == timedelta(minutes=8) and watcher.COOLDOWN == timedelta(minutes=20)

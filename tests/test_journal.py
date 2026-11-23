@@ -625,3 +625,35 @@ def test_the_record_says_what_works_what_loses_and_what_is_leaning():
     assert "Lean into: 'pullback' trades" in w["line"]
     assert "WHAT THE RECORD SAYS" in "\n".join(jr._wisdom_lines(w))
     assert "Nothing is proven" in jr.wisdom({})["line"]
+
+
+def test_option_trades_come_from_notes_and_are_graded_as_their_own_asset(tmp_path, monkeypatch):
+    monkeypatch.setenv("STOCKSAGE_STATE", str(tmp_path))
+
+    class Client:
+        def order_history(self, account_number=None):
+            return [fill("1", "AAA", "buy", 1, 20, "2026-10-28T14:01:00Z"),
+                    fill("2", "AAA", "sell", 1, 21, "2026-10-29T15:01:00Z")]
+
+    class Eng:
+        class market:
+            @staticmethod
+            def history(t):
+                return None
+
+    tags = ("TAG | 2026-10-27T14:00Z | BUY | AMD261219C600 | AGGRESSIVE | option | 100 | 2.50 | [LOW] 1 contract\n"
+            "TAG | 2026-10-29T18:00Z | SELL | AMD261219C600 | AGGRESSIVE | target | 100 | 3.10 | took the gain")
+    assert jr.is_option("amd261219c600") and jr.is_option("BRK.B270115P412.5")
+    assert not jr.is_option("AAA") and not jr.is_option("BTC-USD") and jr.asset_of("AMD261219C600") == "options"
+    s = jr.refresh(Eng(), Client(), upload=False, account="555000111", tags_text=tags)
+    assert s["by_asset"]["options"]["trades"] == 1 and s["by_asset"]["stocks"]["trades"] == 1
+    cloud = jr.refresh_without_broker(Eng(), upload=False, previous=s, tags_text=tags)
+    assert cloud["by_asset"]["options"]["trades"] == 1 and cloud["overall"]["trades"] == 2
+
+
+def test_the_watcher_leaves_options_to_the_hourly_run():
+    from stocksage import watcher
+
+    memory = {"open": [{"ticker": "AMD261219C600", "dollars_in": 250, "entry": 2.5},
+                       {"ticker": "LMT", "dollars_in": 100, "entry": 600, "stop": 590}]}
+    assert [h["ticker"] for h in watcher.holdings(memory)] == ["LMT"]

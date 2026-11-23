@@ -111,7 +111,8 @@ MAJOR = re.compile(r"\bCPI\b|Federal Funds Rate|FOMC Statement|Non-Farm Employme
 QUOTE_FAIL_TICKS = 10                           # minutes without one stock price before the phone is told
 ANSWER_WITHIN = timedelta(minutes=20)           # a STOP/LIMIT wake-up should show a run by then
 ANSWER_WITHIN_QUIET = timedelta(minutes=30)     # ...when it had to wait out a scheduled run first
-REASK_CAP = 3                                   # a STOP is asked again this often when the run that answered was blind
+URGENT_WAIT = timedelta(minutes=8)          # a STOP/LIMIT waits for a scheduled run until :35 + this
+REASK_CAP = 3                                  # a STOP is asked again this often when the run that answered was blind
 NEWS_EVERY = timedelta(minutes=5)
 MEMORY_EVERY = timedelta(minutes=5)             # new positions and moved stops reach the watcher fast
 BRIEF_EVERY = timedelta(minutes=30)             # each stock's normal daily range comes from the brief
@@ -230,10 +231,12 @@ def may_fire(state: dict, now: datetime, urgent: bool = False) -> tuple[bool, st
 
 def holdings(memory: dict) -> list[dict]:
     """Open positions from the trade memory, one per ticker, with the average entry."""
+    from .journal import is_option
+
     by: dict[str, dict] = {}
     for lot in memory.get("open") or []:
         t = str(lot.get("ticker", "")).upper()
-        if not t:
+        if not t or is_option(t):         # an option's most it can lose is its premium; the hourly run manages it
             continue
         cur = by.setdefault(t, {"ticker": t, "dollars": 0.0, "shares": 0.0, "lots": []})
         dollars, entry = float(lot.get("dollars_in") or 0), float(lot.get("entry") or 0)
@@ -933,6 +936,31 @@ def _when(value) -> datetime | None:
     return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
 
 
+def quiet_run(now: datetime) -> datetime | None:
+    """The scheduled :35 run whose quiet window `now` is in, or None."""
+    utc = now.astimezone(timezone.utc)
+    if utc.weekday() >= 5:
+        return None
+    run = utc.replace(minute=SCHEDULED_MINUTE, second=0, microsecond=0)
+    for r in (run - timedelta(hours=1), run, run + timedelta(hours=1)):
+        if 12 <= r.hour <= 23 and (timedelta(0) <= r - utc <= timedelta(minutes=QUIET_BEFORE)
+                                   or timedelta(0) <= utc - r <= timedelta(minutes=QUIET_AFTER)):
+            return r
+    return None
+
+
+def scheduled_run_late(now: datetime, memory: dict) -> bool:
+    """A STOP or LIMIT waits for the scheduled run only until `URGENT_WAIT` past :35. Runs
+    write their RUN line 2-7 minutes after :35 (measured 2026-11-23 over ~190 runs); one
+    that has not by then started late or not at all (AMD's stop waited 13 minutes for a
+    run that started 12 minutes late on 2026-11-13), so the stop is not held any longer."""
+    r = quiet_run(now)
+    if r is None or now.astimezone(timezone.utc) - r < URGENT_WAIT:
+        return False
+    ran = _when((memory.get("trader") or {}).get("last_run"))
+    return not (ran and ran >= r)
+
+
 def scheduled_run_done(now: datetime, memory: dict) -> bool:
     """In the quiet minutes AFTER a scheduled run: has that run already written its RUN
     line? Then it is over, a wake-up cannot overlap it, and a stop touched since has
@@ -1126,6 +1154,10 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
         # limit does not wait out the rest of the quiet window (it used to, up to 15 minutes).
         ok = True
         log("the scheduled run has finished: not waiting out the quiet window")
+    elif not ok and urgent and near_scheduled_run(now) and scheduled_run_late(now, memory):
+        ok = True
+        log(f"the scheduled run has not answered {int(URGENT_WAIT.total_seconds() // 60)} minutes after :35: "
+            "not holding the stop for it any longer")
     if not ok:
         if near_scheduled_run(now):
             # Said once per quiet window: a HALFWAY or ENTRY that is asked again after the run
@@ -1248,12 +1280,74 @@ def _names(state: dict):
     return name
 
 
+ROLE_VAR = "STOCKSAGE_WATCHER_ROLE"
+STANDBY_AFTER = timedelta(minutes=10)     # the main watcher's pulse this old: the standby speaks
+STANDBY_READ = timedelta(minutes=2)       # how often the standby reads the main watcher's pulse
+
+
+def is_standby() -> bool:
+    """A second watcher on another computer (owner's choice 2026-11-23: a second computer,
+    e.g. a spare laptop). It never has a broker login and stays silent while the main watcher's pulse
+    in Drive is fresh, so the trader is never woken twice for the same thing."""
+    return os.environ.get(ROLE_VAR, "").strip().lower() == "standby"
+
+
+def primary_silent(state: dict, now: datetime, reader=None) -> bool:
+    """Is the main watcher silent, so the standby should watch? Only in stock hours, judged
+    from the pulse file (written every 5 minutes) and never before 7:10 AM ET, so the
+    morning's first pulse has time to land. A pulse that cannot be read keeps the last
+    answer: an unreadable Drive is no proof that the main computer is dark."""
+    if not stock_hours(now):
+        return False
+    last_read = state.get("primary_read")
+    if reader is not None or not last_read or now - datetime.fromisoformat(last_read) >= STANDBY_READ:
+        try:
+            if reader is None:
+                from .drive_api import read_drive_text as reader
+            from .journal import PULSE_NAME
+
+            state["primary_pulse"] = (reader(PULSE_NAME) or "").strip()
+            state["primary_read"] = now.isoformat()
+        except Exception as exc:
+            log(f"standby: could not read the main watcher's pulse ({type(exc).__name__})")
+            return bool(state.get("standing_in"))
+    from .journal import _ts
+
+    pulse_at = _ts(state.get("primary_pulse")) if state.get("primary_pulse") else None
+    opened = now.astimezone(ET).replace(hour=7, minute=0, second=0, microsecond=0)
+    ref = max(pulse_at, opened) if pulse_at else opened
+    return now - ref > STANDBY_AFTER
+
+
+def standby_gate(state: dict, now: datetime, reader=None, push=None) -> bool:
+    """True when this standby watcher should check this minute; says each change once."""
+    silent = primary_silent(state, now, reader=reader)
+    was = bool(state.get("standing_in"))
+    if silent and not was:
+        state["standing_in"] = now.isoformat()
+        state.pop("memory_read", None)          # read the trade memory fresh before the first check
+        log("standby: the main watcher has been silent for 10 minutes: watching in its place")
+        day = now.astimezone(ET).date().isoformat()
+        if state.get("standby_told") != day:
+            state["standby_told"] = day
+            phone("StockSage: the standby watcher took over",
+                  "The main computer's watcher has gone quiet; the standby is watching the trader's positions.",
+                  push=push)
+    elif not silent and was:
+        state.pop("standing_in", None)
+        log("standby: the main watcher is back: standing by")
+    return silent
+
+
 def run_once(memory_reader=None) -> str | None:
     from .envfile import load_env
 
     load_env()
     state = load_state()
     now = datetime.now(timezone.utc)
+    if is_standby() and not standby_gate(state, now):
+        save_state(state)
+        return None
     quote, cq, news = _sources()
     if state.get("urgent"):
         state.pop("memory_read", None)          # waiting for the trader's answer: look for its run every minute
@@ -1266,8 +1360,9 @@ def run_once(memory_reader=None) -> str | None:
     sent = tick(state, now, quote=quote, crypto_quote=cq, news=news, memory=memory, names=_names(state),
                 ranges=read_ranges(state, now), events=scheduled)
     heartbeat(state, now, memory, force=state.pop("starting", False))
-    pulse(state, now)
-    practice(state, now, memory)
+    if not is_standby():                        # the pulse says the MAIN computer is alive; one practice mirror
+        pulse(state, now)
+        practice(state, now, memory)
     save_state(state)
     return sent
 
@@ -1327,7 +1422,7 @@ def status() -> int:
 
     load_env()
     s = load_state()
-    print("Trader watcher")
+    print("Trader watcher" + (" (STANDBY: speaks only when the main watcher is silent)" if is_standby() else ""))
     for var in (URL_VAR, TOKEN_VAR, finnhub.KEY_VAR):
         print(f"  {var}: {'set' if os.environ.get(var, '').strip() else 'MISSING'}")
     today = datetime.now(timezone.utc).astimezone(ET).date().isoformat()
@@ -1473,13 +1568,55 @@ def off() -> int:
     return 0
 
 
+def cron_line(folder: Path) -> str:
+    return f"@reboot cd {folder} && ./start.sh watch-trader serve >> ~/.stocksage/watcher.out 2>&1"
+
+
+def make_standby(run=None) -> int:
+    """Turn THIS computer into the standby watcher: saved in .env, started at boot and now.
+    For a second computer only; never on the one that holds the broker login."""
+    import subprocess
+
+    from . import finnhub
+    from .envfile import load_env, save_env
+
+    load_env()
+    if os.environ.get("ROBINHOOD_USERNAME", "").strip():
+        print("This computer holds the Robinhood login, so it is the MAIN watcher. "
+              "The standby goes on a second computer.")
+        return 1
+    missing = [v for v in (URL_VAR, TOKEN_VAR, finnhub.KEY_VAR) if not os.environ.get(v, "").strip()]
+    if missing:
+        print("Add the keys first (" + ", ".join(missing) + "): run the keys command, then this again.")
+        return 1
+    save_env({ROLE_VAR: "standby"})
+    os.environ[ROLE_VAR] = "standby"
+    if sys.platform.startswith("win"):
+        return install()
+    run = run or subprocess.run
+    folder = Path(__file__).resolve().parent.parent
+    line = cron_line(folder)
+    have = run(["crontab", "-l"], capture_output=True, text=True)
+    current = have.stdout if have.returncode == 0 else ""
+    if line not in current:
+        run(["crontab", "-"], input=current.rstrip("\n") + ("\n" if current.strip() else "") + line + "\n",
+            text=True, check=True)
+    Path.home().joinpath(".stocksage").mkdir(parents=True, exist_ok=True)
+    run(["bash", "-c", f"cd {folder} && nohup ./start.sh watch-trader serve >> ~/.stocksage/watcher.out 2>&1 &"])
+    print("This computer is now the STANDBY watcher. It starts at every boot, stays silent while the "
+          "main computer's watcher is alive, and watches in its place when that one has been quiet for "
+          "10 minutes in stock hours. It never has a broker login.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     action = (argv if argv is not None else sys.argv[1:]) or ["status"]
     if action[0] == "once":
         sent = run_once()
         print(sent or "Nothing worth waking the trader for right now.")
         return 0
-    return {"serve": serve, "install": install, "off": off, "status": status, "test": test}.get(action[0], status)()
+    return {"serve": serve, "install": install, "off": off, "status": status, "test": test,
+            "standby": make_standby}.get(action[0], status)()
 
 
 if __name__ == "__main__":

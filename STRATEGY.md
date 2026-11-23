@@ -405,6 +405,7 @@ measures **what the watcher says and when, not what the trader earns**.
 | MOVE wake-ups | 104 | 20 | 19 |
 | Stops touched: warned before the touch | 13 of 50 (26%) | 23 of 50 (46%) | 22 of 50 (44%) |
 | STOP wake-up after the touch (typical / worst) | 0 / 24 min | 0 / 24 min | 0 / 24 min |
+| ...with v45's 8-minute limit (re-run 2026-11-23) | 0 / 16 min | 0 / 16 min | 0 / 16 min |
 | Halfway to target: told to raise the stop | 0 of 38 | 35 of 38 | 35 of 38 |
 | Ideas reaching their entry: trader told | none | none | 45 of 47 |
 | Pre-event reviews | none | none | 30 |

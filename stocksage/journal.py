@@ -211,7 +211,8 @@ def parse_tags(text: str) -> list[dict]:
         if len(parts) < 6 or parts[0].upper() != "TAG":
             continue
         at, side, ticker, play = _ts(parts[1]), parts[2].lower(), parts[3].upper(), parts[4].upper()
-        if at is None or side not in ("buy", "sell") or not re.fullmatch(r"[A-Z.\-]{1,10}", ticker):
+        if at is None or side not in ("buy", "sell") or not (re.fullmatch(r"[A-Z.\-]{1,10}", ticker)
+                                                                  or is_option(ticker)):
             continue
         qty = price = None
         rest = parts[6:]
@@ -253,13 +254,32 @@ def is_crypto(ticker: str) -> bool:
     return str(ticker).upper().endswith("-USD")
 
 
+OPTION = re.compile(r"^[A-Z.]{1,6}\d{6}[CP]\d+(\.\d+)?$")
+
+
+def is_option(ticker: str) -> bool:
+    """An option is tagged by its contract, AMD261219C600 (ticker, expiry YYMMDD, C or P,
+    strike), shares = contracts x 100, price = the premium per share (playbook v45).
+    Robinhood's stock order history never contains it, so it is built from the notes."""
+    return bool(OPTION.match(str(ticker).upper()))
+
+
+def is_noted(ticker: str) -> bool:
+    """Built from the trader's notes, not the stock order history: crypto and options."""
+    return is_crypto(ticker) or is_option(ticker)
+
+
+def asset_of(ticker: str) -> str:
+    return "crypto" if is_crypto(ticker) else "options" if is_option(ticker) else "stocks"
+
+
 def crypto_fills(tags: list[dict], broker: list[dict] | None = None, account_id: str = "") -> list[dict]:
     """Crypto fills for the trade memory. The trader's TAG notes are the base. When
     the broker's crypto orders are available they correct each note's amount and
     price (same pair and side within 3 hours, amount within 5%). The broker's list
     spans EVERY crypto account under the login, so its other orders are used only
     when `account_id` (STOCKSAGE_AGENTIC_CRYPTO_ID) names the trading account's."""
-    noted = fills_from_tags([t for t in tags if is_crypto(t["ticker"])])
+    noted = fills_from_tags([t for t in tags if is_noted(t["ticker"])])
     if not broker:
         return noted
     pool = [b for b in broker if is_crypto(b.get("ticker", ""))]
@@ -522,7 +542,7 @@ def market_adjusted(t: Trip) -> float:
     it look broken): the scenario lab caught a zero-edge setup judged "losing" in a
     bear market on raw returns. Same-day trades (hours of market exposure), crypto
     and inverse funds are judged on their own return."""
-    if t.vs_spy is None or is_crypto(t.ticker) or t.setup in RAW_GRADED:
+    if t.vs_spy is None or is_noted(t.ticker) or t.setup in RAW_GRADED:
         return t.ret
     return t.vs_spy
 
@@ -788,7 +808,7 @@ def grade_ideas(ideas: list[dict], history, spy=None, now: datetime | None = Non
                 break
             ret = float(vals[first_after + h - 1] / idea["price"] - 1)
             bench = None
-            if spy_idx is not None and not is_crypto(t):
+            if spy_idx is not None and not is_noted(t):
                 cut = int(np.searchsorted(spy_idx, day, side="right"))
                 if cut > 0 and len(spy_vals) - cut >= h:
                     bench = float(spy_vals[cut + h - 1] / spy_vals[cut - 1] - 1)
@@ -1279,7 +1299,7 @@ def summarize(fills: list[dict], tags: list[dict], spy=None, now: datetime | Non
         "source": source,
         "account": f"••••{account[-4:]}" if account else "",
         "overall": stats(trips),
-        "by_asset": _grouped(trips, lambda t: "crypto" if is_crypto(t.ticker) else "stocks"),
+        "by_asset": _grouped(trips, lambda t: asset_of(t.ticker)),
         "regime_now": regime_day(today) if spy is not None else None,
         "by_setup_regime": _grouped(trips, lambda t: f"{t.setup}|{regime_day(_et_date(_ts(t.opened)))}")
         if spy is not None else {},
@@ -1570,7 +1590,7 @@ def ideas_recent(tags_text: str, now: datetime | None = None, hours: int = 24) -
     now = now or datetime.now(timezone.utc)
     out = []
     for idea in parse_ideas(tags_text):
-        if idea["side"] != "buy" or is_crypto(idea["ticker"]) or idea.get("confidence") not in ("HIGH", "MEDIUM", "LOW"):
+        if idea["side"] != "buy" or is_noted(idea["ticker"]) or idea.get("confidence") not in ("HIGH", "MEDIUM", "LOW"):
             continue
         if now - idea["at"] > timedelta(hours=hours):
             continue
@@ -1978,8 +1998,8 @@ def carry_over(fills: list[dict], previous: dict | None, account: str,
     archived = [dict(f) for f in previous.get("archived_fills") or []]
     if switched(previous, account):
         old = _last4(previous.get("account"))
-        confirmed = [f for f in _confirmed(previous.get("fills")) if not is_crypto(f.get("ticker", ""))]
-        stock_tags = [t for t in tags or [] if not is_crypto(t["ticker"])]
+        confirmed = [f for f in _confirmed(previous.get("fills")) if not is_noted(f.get("ticker", ""))]
+        stock_tags = [t for t in tags or [] if not is_noted(t["ticker"])]
         seen = {f.get("order_id") for f in archived}
         moved = datetime.now(timezone.utc)           # notes after the move belong to the new account
         archived += [dict(f, account=old) for f in confirmed + _noted_after(confirmed, stock_tags)
@@ -2069,7 +2089,7 @@ def keep_confirmed(fills: list[dict], previous: dict | None) -> list[dict]:
     order whose ticker lookup fails, and on 2026-11-05 (Robinhood answering 502/503)
     the memory lost the PLD position and 28 closed trades. Merged by order id."""
     merged = {f["order_id"]: f for f in _confirmed((previous or {}).get("fills"))
-              if f.get("order_id") and not is_crypto(f.get("ticker", ""))}
+              if f.get("order_id") and not is_noted(f.get("ticker", ""))}
     for f in fills:
         merged[f["order_id"]] = f
     return sorted(merged.values(), key=lambda f: str(f.get("executed_at")))
@@ -2100,9 +2120,9 @@ def refresh_without_broker(engine, upload: bool = True, previous: dict | None = 
     else:
         previous_view = previous
     confirmed = _confirmed(previous_view.get("fills"))
-    crypto_confirmed = [f for f in confirmed if is_crypto(f["ticker"])]
-    confirmed = [f for f in confirmed if not is_crypto(f["ticker"])]
-    stock_tags = [t for t in tags if not is_crypto(t["ticker"])]
+    crypto_confirmed = [f for f in confirmed if is_noted(f["ticker"])]
+    confirmed = [f for f in confirmed if not is_noted(f["ticker"])]
+    stock_tags = [t for t in tags if not is_noted(t["ticker"])]
     crypto_noted = [f for f in crypto_fills(tags)
                     if not any(c["ticker"] == f["ticker"] and c["side"] == f["side"] and _ts(c["executed_at"])
                                and abs(_ts(c["executed_at"]) - _ts(f["executed_at"])) <= MATCH_WINDOW
