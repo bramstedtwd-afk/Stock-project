@@ -366,3 +366,20 @@ def test_a_signin_that_was_never_approved_is_a_failure_and_scheduled_runs_wait(s
     assert RobinhoodClient().login(trigger="portfolio") is True and len(rh.calls) == 2, "the owner can always try"
     assert robinhood._recent_failure() is None, "a good sign-in clears the wait"
     assert RobinhoodClient().login(trigger="publish-drive") is True
+
+
+def test_waiting_for_the_phone_approval_survives_too_many_requests():
+    from stocksage.robinhood import patient_get
+
+    answers = [None, None, {"challenge_status": "validated"}]
+    asked, slept = [], []
+    get = patient_get(lambda url, *a, **k: asked.append(url) or answers.pop(0), sleep=slept.append,
+                      clock=lambda: 0.0)
+    assert get("https://api.robinhood.com/push/abc/get_prompts_status/") == {"challenge_status": "validated"}
+    assert len(asked) == 3 and slept == [15, 15]
+    other = patient_get(lambda url, *a, **k: None, sleep=slept.append, clock=lambda: 0.0)
+    assert other("https://api.robinhood.com/accounts/") is None, "only the approval question waits"
+    t = iter(range(0, 1000, 100))
+    late = patient_get(lambda url, *a, **k: None, sleep=lambda s: None, clock=lambda: float(next(t)))
+    with pytest.raises(TimeoutError):
+        late("https://api.robinhood.com/push/abc/get_prompts_status/")

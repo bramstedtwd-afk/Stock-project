@@ -36,6 +36,46 @@ OWNER_TRIGGERS = {"portfolio", "doctor", "switch-login", "setup", "app", "web", 
 LOGIN_BACKOFF_HOURS = 3
 
 
+APPROVAL_WAIT, APPROVAL_POLL = 240, 15
+
+
+def patient_get(real_get, sleep=None, clock=None, wait: float = APPROVAL_WAIT, every: float = APPROVAL_POLL):
+    """robin_stocks asks every 5 s whether the owner approved the sign-in on the phone and
+    crashes on the first empty answer, which is what a 429 "Too Many Requests" gives it
+    (2026-11-17: three sign-ins in a row ended that way before anyone could approve). This
+    asks again every `every` seconds for up to `wait` seconds instead. Other requests pass."""
+    import time
+
+    sleep, clock = sleep or time.sleep, clock or time.time
+
+    def get(url, *args, **kwargs):
+        if "get_prompts_status" not in str(url):
+            return real_get(url, *args, **kwargs)
+        deadline = clock() + wait
+        while True:
+            answer = real_get(url, *args, **kwargs)
+            if answer:
+                return answer
+            if clock() >= deadline:
+                raise TimeoutError("the sign-in was not approved in the Robinhood app in time")
+            sleep(every)
+
+    return get
+
+
+def _patient_approval():
+    """Install `patient_get` in robin_stocks for one login; returns (module, original)."""
+    try:
+        import robin_stocks.robinhood.authentication as auth
+    except Exception:
+        return None, None
+    real = getattr(auth, "request_get", None)
+    if real is None:
+        return None, None
+    auth.request_get = patient_get(real)
+    return auth, real
+
+
 def _failure_path():
     from .journal import state_dir
 
@@ -237,6 +277,7 @@ class RobinhoodClient:
                 mfa_code = pyotp.TOTP(secret).now()
             except ImportError:
                 log.warning("pyotp not installed; attempting login without TOTP code")
+        auth, real_get = _patient_approval()
         try:
             result = rh.login(
                 os.environ["ROBINHOOD_USERNAME"],
@@ -270,6 +311,9 @@ class RobinhoodClient:
                 security.LOGIN_FAILED, trigger, type(exc).__name__
             )
             return False
+        finally:
+            if auth is not None:
+                auth.request_get = real_get
 
     def portfolio(self) -> Portfolio | None:
         if not self.login():
