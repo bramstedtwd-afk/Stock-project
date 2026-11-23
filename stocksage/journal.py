@@ -107,7 +107,7 @@ def _num(value, allow_zero: bool = False) -> float | None:
 SETUP_WORDS = ("breakout", "pullback", "momentum", "gap", "news", "earnings", "reversal", "brain", "index", "inverse",
                "defensive", "bounce", "social",
                # the information edge (playbook v42 section 6b): public facts read in full, graded as ideas first
-               "filing", "guidance", "insider", "congress",
+               "filing", "guidance", "insider", "congress", "contract", "trial",
                "trend", "fear", "meme",
                "target", "stop", "thesis", "time", "close", "rotate", "profit")
 

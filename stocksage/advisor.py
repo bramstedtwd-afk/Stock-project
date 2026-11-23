@@ -402,6 +402,28 @@ def build_brief(
     except Exception as exc:
         log.warning("daily ranges skipped: %s", exc)
 
+    contracts_packet = None
+    try:                 # government money to listed companies, sized against each company (playbook 6b)
+        from . import contracts
+        from .journal import state_dir
+
+        contracts_packet = contracts.packet(state_dir() / "contracts_state.json",
+                                            caps_path=state_dir() / "market_caps.json")
+    except Exception as exc:
+        log.warning("contracts skipped: %s", exc)
+
+    trials_packet = None
+    try:                 # late-stage trial changes at the drug makers held or considered (playbook 6b)
+        from . import news as news_mod
+        from . import trials
+        from .journal import state_dir
+
+        drug = [t for t, sug in by_ticker.items() if "health" in (getattr(sug, "sector", "") or "").lower()]
+        trials_packet = trials.packet(news_mod.company_names(drug, state_dir() / "names.json"),
+                                      state_dir() / "trials_state.json")
+    except Exception as exc:
+        log.warning("trials skipped: %s", exc)
+
     crypto_packet = None
     try:                 # the crypto test's context: trend gate, fear/greed, funding, memes, measured lessons
         from . import crypto
@@ -417,6 +439,8 @@ def build_brief(
         "social": social_packet,
         "crypto": crypto_packet,
         "live": live_packet,
+        "contracts": contracts_packet,
+        "trials": trials_packet,
         "evidence": evidence,
         "ranges": ranges,
         "market": market_snapshot,

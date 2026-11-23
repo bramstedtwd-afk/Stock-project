@@ -243,6 +243,20 @@ buy-after-a-jump ideas (`ideas.by_condition`) decide it, LOW at most if they
 lose. Information setups (`filing`, `guidance`, `insider`, `congress`) are
 graded as ideas first and earn money only through their record.
 
+## Alternative data: contracts and clinical trials (playbook v43, 2026-11-23)
+
+Of the "asymmetric data" sources considered, two are free, official, public and
+timely enough for an hourly trader; the rest were set aside (shipping manifests:
+paid only; store prices, stock-outs, job postings, app/web traffic: no free
+history to test, fragile scrapers, retail terms of use; crypto mempool: a
+millisecond game an hourly trader cannot play). Neither kept source has a clean
+publication history to backtest without hindsight, so both are FORWARD tests:
+the brief carries them (`contracts`, `trials`), the trader writes IDEA lines
+(`contract`, `trial`), and the graded ideas decide, exactly like insider and
+Congress clusters. Execution stays where it is: StockSage scores and reports,
+the trader places orders after a preview and a quote check, and no code path
+sends an order by itself.
+
 ## Crypto: what worked on real coin history (run `.\start.bat cryptolab`; last run 2026-11-03)
 
 For the owner-approved crypto test in the agentic account (playbook v25). Daily

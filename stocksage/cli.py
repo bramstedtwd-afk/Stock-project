@@ -1088,6 +1088,37 @@ def cmd_insiders(args) -> int:
     return 0
 
 
+def cmd_contracts(args) -> int:
+    """Government contracts to listed companies, and late-stage trial changes, as the brief carries them."""
+    from . import contracts, trials
+    from .journal import state_dir
+
+    if args.check:
+        print("Checking whether this computer can read each source (read-only, nothing is saved):")
+        for name, fn in (("USASpending (civilian contracts)",
+                          lambda: contracts.fetch_civilian(*_last_days(4), pages=1)),
+                         ("Defense Department daily announcements", lambda: contracts.fetch_dod(articles=1)),
+                         ("ClinicalTrials.gov", lambda: trials._get_json(trials.API.format(sponsor="Pfizer",
+                                                                                            since="2026-01-01")))):
+            try:
+                got = fn()
+                n = len(got) if isinstance(got, list) else len(got.get("studies") or [])
+                print(f"  {name}: works ({n} rows)")
+            except Exception as exc:
+                print(f"  {name}: REFUSED ({type(exc).__name__}: {str(exc)[:100]})")
+        return 0
+    p = contracts.packet(state_dir() / "contracts_state.json", caps_path=state_dir() / "market_caps.json")
+    print(contracts.render(p))
+    return 0
+
+
+def _last_days(n: int):
+    from datetime import date, timedelta
+
+    today = date.today()
+    return today - timedelta(days=n), today
+
+
 def cmd_congresslab(args) -> int:
     """Do senators' disclosed stock purchases beat the market? (Senate filings 2014-2020)"""
     import pandas as pd
@@ -2151,6 +2182,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--draws", type=int, default=2000)
     p.add_argument("--top", type=int, default=15)
     p.set_defaults(func=cmd_earnings)
+
+    p = sub.add_parser("contracts", help="government contracts to listed companies (and --check: can this computer read the sources?)")
+    p.add_argument("--check", action="store_true", help="only test whether each source answers this computer")
+    p.set_defaults(func=cmd_contracts)
 
     p = sub.add_parser("congresslab", help="do senators' disclosed stock purchases beat the market?")
     p.add_argument("--source", default=None, help="a folder with the Senate data set (instead of downloading it)")
