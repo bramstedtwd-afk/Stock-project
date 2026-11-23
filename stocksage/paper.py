@@ -105,18 +105,36 @@ def bracket(ticker: str, level: str, setup: str, stop: float, target: float, htt
 MIRROR_FRESH_MIN = 120     # an idea older than this is not mirrored: the moment has passed
 MIRROR_DRIFT = 0.015       # nor one whose price has moved more than 1.5% since it was written
 MIRROR_CAP = 15            # practice trades a day at most
+ENTRY_CHASE = 0.015        # a breakout entry passed by more than this has run away (as watcher.ENTRY_CHASE)
+
+
+def _et(now: datetime) -> datetime:
+    from zoneinfo import ZoneInfo
+
+    return now.astimezone(ZoneInfo("America/New_York"))
 
 
 def _regular_session(now: datetime) -> bool:
-    from zoneinfo import ZoneInfo
-
-    et = now.astimezone(ZoneInfo("America/New_York"))
+    et = _et(now)
     return et.weekday() < 5 and (9, 30) <= (et.hour, et.minute) < (16, 0)
+
+
+def entry_reached(idea: dict, price: float) -> bool:
+    """Is the price where the trader said it would buy? Below the written price the entry
+    is a pullback (at or under it, still above the stop); above it, a breakout (at most
+    ENTRY_CHASE past it). The same zones the watcher's ENTRY wake-up uses."""
+    entry = idea["entry"]
+    if entry < idea["price"]:
+        return idea["stop"] < price <= entry
+    return entry <= price <= entry * (1 + ENTRY_CHASE)
 
 
 def mirror(ideas: list[dict], state: dict, now: datetime | None = None, http=None) -> list[str]:
     """Each fresh scored idea (memory `ideas_recent`) becomes one practice bracket, once.
-    Market orders in the regular session only; `state["paper"]` remembers what was done."""
+    Market orders in the regular session only; `state["paper"]` remembers what was done.
+    An idea that names an entry price waits for it (checked each time this runs) until it
+    expires, and repeated lines with the same entry count once; at most one practice
+    trade per ticker a day."""
     now = now or datetime.now(timezone.utc)
     if not ideas or not _regular_session(now):
         return []
@@ -126,18 +144,29 @@ def mirror(ideas: list[dict], state: dict, now: datetime | None = None, http=Non
     sent_today = sum(1 for v in done.values() if v.get("day") == today and v.get("sent"))
     out = []
     for idea in ideas:
-        key = f"{idea['ticker']}|{idea['at']}"
+        waits = bool(idea.get("entry"))
+        key = f"{idea['ticker']}|entry {idea['entry']:g}" if waits else f"{idea['ticker']}|{idea['at']}"
         if key in done:
             continue
-        age = (now - datetime.fromisoformat(idea["at"])).total_seconds() / 60
-        if age > MIRROR_FRESH_MIN:
-            done[key] = {"day": today, "sent": False, "why": "too old"}
+        if any(v.get("sent") and v.get("day") == today and k.split("|")[0] == idea["ticker"] for k, v in done.items()):
             continue
+        if waits:
+            if _et(now).date().isoformat() > idea.get("expires", ""):
+                done[key] = {"day": today, "sent": False, "why": "entry never reached"}
+                continue
+        else:
+            age = (now - datetime.fromisoformat(idea["at"])).total_seconds() / 60
+            if age > MIRROR_FRESH_MIN:
+                done[key] = {"day": today, "sent": False, "why": "too old"}
+                continue
         if sent_today >= MIRROR_CAP:
             break
         try:
             price = last_price(idea["ticker"], http)
-            if not price or abs(price / idea["price"] - 1) > MIRROR_DRIFT or not idea["stop"] < price < idea["target"]:
+            if waits:
+                if not price or not entry_reached(idea, price):
+                    continue                     # not there yet: asked again on the next check
+            elif not price or abs(price / idea["price"] - 1) > MIRROR_DRIFT or not idea["stop"] < price < idea["target"]:
                 done[key] = {"day": today, "sent": False, "why": f"price {price} moved from {idea['price']}"}
                 continue
             bracket(idea["ticker"], idea["level"], idea["setup"], idea["stop"], idea["target"], http=http, now=now)

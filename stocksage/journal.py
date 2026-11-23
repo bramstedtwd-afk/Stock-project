@@ -1586,19 +1586,29 @@ def _wisdom_lines(w: dict | None) -> list[str]:
 def ideas_recent(tags_text: str, now: datetime | None = None, hours: int = 24) -> list[dict]:
     """Scored stock BUY ideas of the last day that name a stop and a target: each is a
     practice trade on the owner's Alpaca paper account (paper.mirror), so confidence is
-    graded on many more trades than the real account can take."""
+    graded on many more trades than the real account can take. An idea that names an
+    `entry <price>` away from the price it was written at carries `entry` and `expires`
+    (the day written plus one weekday, like `idea_watch`): its practice trade waits for
+    that price instead of buying at once."""
     now = now or datetime.now(timezone.utc)
     out = []
     for idea in parse_ideas(tags_text):
         if idea["side"] != "buy" or is_noted(idea["ticker"]) or idea.get("confidence") not in ("HIGH", "MEDIUM", "LOW"):
             continue
-        if now - idea["at"] > timedelta(hours=hours):
+        note = idea.get("note", "")
+        entry = stated_entry(note)
+        waits = bool(entry and idea["price"] and abs(entry / idea["price"] - 1) >= 0.001)
+        if now - idea["at"] > (timedelta(days=4) if waits else timedelta(hours=hours)):
             continue
-        stop, target = stated_stop(idea.get("note", "")), stated_target(idea.get("note", ""))
+        stop, target = stated_stop(note), stated_target(note)
         if stop and target and stop < idea["price"] < target:
-            out.append({"ticker": idea["ticker"], "at": idea["at"].isoformat(timespec="minutes"),
-                        "level": idea["confidence"], "setup": idea["setup"], "price": idea["price"],
-                        "stop": stop, "target": target})
+            row = {"ticker": idea["ticker"], "at": idea["at"].isoformat(timespec="minutes"),
+                   "level": idea["confidence"], "setup": idea["setup"], "price": idea["price"],
+                   "stop": stop, "target": target}
+            if waits and stop < entry < target:
+                row["entry"] = entry
+                row["expires"] = _sessions_after(_et_date(idea["at"]), IDEA_WATCH_SESSIONS).isoformat()
+            out.append(row)
     return out[-30:]
 
 

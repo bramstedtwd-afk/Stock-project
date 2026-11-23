@@ -120,6 +120,40 @@ def test_fresh_scored_ideas_become_practice_trades_once_and_stale_ones_never():
     assert paper.mirror(ideas, {}, now=evening, http=FakeAlpaca()) == [], "market orders in the session only"
 
 
+class PricedAlpaca(FakeAlpaca):
+    def __init__(self, price):
+        super().__init__()
+        self.price = price
+
+    def __call__(self, method, url, body):
+        if "/trades/latest" in url:
+            return {"trade": {"p": self.price}}
+        return super().__call__(method, url, body)
+
+
+def test_an_idea_with_an_entry_price_waits_for_it_on_paper_too():
+    """2026-11-23: GOOGL 'entry 275' and BAC 'entry 47.50' were bought on paper at 283 and 48
+    the moment the keys arrived, so the practice record graded a trade the trader never planned."""
+    tags = "\n".join([
+        "IDEA | 2026-11-23T14:40Z | BUY | ABC | bounce | 104 | [MEDIUM] entry 100 stop 95 target 115, dip buy",
+        "IDEA | 2026-11-23T14:50Z | BUY | ABC | bounce | 104.5 | [MEDIUM] entry 100 stop 95 target 115, same plan",
+        "IDEA | 2026-11-23T14:50Z | BUY | XYZ | breakout | 98 | [LOW] entry above 100 stop 95 target 110"])
+    ideas = jr.ideas_recent(tags, now=NOW)
+    assert ideas[0]["entry"] == 100 and ideas[0]["expires"] == "2026-11-24"
+    state = {}
+    high = PricedAlpaca(104.0)
+    assert paper.mirror(ideas, state, now=NOW, http=high) == [] and high.sent == [], "not at the entry yet"
+    assert "ABC|entry 100" not in state["paper"]["done"], "still waiting, asked again next time"
+    later = datetime(2026, 11, 24, 15, 0, tzinfo=timezone.utc)
+    dip = PricedAlpaca(99.5)
+    done = paper.mirror(ideas, state, now=later, http=dip)
+    assert len(done) == 1 and "ABC" in done[0] and len(dip.sent) == 1, "the two same-entry lines trade once"
+    assert paper.mirror(ideas, state, now=later, http=dip) == [] and len(dip.sent) == 1
+    assert paper.entry_reached(ideas[-1], 100.8) and not paper.entry_reached(ideas[-1], 102.0), "a run-away breakout"
+    gone = datetime(2026, 11, 25, 15, 0, tzinfo=timezone.utc)
+    assert paper.mirror(ideas, {}, now=gone, http=PricedAlpaca(99.5)) == [], "expired the day after next"
+
+
 def test_the_watcher_never_practises_without_paper_keys():
     from stocksage import watcher
 
