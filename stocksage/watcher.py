@@ -1267,8 +1267,37 @@ def run_once(memory_reader=None) -> str | None:
                 ranges=read_ranges(state, now), events=scheduled)
     heartbeat(state, now, memory, force=state.pop("starting", False))
     pulse(state, now)
+    practice(state, now, memory)
     save_state(state)
     return sent
+
+
+PRACTICE_EVERY = timedelta(minutes=5)
+
+
+def practice(state: dict, now: datetime, memory: dict, http=None) -> list[str]:
+    """Mirror the trader's fresh scored ideas as practice trades in the owner's Alpaca PAPER
+    account (paper.mirror), every 5 minutes, only where its keys are saved. Never fatal: a
+    practice trade must never cost a STOP its wake-up."""
+    from . import paper
+
+    if not paper.configured() and http is None:
+        return []
+    last = state.get("practice_at")
+    if last and now - datetime.fromisoformat(last) < PRACTICE_EVERY:
+        return []
+    state["practice_at"] = now.isoformat()
+    try:
+        done = paper.mirror(memory.get("ideas_recent") or [], state, now, http=http)
+    except paper.NotPaper as exc:
+        log(f"practice trades stopped: {exc}")
+        return []
+    except Exception as exc:
+        log(f"practice trades skipped ({type(exc).__name__})")
+        return []
+    for line in done:
+        log(line)
+    return done
 
 
 def serve() -> int:

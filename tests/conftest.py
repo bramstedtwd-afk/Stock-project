@@ -101,7 +101,7 @@ def _no_real_secrets(monkeypatch, tmp_path):
     monkeypatch.setattr(drive_api, "CREDENTIALS_PATH", tmp_path / "drive_credentials.json")
     monkeypatch.setattr(drive_api, "TOKEN_PATH", tmp_path / "drive_token.json")
     for key in list(os.environ):
-        if key.startswith(("STOCKSAGE_", "ROBINHOOD_")) and key != "STOCKSAGE_STATE":
+        if key.startswith(("STOCKSAGE_", "ROBINHOOD_", "ALPACA_")) and key != "STOCKSAGE_STATE":
             monkeypatch.delenv(key)
     # The owner's real Startup folder is not this test's: a publish under test must never
     # find the installed watcher or phone page there and start a real window.

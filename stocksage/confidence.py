@@ -163,6 +163,62 @@ def _chase(memory: dict, jump: float | None, setup: str) -> tuple[int, str, str 
                 f"({n} graded ideas, need {MIN_IDEAS} and a verdict): MEDIUM at most"), "MEDIUM"
 
 
+CALIBRATE_N = 30          # graded ideas (or trades) needed at each of HIGH and LOW before sizes may widen
+CALIBRATE_T = 2.0         # how clearly HIGH must beat LOW (t of the gap)
+RISK_MULT = {"HIGH": 2.0, "MEDIUM": 1.0, "LOW": 0.5}   # x the risk guide, only once calibrated
+
+
+def _stats(g: dict | None, n_key: str, avg_key: str) -> tuple[int, float | None, float | None]:
+    """(n, average, standard error) of a graded group; the SE is backed out of its t."""
+    g = g or {}
+    n, avg, t = g.get(n_key, 0), g.get(avg_key), g.get("t")
+    if not n or avg is None:
+        return 0, None, None
+    se = abs(avg / t) if t else None
+    return n, avg, se
+
+
+def calibration(memory: dict | None) -> dict:
+    """Has confidence earned the right to change size? HIGH must beat LOW, clearly, over enough
+    examples of ONE kind: graded ideas, closed trades, or practice trades in the paper account
+    (each compared only with itself). Until then every level risks the plain guide (section 3a):
+    leaning on an unproven label only amplifies luck (the scenario lab: risking 2x on HIGH from
+    day one lost up to 6% in fast markets; doing it only once proven never cost anything). Once
+    proven, HIGH risks twice the guide and LOW half. This widens RISK, never caps HIGH: a cap on
+    HIGH cost 2-3% a year in the same lab."""
+    memory = memory or {}
+    sources = (("ideas", (memory.get("ideas") or {}).get("by_confidence") or {}, "ideas", "avg_5d", "{:+.1%}"),
+               ("trades", memory.get("by_confidence") or {}, "trades", "avg_adj", "{:+.1%}"),
+               ("practice trades", (memory.get("paper") or {}).get("by_confidence") or {}, "trades", "avg_r",
+                "{:+.2f}R"))
+    out = {"proven": False, "risk_mult": {k: 1.0 for k in RISK_MULT}, "gap_t": None, "sources": {}}
+    best = None
+    for kind, groups, n_key, avg_key, fmt in sources:
+        nh, ah, sh = _stats(groups.get("HIGH"), n_key, avg_key)
+        nl, al, sl = _stats(groups.get("LOW"), n_key, avg_key)
+        gap_t = round((ah - al) / (sh ** 2 + sl ** 2) ** 0.5, 2) if nh and nl and sh and sl else None
+        row = {"high": nh, "low": nl, "gap_t": gap_t, "said": f"{fmt.format(ah)} vs {fmt.format(al)}"
+               if ah is not None and al is not None else ""}
+        out["sources"][kind] = row
+        if nh >= CALIBRATE_N and nl >= CALIBRATE_N and gap_t is not None and gap_t >= CALIBRATE_T and ah > 0:
+            if best is None or gap_t > best[1]["gap_t"]:
+                best = (kind, row)
+    if best:
+        kind, row = best
+        out.update(proven=True, risk_mult=dict(RISK_MULT), gap_t=row["gap_t"])
+        out["line"] = (f"CALIBRATED: HIGH has beaten LOW in your {kind} ({row['said']}, gap t {row['gap_t']:+.1f}, "
+                       f"{row['high']} and {row['low']} graded): HIGH risks 2x the guide, MEDIUM 1x, LOW half")
+        return out
+    most = max(out["sources"].items(), key=lambda kv: min(kv[1]["high"], kv[1]["low"]))
+    kind, row = most
+    out["gap_t"] = row["gap_t"]
+    out["line"] = (f"NOT CALIBRATED: every level risks the plain guide (section 3a) until HIGH clearly beats LOW "
+                   f"over {CALIBRATE_N}+ graded at each (best so far: {kind}, {row['high']} HIGH and {row['low']} LOW"
+                   + (f", gap t {row['gap_t']:+.1f}" if row["gap_t"] is not None else "")
+                   + "); the level still sets the most you may put in")
+    return out
+
+
 def _decided(group: dict | None) -> bool:
     return str((group or {}).get("verdict", "")).startswith(("working", "losing"))
 
@@ -246,7 +302,12 @@ def score(*, side: str = "buy", setup: str = "", asset: str = "stocks", play: st
                        "trades are LOW size until they win it back")
     if side == "buy":
         level = _discipline(level, reasons, todays_discipline(memory, now), ticker)
-    return {"level": level, "score": total, "size": SIZE_GUIDE[level], "reasons": reasons}
+    out = {"level": level, "score": total, "size": SIZE_GUIDE[level], "reasons": reasons}
+    if side == "buy" and level in RISK_MULT:
+        cal = calibration(memory)
+        out["risk_mult"] = cal["risk_mult"][level]
+        out["calibration"] = cal["line"]
+    return out
 
 
 def evidence_for(brief: dict, ticker: str, side: str = "buy") -> dict | None:
@@ -298,8 +359,10 @@ def _wash_sale(memory: dict, ticker: str, side: str) -> str:
 def render(r: dict) -> str:
     if r["level"] == "PARK":
         return "\n".join([f"PARKING {r.get('ticker', '')}: {r['size']}", *("  " + x for x in r["reasons"])])
+    sizing = ([f"  RISK: {r['risk_mult']:g}x the guide in section 3a. {r['calibration']}"]
+              if r.get("calibration") else [])
     return "\n".join([f"CONFIDENCE {r.get('ticker', '')}: {r['level']} (score {r['score']:+d}) -> {r['size']}",
-                      *("  " + x for x in r["reasons"]),
+                      *("  " + x for x in r["reasons"]), *sizing,
                       f"  Start the buy's why with [{r['level']}] and name its stop ('stop 118.40'): the level and the "
                       "risk both get graded. Pass --jump (today's move in percent) on every buy: a chase is scored."])
 

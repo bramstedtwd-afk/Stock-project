@@ -257,6 +257,26 @@ Congress clusters. Execution stays where it is: StockSage scores and reports,
 the trader places orders after a preview and a quote check, and no code path
 sends an order by itself.
 
+## Leaning on confidence: sizing by level (scenario lab, 2026-11-23)
+
+Should a HIGH-confidence trade risk more than a LOW one? Two rules against the
+live rules on the same simulated markets (4 per world; return change / worst
+drawdown change):
+
+| rule | bull | melt-up | bear | crash | chop | noise |
+|---|---|---|---|---|---|---|
+| risk 2x on HIGH, 0.5x on LOW, from day one | +0.8% / +0.5% | -6.1% / -1.1% | -0.7% / 0 | -5.8% / -0.3% | -0.1% / 0 | -0.1% / -0.6% |
+| the same, only once HIGH has clearly beaten LOW (30+ each, gap t 2+) | +0.6% / 0 | 0 | 0 | 0 | 0 | 0 |
+
+Leaning on an unproven label amplifies luck: the labels are noisy, and in fast
+markets the bigger bets were as often wrong. Leaning on a proven one never cost
+anything and helped where a real edge existed. So `confidence.calibration`
+widens risk only once proven, from graded ideas, trades or Alpaca paper
+practice trades (each compared only with itself). Borrowed leverage (margin,
+leveraged funds, options) stays out: the timing and options labs found it adds
+risk, not skill. Prediction markets get a graded forecast ledger first (no
+money); sports betting was ruled out (a ~4.5% house cut, winners limited).
+
 ## Crypto: what worked on real coin history (run `.\start.bat cryptolab`; last run 2026-11-03)
 
 For the owner-approved crypto test in the agentic account (playbook v25). Daily

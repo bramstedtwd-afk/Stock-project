@@ -116,6 +116,7 @@ class Agent:
     context: bool = True             # the memory's per-regime record (setup in THIS kind of market) is used
     verdict_t: float | None = None   # the memory's t bar for "working"/"losing" (None: journal.VERDICT_T)
     tilt: bool = False
+    risk_by_level: str | None = None  # "always": risk x confidence.RISK_MULT; "proven": only once calibrated
     park: bool = True
     trade: bool = True
 
@@ -129,7 +130,9 @@ AGENTS = {"park_only": Agent("park_only", trade=False),
           "no_revenge": Agent("no_revenge", revenge=False),
           "quiet_record": Agent("quiet_record", quiet_record=True), "no_context": Agent("no_context", context=False),
           "strict_2_5": Agent("strict_2_5", verdict_t=2.5), "loose_2_0": Agent("loose_2_0", verdict_t=2.0),
-          "quiet_strict": Agent("quiet_strict", quiet_record=True, verdict_t=2.5)}
+          "quiet_strict": Agent("quiet_strict", quiet_record=True, verdict_t=2.5),
+          "size_always": Agent("size_always", risk_by_level="always"),
+          "size_proven": Agent("size_proven", risk_by_level="proven")}
 CORE_AGENTS = ["park_only", "system", "no_learning", "no_discipline", "tilt"]
 
 
@@ -386,6 +389,10 @@ def _simulate(world: str, seed: int, agent: Agent, mkt: dict | None, days: int |
                 daily_vol = 0.011 if ticker == "SH" else float(mkt["base_vol"][mkt["tickers"].index(ticker)])
                 dist = px * daily_vol * stop_vols
                 risk = eq * RISK_GUIDE[play] * (2 ** min(losses_row, 3) if agent.tilt else 1)
+                if agent.risk_by_level == "always":
+                    risk *= cf.RISK_MULT.get(level, 1.0)
+                elif agent.risk_by_level == "proven":
+                    risk *= r.get("risk_mult", 1.0)
                 cap = eq * (LEVEL_CAP["HIGH"] if agent.tilt else LEVEL_CAP[level])
                 spend = min(risk / dist * px, cap, cash + parked * _price(mkt, "SPY", d, s) * (1 - COST))
                 if spend < 1.0:

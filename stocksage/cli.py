@@ -638,7 +638,9 @@ def cmd_keys(args) -> int:
     asks = [("STOCKSAGE_TIINGO_KEY", "Tiingo API token (tiingo.com > Account > API)"),
             (finnhub.KEY_VAR, "Finnhub API key (finnhub.io > Dashboard)"),
             (watcher.URL_VAR, "The trading routine's Fire URL (routine > Edit > API trigger)"),
-            (watcher.TOKEN_VAR, "The trading routine's API token (shown once when generated)")]
+            (watcher.TOKEN_VAR, "The trading routine's API token (shown once when generated)"),
+            ("ALPACA_PAPER_KEY_ID", "Alpaca PAPER key ID (alpaca.markets > Paper Trading > API keys)"),
+            ("ALPACA_PAPER_SECRET", "Alpaca PAPER secret key (shown once when generated)")]
     new = {}
     for var, label in asks:
         val = (input(f"{label}: ") if var == watcher.URL_VAR else getpass.getpass(f"{label}: ")).strip()
@@ -658,6 +660,14 @@ def cmd_keys(args) -> int:
         print(f"  Finnhub: {'works, SPY ' + format(q['price'], ',.2f') if q else 'no data came back (check the key)'}")
     except Exception as exc:
         print(f"  Finnhub: failed ({type(exc).__name__}: check the key)")
+    try:
+        from . import paper
+
+        if paper.configured():
+            acct = paper.account()
+            print(f"  Alpaca paper: works, a PAPER account (equity {float(acct.get('equity') or 0):,.0f})")
+    except Exception as exc:
+        print(f"  Alpaca paper: refused ({type(exc).__name__}: {str(exc)[:90]}). Paper keys only; never live ones.")
     url_ok = os.environ.get(watcher.URL_VAR, "").startswith("https://api.anthropic.com/")
     token_ok = bool(os.environ.get(watcher.TOKEN_VAR, "").strip())
     print(f"  Trader wake-up: {'saved' if url_ok and token_ok else 'not complete'}"

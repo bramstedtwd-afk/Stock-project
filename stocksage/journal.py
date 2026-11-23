@@ -1393,6 +1393,11 @@ def render_text(summary: dict) -> str:
                              f"avg {_pct(st['avg_return'])} ({_pct(st.get('avg_adj'))} vs the market), "
                              f"${st['pnl']:+.2f}: {st['verdict']}")
     lines += _wake_lines(summary.get("wakes") or {})
+    from . import forecasts as _fc
+    from . import paper as _paper
+
+    lines += _fc.lines(summary.get("forecasts"))
+    lines += _paper.lines(summary.get("paper"))
     lines += ["", "OPEN NOW"]
     if not summary["open"]:
         lines.append("  Nothing open.")
@@ -1453,6 +1458,12 @@ def _with_ideas(summary: dict, engine, tags_text: str, previous: dict | None = N
     except Exception as exc:
         log.warning("ideas to watch not listed: %s", exc)
         summary["idea_watch"] = []
+    _with_forecasts(summary, tags_text, previous)
+    _with_paper(summary, previous)
+    try:                                   # what the owner's PC mirrors as practice trades (paper.mirror)
+        summary["ideas_recent"] = ideas_recent(tags_text)
+    except Exception as exc:
+        log.warning("recent ideas not listed: %s", exc)
     ideas = parse_ideas(tags_text)
     if not ideas:
         summary["ideas"] = empty
@@ -1552,6 +1563,61 @@ def _wisdom_lines(w: dict | None) -> list[str]:
     return lines + [""]
 
 
+def ideas_recent(tags_text: str, now: datetime | None = None, hours: int = 24) -> list[dict]:
+    """Scored stock BUY ideas of the last day that name a stop and a target: each is a
+    practice trade on the owner's Alpaca paper account (paper.mirror), so confidence is
+    graded on many more trades than the real account can take."""
+    now = now or datetime.now(timezone.utc)
+    out = []
+    for idea in parse_ideas(tags_text):
+        if idea["side"] != "buy" or is_crypto(idea["ticker"]) or idea.get("confidence") not in ("HIGH", "MEDIUM", "LOW"):
+            continue
+        if now - idea["at"] > timedelta(hours=hours):
+            continue
+        stop, target = stated_stop(idea.get("note", "")), stated_target(idea.get("note", ""))
+        if stop and target and stop < idea["price"] < target:
+            out.append({"ticker": idea["ticker"], "at": idea["at"].isoformat(timespec="minutes"),
+                        "level": idea["confidence"], "setup": idea["setup"], "price": idea["price"],
+                        "stop": stop, "target": target})
+    return out[-30:]
+
+
+def _with_forecasts(summary: dict, tags_text: str, previous: dict | None) -> None:
+    """The forecast ledger (FORECAST / RESOLVED lines): the trader vs the prediction market's price.
+    Polymarket questions settle themselves; the settlements found travel on in the memory."""
+    from . import forecasts as fc
+
+    try:
+        found = fc.parse_forecasts(tags_text)
+        if not found:
+            return
+        auto = ((previous or {}).get("forecasts") or {}).get("auto") or {}
+        resolved = fc.parse_resolved(tags_text)
+        auto = fc.settle(found, resolved, auto)
+        summary["forecasts"] = dict(fc.score(found, resolved, auto), auto=auto)
+    except Exception as exc:                 # a ledger of guesses never blocks the trade record
+        log.warning("forecasts not scored: %s", exc)
+        if (previous or {}).get("forecasts"):
+            summary["forecasts"] = previous["forecasts"]
+
+
+def _with_paper(summary: dict, previous: dict | None) -> None:
+    """The Alpaca PAPER account's closed bracket trades, graded in R by confidence level and
+    setup. Only where its keys are set (the trader's environment, the owner's PC); elsewhere the
+    last record travels on."""
+    from . import paper
+
+    try:
+        got = paper.record() if paper.configured() else None
+    except Exception as exc:
+        log.warning("paper record not read: %s", exc)
+        got = None
+    if got is not None:
+        summary["paper"] = got
+    elif (previous or {}).get("paper"):
+        summary["paper"] = previous["paper"]
+
+
 def state_dir():
     """Same folder as today.state_dir, without importing the sheet's dependencies."""
     import os
@@ -1621,15 +1687,27 @@ def append_note(line: str, upload: bool = True) -> str:
         raise ValueError("not a valid STOP line: STOP | UTC time | TICKER | stop price | target price (optional)")
     if kind == "CLOSED" and not parse_closed(line):
         raise ValueError("not a valid CLOSED line: CLOSED | UTC time | TICKER | why (optional)")
+    if kind == "FORECAST":
+        from .forecasts import parse_forecasts
+
+        if not parse_forecasts(line):
+            raise ValueError("not a valid FORECAST line: FORECAST | UTC time | question id (pm:<slug> for "
+                             "Polymarket) | my chance | market chance | the question")
+    if kind == "RESOLVED":
+        from .forecasts import parse_resolved
+
+        if not parse_resolved(line):
+            raise ValueError("not a valid RESOLVED line: RESOLVED | UTC time | question id | YES or NO")
     if kind not in NOTE_KINDS:
-        raise ValueError("a note starts with TAG, RUN, IDEA, DEPOSIT, STOP, CLOSED, WAKE, WATCH or AFTER")
+        raise ValueError("a note starts with TAG, RUN, IDEA, DEPOSIT, STOP, CLOSED, WAKE, WATCH, AFTER, "
+                         "FORECAST or RESOLVED")
     if not upload:
         return line
     _write_notes([line])
     return line
 
 
-NOTE_KINDS = ("TAG", "RUN", "IDEA", "DEPOSIT", "STOP", "CLOSED", "WAKE", "WATCH", "AFTER")
+NOTE_KINDS = ("TAG", "RUN", "IDEA", "DEPOSIT", "STOP", "CLOSED", "WAKE", "WATCH", "AFTER", "FORECAST", "RESOLVED")
 
 
 def split_notes(args) -> list[str]:
@@ -1799,6 +1877,7 @@ def refresh(engine, client, upload: bool = True, account: str | None = None,
         return None
     archived: list[dict] = []
     since = None
+    previous = None
     if upload:
         try:
             previous = _read_previous_memory()
@@ -1836,7 +1915,7 @@ def refresh(engine, client, upload: bool = True, account: str | None = None,
     if since:
         summary["account_since"] = since
         summary["account_move"] = _move_view(move)
-    _with_ideas(summary, engine, tags_text or "")
+    _with_ideas(summary, engine, tags_text or "", previous)
     _save_and_publish(summary, upload)
     return summary
 
