@@ -41,6 +41,23 @@ def test_yahoo_carries_the_after_hours_trade_against_the_previous_close():
     assert watcher.yahoo_quote("SPY", fetch=offline) is None
 
 
+def test_pre_market_change_is_against_the_last_regular_close_not_the_one_before():
+    # 2026-11-24 8:02 AM ET: Yahoo's previousClose was Friday's 689.81, Monday closed 722.29
+    pre = datetime(2026, 11, 24, 13, 2, tzinfo=UTC)
+    opens = int(datetime(2026, 11, 24, 14, 30, tzinfo=UTC).timestamp())
+    monday_close = int(datetime(2026, 11, 23, 21, 0, tzinfo=UTC).timestamp())
+    data = {"chart": {"result": [{"meta": {
+        "previousClose": 689.81, "chartPreviousClose": 689.81, "regularMarketPrice": 722.29,
+        "regularMarketTime": monday_close, "currentTradingPeriod": {"regular": {"start": opens}}},
+        "timestamp": [int(pre.timestamp())], "indicators": {"quote": [{"close": [715.81]}]}}]}}
+    q = watcher.yahoo_quote("SPY", fetch=lambda url: data)
+    assert q["prev_close"] == 722.29 and q["day_change"] == round(715.81 / 722.29 - 1, 4)
+    # after today's close the day's move still counts from the previous session's close
+    data["chart"]["result"][0]["meta"]["regularMarketTime"] = opens + 6 * 3600
+    data["chart"]["result"][0]["timestamp"] = [opens + 7 * 3600]
+    assert watcher.yahoo_quote("SPY", fetch=lambda url: data)["prev_close"] == 689.81
+
+
 def test_finnhub_in_the_session_yahoo_outside_it_and_finnhub_when_yahoo_has_nothing():
     fin = lambda t: {"price": 1.0, "src": "finnhub"}  # noqa: E731
     yah = lambda t: {"price": 2.0, "src": "yahoo"}  # noqa: E731
