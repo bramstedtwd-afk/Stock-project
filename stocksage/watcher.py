@@ -1379,6 +1379,14 @@ def yahoo_quote(symbol: str, fetch=None) -> dict | None:
             return None
         at, price = last[-1]
         prev = float(meta.get("previousClose") or meta.get("chartPreviousClose") or 0) or None
+        # Before today's open Yahoo's previousClose is still the session BEFORE yesterday (at
+        # 7:00 AM on 2026-11-24 it said 689.81 for SPY, Friday, after Monday closed 722.29), so
+        # every pre-market change was a two-day change: a false "MARKET: SPY +4.0%" woke the
+        # trader. Pre-market, the previous regular close is the last regular price.
+        regular_start = ((meta.get("currentTradingPeriod") or {}).get("regular") or {}).get("start")
+        last_regular = meta.get("regularMarketPrice")
+        if regular_start and last_regular and int(at) < int(regular_start):
+            prev = float(last_regular)
         return {"symbol": symbol.upper(), "price": round(float(price), 4), "prev_close": prev,
                 "day_change": round(float(price) / prev - 1, 4) if prev else 0.0,
                 "at": datetime.fromtimestamp(int(at), tz=timezone.utc).isoformat(), "source": "yahoo"}

@@ -41,6 +41,27 @@ def test_yahoo_carries_the_after_hours_trade_against_the_previous_close():
     assert watcher.yahoo_quote("SPY", fetch=offline) is None
 
 
+def test_pre_market_change_is_against_yesterdays_close_not_the_day_before():
+    """2026-11-24 7:00 AM ET: Yahoo still said previousClose 689.81 (Friday) after Monday closed
+    at 722.29, so SPY at 717 pre-market read +4.0% and woke the trader for a market move that
+    was really -0.7%."""
+    pre = int(datetime(2026, 11, 24, 12, 0, tzinfo=UTC).timestamp())
+    regular_start = int(datetime(2026, 11, 24, 14, 30, tzinfo=UTC).timestamp())
+    data = {"chart": {"result": [{"meta": {"previousClose": 689.81, "chartPreviousClose": 689.81,
+                                           "regularMarketPrice": 722.29,
+                                           "currentTradingPeriod": {"regular": {"start": regular_start}}},
+                                  "timestamp": [pre - 60, pre],
+                                  "indicators": {"quote": [{"close": [717.35, 716.69]}]}}]}}
+    q = watcher.yahoo_quote("SPY", fetch=lambda url: data)
+    assert q["prev_close"] == 722.29 and q["day_change"] == round(716.69 / 722.29 - 1, 4)
+    assert abs(q["day_change"]) < watcher.MARKET_MOVE
+
+    # after the open the same meta is left alone (regularMarketPrice is then the live price)
+    data["chart"]["result"][0]["timestamp"] = [regular_start + 60]
+    data["chart"]["result"][0]["indicators"]["quote"][0]["close"] = [720.0]
+    assert watcher.yahoo_quote("SPY", fetch=lambda url: data)["prev_close"] == 689.81
+
+
 def test_finnhub_in_the_session_yahoo_outside_it_and_finnhub_when_yahoo_has_nothing():
     fin = lambda t: {"price": 1.0, "src": "finnhub"}  # noqa: E731
     yah = lambda t: {"price": 2.0, "src": "yahoo"}  # noqa: E731
