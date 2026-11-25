@@ -136,3 +136,13 @@ def test_ideas_are_graded_by_what_the_stock_had_just_done():
     g = jr.grade_ideas(jr.parse_ideas(text), lambda t: closes, spy=spy)
     assert set(g["by_condition"]) == {"jump", "drop", "calm"}
     assert g["by_condition"]["jump"]["avg_5d"] < 0, "bought 9% up, the stock went back to 100"
+
+
+def test_cli_jump_under_one_percent_is_not_a_chase(monkeypatch, capsys):
+    """2026-11-25: LOW up 0.8% was passed as --jump 0.8 and scored as an 80% chase."""
+    from stocksage import confidence as cf
+    monkeypatch.setattr(cf, "_drive_json", lambda name: {})
+    cf.main(["LOW", "--setup", "breakout", "--jump", "0.8"])
+    assert "CHASE" not in capsys.readouterr().out
+    cf.main(["LOW", "--setup", "breakout", "--jump", "9"])
+    assert "CHASE: up 9%" in capsys.readouterr().out

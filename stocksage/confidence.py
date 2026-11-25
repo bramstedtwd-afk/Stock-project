@@ -394,7 +394,9 @@ def main(argv: list[str] | None = None) -> int:
     from .journal import MEMORY_NAME
 
     r = for_trade(a.ticker, a.setup, side="sell" if a.sell else "buy", play=a.play, confirmations=a.confirm,
-                  brief=_drive_json(BRIEF_NAME), memory=_drive_json(MEMORY_NAME), jump=a.jump)
+                  brief=_drive_json(BRIEF_NAME), memory=_drive_json(MEMORY_NAME),
+                  # --jump is always percent: 0.8 means up 0.8%, never 80% (_chase guesses for callers that pass fractions)
+                  jump=None if a.jump is None else a.jump / 100)
     print(render(r))
     return 0
 
