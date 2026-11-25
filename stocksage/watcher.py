@@ -637,7 +637,8 @@ def setups_from_brief(brief: dict) -> list[dict]:
     return out[:SETUPS_MAX]
 
 
-def setup_events(state: dict, now: datetime, memory: dict, held: list[dict], quote) -> list[str]:
+def setup_events(state: dict, now: datetime, memory: dict, held: list[dict], quote,
+                 dividend=None) -> list[str]:
     """SETUP: a brief name (not held, not already an idea with an entry) does something a buyer
     would want to know in the regular session: a DIP (down a normal day or more today, still
     above the brief's stop) or STRENGTH (up a normal day or more against the market, under 5%
@@ -674,6 +675,11 @@ def setup_events(state: dict, now: datetime, memory: dict, held: list[dict], quo
             continue
         price, change, atr = q["price"], q["day_change"], s["atr"]
         seen_at[t] = price
+        if change <= -SETUP_DIP * atr and dividend is not None:
+            try:                                # an ex-dividend drop is not a dip
+                change = (1 + change) / dividend(t, now) - 1
+            except Exception:
+                pass
         versus = change - spy if spy is not None and t not in FUNDS else None
         rated = f"the brief rates it {s.get('verdict') or 'a buy'} (stop {_p(s['stop'])})"
         tail = ": re-score it with the confidence command and buy only if it still qualifies"
@@ -1209,7 +1215,7 @@ def reask_stops(state: dict, now: datetime, memory: dict, push=None) -> list[str
 
 def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict, post=None,
          push=None, names=None, ranges: dict | None = None, events: dict | None = None,
-         kinds=None) -> str | None:
+         kinds=None, dividend=None) -> str | None:
     """One check. Returns the message that was sent, or None. `events` is the calendar
     packet from read_events (None: no pre-event reviews). `kinds` is only for the
     scenario lab, which replays older trigger sets on the same prices: the wake-up kinds
@@ -1226,7 +1232,7 @@ def tick(state: dict, now: datetime, *, quote, crypto_quote, news, memory: dict,
     try:                                        # the wider view must never cost a STOP its wake-up
         events += entry_events(state, now, memory, held, quote, crypto_quote)
         events += pre_events(state, now, held, scheduled or {})
-        events += setup_events(state, now, memory, held, quote)
+        events += setup_events(state, now, memory, held, quote, dividend)
     except Exception as exc:
         log(f"idea and calendar checks failed ({type(exc).__name__}: {exc})")
     if kinds is not None:
@@ -1379,11 +1385,67 @@ def yahoo_quote(symbol: str, fetch=None) -> dict | None:
             return None
         at, price = last[-1]
         prev = float(meta.get("previousClose") or meta.get("chartPreviousClose") or 0) or None
+        day = datetime.fromtimestamp(int(at), tz=timezone.utc).astimezone(ET).date().isoformat()
+        before = [c for d, c, _adj in yahoo_daily(symbol, fetch) if d < day]
+        if before:                              # before 9:30 the chart's previousClose is two sessions old
+            prev = before[-1]
         return {"symbol": symbol.upper(), "price": round(float(price), 4), "prev_close": prev,
                 "day_change": round(float(price) / prev - 1, 4) if prev else 0.0,
                 "at": datetime.fromtimestamp(int(at), tz=timezone.utc).isoformat(), "source": "yahoo"}
     except Exception:
         return None
+
+
+_DAILY: dict = {}
+DAILY_KEEP = 30 * 60                            # seconds a symbol's daily closes are kept
+
+
+def yahoo_daily(symbol: str, fetch=None) -> list[tuple[str, float, float]]:
+    """(ET date, close, dividend-adjusted close) for the last sessions from Yahoo's daily
+    chart, oldest first; [] when unknown. Two jobs: the true previous close before 9:30 AM
+    (on 2026-11-24 and 11-25 the 1-minute chart's previousClose was two sessions old, so
+    the watcher woke the trader for "SPY +4.0%" while SPY was down 0.7%), and the dividend
+    taken off a stock on its ex-date (dividend_factor). Kept DAILY_KEEP when live."""
+    import time
+    import urllib.request
+
+    sym = symbol.upper()
+    hit = _DAILY.get(sym)
+    if fetch is None and hit and time.monotonic() - hit[0] < DAILY_KEEP:
+        return hit[1]
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=10d"
+    try:
+        if fetch is None:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read().decode("utf-8"))
+        else:
+            data = fetch(url)
+        res = data["chart"]["result"][0]
+        ind = res.get("indicators") or {}
+        closes = (ind.get("quote") or [{}])[0].get("close") or []
+        adj = (ind.get("adjclose") or [{}])[0].get("adjclose") or closes
+        rows = [(datetime.fromtimestamp(int(s), tz=timezone.utc).astimezone(ET).date().isoformat(),
+                 float(c), float(a or c))
+                for s, c, a in zip(res.get("timestamp") or [], closes, adj) if c]
+    except Exception:
+        return []
+    if fetch is None and rows:
+        _DAILY[sym] = (time.monotonic(), rows)
+    return rows
+
+
+def dividend_factor(symbol: str, now: datetime, fetch=None) -> float:
+    """1.0, or below it on a stock's ex-dividend day: the previous close as adjusted for the
+    dividend over the raw one. On 2026-11-24 Costco's dividend came off its price and a
+    SETUP called it a 1.7% dip while the stock was up 1.1% on the adjusted close."""
+    day = now.astimezone(ET).date().isoformat()
+    before = [(c, a) for d, c, a in yahoo_daily(symbol, fetch) if d < day]
+    if not before or not before[-1][0]:
+        return 1.0
+    close, adj = before[-1]
+    factor = adj / close
+    return factor if 0.5 < factor < 0.999 else 1.0
 
 
 def session_quote(t: str, now: datetime, finnhub_quote, yahoo=None) -> dict | None:
@@ -1503,7 +1565,7 @@ def run_once(memory_reader=None) -> str | None:
         log(f"calendars not read ({type(exc).__name__})")
         scheduled = state.get("events") or {}
     sent = tick(state, now, quote=quote, crypto_quote=cq, news=news, memory=memory, names=_names(state),
-                ranges=read_ranges(state, now), events=scheduled)
+                ranges=read_ranges(state, now), events=scheduled, dividend=dividend_factor)
     heartbeat(state, now, memory, force=state.pop("starting", False))
     if not is_standby():                        # the pulse says the MAIN computer is alive; one practice mirror
         pulse(state, now)

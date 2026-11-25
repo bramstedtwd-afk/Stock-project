@@ -115,6 +115,30 @@ def test_a_dip_and_strength_each_speak_once_a_day_and_need_free_cash():
     assert watcher.setup_events(fresh, NOW, mem(cash=2.0), [], quotes({"TSN": (67, 0.04), "COST": (1075, -0.02)})) == []
 
 
+def test_a_dividend_coming_off_the_price_is_not_a_dip():
+    """2026-11-24: Costco's dividend came off its price; the raw quote said -1.7%, the
+    adjusted close said +1.1%. A real dip on another day still speaks."""
+    state = {"setups": watcher.setups_from_brief(BRIEF), "live": {"spy": {"change": 0.0}}}
+    table = {"TSN": (65.0, 0.0), "COST": (1079.0, -0.017)}
+    ex_div = lambda t, now: 1067.91 / 1097.7 if t == "COST" else 1.0  # noqa: E731
+    assert watcher.setup_events(state, NOW, mem(), [], quotes(table), dividend=ex_div) == []
+    fresh = {"setups": watcher.setups_from_brief(BRIEF), "live": {"spy": {"change": 0.0}}}
+    said = watcher.setup_events(fresh, NOW, mem(), [], quotes(table), dividend=lambda t, now: 1.0)
+    assert said and said[0].startswith("SETUP: COST")
+
+
+def test_the_dividend_factor_reads_the_adjusted_previous_close():
+    day = lambda d: int(datetime(2026, 11, d, 21, 0, tzinfo=timezone.utc).timestamp())  # noqa: E731
+    daily = {"chart": {"result": [{"timestamp": [day(20), day(23), day(24)],
+                                   "indicators": {"quote": [{"close": [1090.0, 1097.7, 1079.0]}],
+                                                  "adjclose": [{"adjclose": [1060.4, 1067.91, 1079.0]}]}}]}}
+    on_ex_date = datetime(2026, 11, 24, 16, 0, tzinfo=timezone.utc)
+    assert watcher.dividend_factor("COST", on_ex_date, fetch=lambda u: daily) == pytest.approx(1067.91 / 1097.7)
+    plain = {"chart": {"result": [{"timestamp": [day(23)], "indicators": {"quote": [{"close": [100.0]}]}}]}}
+    assert watcher.dividend_factor("X", on_ex_date, fetch=lambda u: plain) == 1.0
+    assert watcher.dividend_factor("X", on_ex_date, fetch=lambda u: 1 / 0) == 1.0
+
+
 def test_no_setup_for_a_chase_a_held_name_below_the_stop_or_outside_the_session():
     state = {"setups": watcher.setups_from_brief(BRIEF), "live": {"spy": {"change": 0.0}}}
     assert watcher.setup_events(state, NOW, mem(), [], quotes({"TSN": (69, 0.06), "COST": (1060, -0.04)})) == [], \

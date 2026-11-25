@@ -41,6 +41,21 @@ def test_yahoo_carries_the_after_hours_trade_against_the_previous_close():
     assert watcher.yahoo_quote("SPY", fetch=offline) is None
 
 
+def test_before_the_open_the_change_is_against_yesterdays_close_not_the_day_befores():
+    """2026-11-24 7 AM: the minute chart's previousClose was Friday's 689.81, so a SPY down
+    0.7% pre-market read +4.0% and woke the trader. Yesterday's close comes from the daily chart."""
+    pre = int(datetime(2026, 11, 24, 12, 0, tzinfo=UTC).timestamp())
+    day = lambda y, m, d: int(datetime(y, m, d, 14, 30, tzinfo=UTC).timestamp())  # noqa: E731
+    daily = {"chart": {"result": [{"timestamp": [day(2026, 11, 20), day(2026, 11, 23), pre],
+                                   "indicators": {"quote": [{"close": [689.81, 722.29, None]}]}}]}}
+
+    def fetch(url):
+        return daily if "interval=1d" in url else chart([717.0], stamps=[pre], prev=689.81)
+
+    q = watcher.yahoo_quote("SPY", fetch=fetch)
+    assert q["prev_close"] == 722.29 and q["day_change"] == round(717.0 / 722.29 - 1, 4)
+
+
 def test_finnhub_in_the_session_yahoo_outside_it_and_finnhub_when_yahoo_has_nothing():
     fin = lambda t: {"price": 1.0, "src": "finnhub"}  # noqa: E731
     yah = lambda t: {"price": 2.0, "src": "yahoo"}  # noqa: E731
