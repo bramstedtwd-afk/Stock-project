@@ -80,7 +80,7 @@ def test_the_scorecard_grades_confidence_and_says_when_it_is_not_calibrated():
 def test_graded_ideas_count_when_there_is_no_trade_record_and_weigh_less():
     ideas = {"by_setup": {"gap": {"ideas": 25, "avg_5d": 0.012, "verdict": "working: keep doing it"}}}
     r = cf.score(setup="gap", memory={"ideas": ideas})
-    assert r["score"] == 1 and any("ideas" in x for x in r["reasons"])
+    assert r["score"] == 2 and any("ideas" in x for x in r["reasons"]), "working ideas count like working trades"
     bad = {"by_setup": {"gap": {"ideas": 25, "avg_5d": -0.01, "verdict": "losing money: do less of this"}}}
     assert cf.score(setup="gap", memory={"ideas": bad})["score"] == -2
     real = cf.score(setup="gap", memory={"ideas": bad, "by_setup": {"gap": WORKING}})
@@ -117,6 +117,8 @@ def test_a_buy_after_a_big_jump_is_a_chase_until_the_record_says_otherwise():
     assert cf.score(memory={}, jump=0.03, **strong)["level"] == "HIGH", "a 3% day is not a chase"
     losing = {"ideas": {"by_condition": {"jump": {"ideas": 40, "avg_5d": -0.017, "verdict": "losing money: do less"}}}}
     assert cf.score(memory=losing, jump=9, **strong)["level"] == "LOW"
+    trailing = {"ideas": {"by_condition": {"jump": {"ideas": 104, "avg_5d": -0.017, "verdict": "no clear edge yet"}}}}
+    assert cf.score(memory=trailing, jump=9, **strong)["level"] == "LOW", "trailing by 1.7% over 104 is enough"
     working = {"ideas": {"by_condition": {"jump": {"ideas": 40, "avg_5d": 0.012, "verdict": "working: keep doing it"}}}}
     assert cf.score(memory=working, jump=9, **strong)["level"] == "HIGH"
     assert not any("CHASE" in x for x in cf.score(memory={}, jump=9, **dict(strong, setup="inverse"))["reasons"])
@@ -136,3 +138,21 @@ def test_ideas_are_graded_by_what_the_stock_had_just_done():
     g = jr.grade_ideas(jr.parse_ideas(text), lambda t: closes, spy=spy)
     assert set(g["by_condition"]) == {"jump", "drop", "calm"}
     assert g["by_condition"]["jump"]["avg_5d"] < 0, "bought 9% up, the stock went back to 100"
+
+
+def test_a_setup_whose_record_trails_the_market_is_test_size_until_it_recovers():
+    """2026-11-27 (playbook v48): momentum ideas lost 2.3% vs the market over 79 graded, yet a
+    backed look-alike and an up regime could still score a momentum buy HIGH."""
+    backed = {"n": 150, "dates": 60, "edge": 0.006, "lower": 0.002, "hit_rate": 0.58, "backed": True}
+    strong = dict(setup="momentum", lookalike=backed, regime="up", confirmations=2)
+    behind = {"ideas": {"by_setup": {"momentum": {"ideas": 79, "avg_5d": -0.023, "verdict": "losing money"}}}}
+    r = cf.score(memory=behind, **strong)
+    assert r["level"] == "LOW" and any("SETUP RECORD" in x for x in r["reasons"])
+    in_regime = {"regime_now": "mixed", "ideas": {"by_setup_regime": {
+        "momentum|mixed": {"ideas": 43, "avg_5d": -0.028, "verdict": "no clear edge yet"}}}}
+    assert cf.score(memory=in_regime, **strong)["level"] == "LOW", "behind in today's kind of market"
+    flat = {"ideas": {"by_setup": {"momentum": {"ideas": 105, "avg_5d": -0.004, "verdict": "no clear edge yet"}}}}
+    assert cf.score(memory=flat, **strong)["level"] == "HIGH", "a flat record is not a losing one"
+    few = {"ideas": {"by_setup": {"momentum": {"ideas": 8, "avg_5d": -0.05, "verdict": "too few"}}}}
+    assert cf.score(memory=few, **strong)["level"] == "HIGH"
+    assert "SETUP RECORD" not in " ".join(cf.score(memory=behind, **dict(strong, side="sell"))["reasons"])

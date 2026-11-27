@@ -100,16 +100,51 @@ def _record_points(group: dict | None, label: str) -> tuple[int, str]:
 
 def _idea_points(group: dict | None, setup: str) -> tuple[int, str]:
     """Graded ideas (trades considered, taken or not) are cheaper evidence than real
-    trades: they count only when the setup has no 10-trade record, and weigh less."""
+    trades: they count only when the setup has no 10-trade record. A setup whose ideas
+    have WORKED (a decided verdict) earns as much as a working trade record (playbook
+    v48: 'brain' ideas were right 88% of the time while the trader's own setups lost)."""
     if not group or group.get("ideas", 0) < MIN_IDEAS:
         return 0, f"your '{setup}' ideas: {(group or {}).get('ideas', 0)} graded, too few to count"
     v = group.get("verdict", "")
     desc = f"your '{setup}' ideas: {group['ideas']} graded, avg {group.get('avg_5d', 0):+.1%} over 5 days, {v}"
     if v.startswith("working"):
-        return 1, desc
+        return 2, desc
     if v.startswith("losing"):
         return -2, desc
     return 0, desc
+
+
+LOSING_AVG = -0.01        # graded ideas this far behind the market on average (20+ of them) = a losing record
+
+
+def _clearly_behind(group: dict | None, n_key: str, avg_key: str, need: int) -> bool:
+    g = group or {}
+    if str(g.get("verdict", "")).startswith("losing"):
+        return g.get(n_key, 0) >= need
+    avg = g.get(avg_key)
+    return g.get(n_key, 0) >= need and avg is not None and avg <= LOSING_AVG \
+        and not str(g.get("verdict", "")).startswith("working")
+
+
+def _losing_setup(memory: dict, setup: str) -> str:
+    """Why this setup's own record caps a buy at LOW ("" when it does not). Playbook v48:
+    momentum ideas lost 2.3% vs the market over 79 graded; a high score from other
+    evidence must not put full size behind a setup the record says loses. The cap lifts
+    by itself once the record recovers."""
+    if not setup or setup == "index":
+        return ""
+    trades = (memory.get("by_setup") or {}).get(setup)
+    if _clearly_behind(trades, "trades", "avg_adj", MIN_GROUP):
+        return f"your '{setup}' trades: {trades['trades']} closed, avg {_adj(trades):+.1%} vs the market"
+    ideas = memory.get("ideas") or {}
+    reg = memory.get("regime_now")
+    looks = [((ideas.get("by_setup") or {}).get(setup), "")]
+    if reg:
+        looks.append(((ideas.get("by_setup_regime") or {}).get(f"{setup}|{reg}"), f" in a {reg} market"))
+    for g, label in looks:
+        if _clearly_behind(g, "ideas", "avg_5d", MIN_IDEAS):
+            return f"your '{setup}' ideas{label}: {g['ideas']} graded, avg {g.get('avg_5d', 0):+.1%} over 5 days"
+    return ""
 
 
 def todays_discipline(memory: dict | None, now: datetime | None = None) -> dict:
@@ -159,6 +194,9 @@ def _chase(memory: dict, jump: float | None, setup: str) -> tuple[int, str, str 
         return -2, (f"CHASE: up {jump:.0%} on the day, and your buy-after-a-jump ideas lose ({g['ideas']} graded, "
                     f"avg {g.get('avg_5d', 0):+.1%} over 5 days): test size at most"), "LOW"
     n = g.get("ideas", 0)
+    if _clearly_behind(g, "ideas", "avg_5d", MIN_IDEAS):
+        return -1, (f"CHASE: up {jump:.0%} on the day, and your buy-after-a-jump ideas trail the market ({n} graded, "
+                    f"avg {g.get('avg_5d', 0):+.1%} over 5 days): test size at most until that record turns"), "LOW"
     return -1, (f"CHASE: up {jump:.0%} on the day; buys right after a big jump are not proven yet "
                 f"({n} graded ideas, need {MIN_IDEAS} and a verdict): MEDIUM at most"), "MEDIUM"
 
@@ -295,6 +333,10 @@ def score(*, side: str = "buy", setup: str = "", asset: str = "stocks", play: st
     if cap and order.index(level) > order.index(cap):
         level = cap
     reasons = [f"{p:+d}  {w}" for p, w in parts]
+    behind = _losing_setup(memory, setup) if side == "buy" else ""
+    if behind and level in ("HIGH", "MEDIUM"):
+        level = "LOW"
+        reasons.append(f"SETUP RECORD: {behind}: test size at most until that record turns positive")
     dd = memory["trading_drawdown"] if "trading_drawdown" in memory else memory.get("drawdown")
     if side == "buy" and dd is not None and dd <= BRAKE_AT and level in ("HIGH", "MEDIUM"):
         level = "LOW"

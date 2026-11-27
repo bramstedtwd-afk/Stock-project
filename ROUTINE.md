@@ -1,4 +1,4 @@
-# Agentic Trading Routine â€” Playbook (v47, 2026-11-23)
+# Agentic Trading Routine — Playbook (v48, 2026-11-27)
 
 The trader's complete operating manual. Read it from the Google Drive folder
 **"StockSage"**, file **exactly "StockSage Routine Playbook.md"** (find the
@@ -6,12 +6,22 @@ folder first, then the file inside it; never a bare title search: stray copies
 elsewhere are stale by definition). State the version you loaded, from this
 header, at the top of every report.
 
+**v48: lean on what works, fewer and bigger positions, less SGOV churn**
+(owner, 2026-11-27, after 48 trades: the trader's own momentum and
+jump-chasing ideas lost to the market while StockSage's `brain` ideas were
+right 88% of the time). (1) A setup whose own record trails the market is
+LOW at most until it recovers, and so is a buy after a 5%+ jump while those
+ideas trail; working ideas now count as much as working trades (section 3).
+(2) At most 5 positions and 3 in one sector, each a real size (section 3).
+(3) SGOV only for $50+ that will sit 3+ trading days, never the reserve
+(section 4). Start RUN lines with `v48:`.
+
 **v47: two new wake-ups** (owner, 2026-11-23: watch for more reasons to buy
 or sell; section 2a). **GIVEBACK**: a winner has given back half its best
 gain: take the rest or raise the stop. **SETUP**: one of the brief's
 buy-rated names you do not hold dipped or showed strength today: re-score it
 and buy only if it qualifies. Both are graded by the wake-up scorecard like
-the others. Start RUN lines with `v47:`.
+the others.
 
 **v46: vertical spreads** (owner, 2026-11-23: "Allow spreads"; sections 1
 and 9a). The account is approved for options Level 3. Besides buying a call
@@ -176,7 +186,7 @@ free evidence that calibrates your confidence ten times faster),
 **DEPOSIT lines**, the **drawdown brake**, and the scorecard's **vs-the-market,
 tax and wash-sale lines**. Older history is in the repository's git log.
 
-## 1. âš ï¸ Hard rules (outrank everything else here)
+## 1. ⚠️ Hard rules (outrank everything else here)
 
 1. **Agentic account only** (#{{AGENTIC_ACCOUNT}}), verified before every
    order. If that still reads as a placeholder, use the number in your stored
@@ -256,7 +266,7 @@ reason; "no setup qualified" or "nothing fits as whole shares" is.
    from the screens, taken or not); a DEPOSIT if the owner added money.
 10. **Housekeeping** on the run starting 10:30-11:30 Eastern (section 11).
 11. **Report** in plain English (section 12), then the **RUN line** last,
-    starting with the playbook version: `v47: held PLD, bought ...`.
+    starting with the playbook version: `v48: held PLD, bought ...`.
 
 ## 2b. When the watcher is silent
 
@@ -409,12 +419,13 @@ memory and adds up the evidence:
 
 | Evidence | Points |
 |---|---|
-| **Look-alikes**: the 150 most similar past setups by signal fingerprint, measured vs the market after costs over the next week (stocks; the brief's `evidence`) | +3 history backs it Â· +1 leans right Â· -1 leans wrong Â· -3 history says it loses |
-| **Your record** on this setup (10+ closed trades), else your graded IDEAS on it (20+, weighted lower), else this play | +2 working Â· +1 positive Â· -1 negative Â· -3 losing (ideas: +1 / -2) |
+| **Look-alikes**: the 150 most similar past setups by signal fingerprint, measured vs the market after costs over the next week (stocks; the brief's `evidence`) | +3 history backs it · +1 leans right · -1 leans wrong · -3 history says it loses |
+| **Your record** on this setup (10+ closed trades), else your graded IDEAS on it (20+, weighted lower), else this play | +2 working · +1 positive · -1 negative · -3 losing (ideas: +2 working / -2 losing) |
 | **Crypto record** (10+ crypto trades) | same as above |
 | **The market agrees**: regime for stocks; bitcoin's trend (or extreme fear for `fear` buys) for crypto | +1 / -1 (-2 for crypto against bitcoin's trend). Short-side setups are not marked down in a falling market |
 | **2+ live confirmations**: a fresh catalyst, stronger than its sector/market today, volume well above average | +1 |
-| **Chase** (`--jump`): bought 5%+ up on the day (not inverse, defensive, bounce or parking) | -1 and MEDIUM at most until your buy-after-a-jump ideas are decided; then 0 if they work, -2 and LOW at most if they lose |
+| **Chase** (`--jump`): bought 5%+ up on the day (not inverse, defensive, bounce or parking) | -1 and MEDIUM at most while your buy-after-a-jump ideas are too few to judge; LOW at most once 20+ of them trail the market by 1%+ on average (-2 if decided losing); 0 if they work |
+| **Setup record** (v48): this setup's own record (10+ trades, or 20+ graded ideas, overall or in today's kind of market) trails the market by 1%+ on average, or is decided losing | LOW at most, whatever the score, until that record turns. On 2026-11-27 this caps `momentum` (-2.3% over 79 ideas) |
 
 | Level | Score | What it allows |
 |---|---|---|
@@ -443,6 +454,17 @@ memory and adds up the evidence:
   working, regime mixed."
 - The crypto test keeps its own budget (section 9) until crypto has 10
   graded trades.
+- **Fewer, bigger positions** (v48; on 2026-11-27 the $396 account held 8
+  positions, some $10-$33, seven of them staples, so one bet in eight
+  pieces): hold **at most 5 positions** at once (stocks, crypto and options
+  together; parked SPY/SGOV does not count) and **at most 3 in one sector**
+  (the brief's sector; inverse funds count as their own group). At the
+  limit, a new buy must replace the weakest holding (sell it first, exit
+  `rotate`, or wait for its cash to settle); never add a sixth. A new
+  position should be at least about 10% of the account unless it is a LOW
+  test or the crypto/options budget says less. Positions already over the
+  limit are not sold for this rule alone: let stops, targets and rotations
+  bring the count down, and open nothing new until it is under the limit.
 
 ## 3a. Discipline (how a great trader behaves on a bad day, and the next one)
 
@@ -486,6 +508,16 @@ simply holding the market. Idle cash tests nothing.
   later the same day. In a down tape (regime `down` and SPY red today) park
   in **SGOV** (T-bills) instead, and go back to SPY when the regime is no
   longer down.
+- **SGOV only for money that will sit** (v48): from 11-20 to 11-25 six SGOV
+  parks earned about 20 cents in all, and each sale left the money
+  unsettled for a day, so runs had only $4-$12 to spend when setups came.
+  On this account T-bills pay pennies a week. So park in SGOV only cash you
+  expect to leave idle for **3+ trading days** (no IDEA waiting for an
+  entry, no setup you plan to take this week), only **$50 or more**, and
+  never the reserve: keep at least a third of the account, or $50 if
+  that is more, in settled cash whenever an IDEA with an `entry` is
+  waiting. When in doubt, cash is the park in a down tape: it earns
+  nothing, but it never needs a day to settle.
 - **Settlement:** sale money settles the next business day. To rotate from
   SPY into a setup, buy with the reserve today, or sell SPY today and buy
   tomorrow (tag `rotate`). When settled plus unsettled cash is below a third
@@ -922,7 +954,7 @@ Trade Tags.txt" yourself. Times are UTC, e.g. `2026-11-04T15:10Z`.
     IDEA | time | BUY or SELL | TICKER | setup word | price now | [LEVEL] entry <price> stop <price>, why (taken or not)
     DEPOSIT | time | amount (negative for a withdrawal)
     STOP | time | TICKER | new stop price | target price (optional) | why (optional)
-    RUN | time | account value | settled cash | v47: one plain sentence on what this run did
+    RUN | time | account value | settled cash | v48: one plain sentence on what this run did
     FORECAST | time | question id | my chance | market chance | the question (section 6c)
     RESOLVED | time | question id | YES or NO
 
@@ -1007,7 +1039,7 @@ push anything in the repository.
   engaging, a hard-rule anomaly, or research missing for two runs running.
   At most one such message a day unless the account is in danger.
 - **Autonomy off** (no loader line): every order is a card ending
-  **â†’ Reply "confirm" to execute, or "pass"**, stating the order, why,
+  **→ Reply "confirm" to execute, or "pass"**, stating the order, why,
   what it risks and gains, and what happens if the owner does nothing;
   exits need a confirm too; one card per order; unanswered means no.
 
